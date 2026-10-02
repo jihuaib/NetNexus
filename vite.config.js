@@ -1,6 +1,6 @@
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { defineConfig } from 'vite';
+import { defineConfig, transformWithEsbuild } from 'vite';
 import vue from '@vitejs/plugin-vue';
 import localUiSource from './scripts/local-ui-source.js';
 
@@ -11,7 +11,18 @@ const localUiAliases = createLocalUiAliases(localUiRoot);
 
 // Vite配置文档: https://vitejs.dev/config/
 export default defineConfig({
-    plugins: [vue()],
+    plugins: [
+        vue(),
+        {
+            name: 'bgp-shared-community-parser',
+            enforce: 'pre',
+            transform(code, id) {
+                if (id.split('?')[0].endsWith('/shared/bgpExtendedCommunities.js')) {
+                    return transformWithEsbuild(code, id, { format: 'esm', loader: 'js' });
+                }
+            }
+        }
+    ],
     base: './', // 必须设置为相对路径
     resolve: {
         alias: localUiAliases,

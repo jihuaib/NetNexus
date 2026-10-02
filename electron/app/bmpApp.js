@@ -8,8 +8,14 @@ const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPr
 const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
+const { normalizeBmpThreadCount } = require('../utils/bmpThreadConfig');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
+const {
+    getClientDatabaseDirectory,
+    listClientDatabases,
+    listClientDatabaseArtifacts
+} = require('../worker/bmp/bmpClientPersistencePaths');
 const { normalizeBmpClientKey } = require('../window/monitorWindowManager');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
 const TcpAoSettingsStore = require('../utils/tcpAoSettingsStore');
@@ -85,6 +91,7 @@ function normalizeBmpConfig(config = {}) {
     if (!Number.isInteger(port) || port < 1 || port > 65535) {
         throw new Error('BMP服务端口必须是1-65535之间的整数');
     }
+    const threadCount = normalizeBmpThreadCount(config.threadCount);
     const bmpV4TlvDraft =
         Number(config.bmpV4TlvDraft) === BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
             ? BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19
@@ -99,6 +106,7 @@ function normalizeBmpConfig(config = {}) {
     }
     return {
         port: String(port),
+        threadCount,
         bmpV4TlvDraft,
         pathMarkingTlvType,
         persistenceEnabled: true,
@@ -507,6 +515,7 @@ class BmpApp {
         let client;
         client = this.createPersistenceClient({
             dbPath: this.persistenceDbPath,
+            partitionByClient: true,
             readOnly: true,
             logLevel: this.logLevel,
             onError: error => this.handleOfflinePersistenceFailure(client, error)
@@ -533,6 +542,7 @@ class BmpApp {
 
             const migrator = this.createPersistenceClient({
                 dbPath: this.persistenceDbPath,
+                partitionByClient: true,
                 logLevel: this.logLevel
             });
             try {
@@ -551,7 +561,7 @@ class BmpApp {
 
     async withOfflinePersistence(query) {
         return this.serializeOfflinePersistence(async () => {
-            if (!fs.existsSync(this.persistenceDbPath)) {
+            if (listClientDatabases(this.persistenceDbPath).length === 0) {
                 throw new Error('BMP持久化数据库不存在');
             }
             const client = this.offlinePersistenceReader || (await this.openOfflinePersistenceReader());
@@ -598,10 +608,18 @@ class BmpApp {
     }
 
     getPersistenceArtifactDescriptors() {
-        return BMP_PERSISTENCE_ARTIFACTS.map(artifact => ({
-            ...artifact,
-            path: `${this.persistenceDbPath}${artifact.suffix}`
-        }));
+        const databases = new Map();
+        for (const artifact of listClientDatabaseArtifacts(this.persistenceDbPath, { strict: false })) {
+            databases.set(artifact.sourceId, artifact.databasePath);
+        }
+        return Array.from(databases).flatMap(([sourceId, databasePath]) =>
+            BMP_PERSISTENCE_ARTIFACTS.map(artifact => ({
+                ...artifact,
+                sourceId,
+                databasePath,
+                path: `${databasePath}${artifact.suffix}`
+            }))
+        );
     }
 
     getPersistenceDatabaseInfo() {
@@ -610,11 +628,12 @@ class BmpApp {
 
         for (const artifact of this.getPersistenceArtifactDescriptors()) {
             try {
-                const stats = fs.statSync(artifact.path);
+                const stats = fs.lstatSync(artifact.path);
                 if (!stats.isFile()) {
                     continue;
                 }
                 artifacts.push({
+                    sourceId: artifact.sourceId,
                     kind: artifact.kind,
                     size: stats.size
                 });
@@ -629,8 +648,20 @@ class BmpApp {
         const running = Boolean(this.worker);
         const starting = Boolean(this.bmpStarting);
         const deleting = Boolean(this.persistenceDatabaseDeleting);
+        const clientDatabaseCount = artifacts.filter(artifact => artifact.kind === 'database').length;
+        let legacyDatabaseExists = false;
+        try {
+            legacyDatabaseExists = fs.lstatSync(this.persistenceDbPath).isFile();
+        } catch (error) {
+            if (error.code !== 'ENOENT') throw error;
+        }
         return {
             dbPath: this.persistenceDbPath,
+            storageMode: 'client-databases',
+            storageDirectory: getClientDatabaseDirectory(this.persistenceDbPath),
+            clientDatabaseCount,
+            legacyDatabaseExists,
+            legacyDatabasePath: legacyDatabaseExists ? this.persistenceDbPath : null,
             exists: artifacts.length > 0,
             running,
             starting,
@@ -666,12 +697,13 @@ class BmpApp {
                 const deletedArtifacts = [];
 
                 const artifacts = this.getPersistenceArtifactDescriptors();
-                const databaseArtifact = artifacts.find(artifact => artifact.kind === 'database');
-                const sidecarArtifacts = artifacts.filter(artifact => artifact.kind !== 'database');
                 const deletionErrors = [];
-
-                for (const artifact of sidecarArtifacts) {
+                const deleteArtifact = async artifact => {
                     try {
+                        const stats = await fs.promises.lstat(artifact.path);
+                        if (!stats.isFile()) {
+                            throw new Error('拒绝删除非普通 BMP 数据库文件');
+                        }
                         await fs.promises.unlink(artifact.path);
                         deletedArtifacts.push(artifact.kind);
                     } catch (error) {
@@ -679,15 +711,23 @@ class BmpApp {
                             deletionErrors.push({ artifact, error });
                         }
                     }
+                };
+                const clientArtifacts = new Map();
+                for (const artifact of artifacts) {
+                    if (!clientArtifacts.has(artifact.sourceId)) clientArtifacts.set(artifact.sourceId, []);
+                    clientArtifacts.get(artifact.sourceId).push(artifact);
                 }
-
-                if (deletionErrors.length === 0 && databaseArtifact) {
-                    try {
-                        await fs.promises.unlink(databaseArtifact.path);
-                        deletedArtifacts.unshift(databaseArtifact.kind);
-                    } catch (error) {
-                        if (error.code !== 'ENOENT') {
-                            deletionErrors.push({ artifact: databaseArtifact, error });
+                for (const sourceArtifacts of clientArtifacts.values()) {
+                    const databaseArtifact = sourceArtifacts.find(artifact => artifact.kind === 'database');
+                    const errorCount = deletionErrors.length;
+                    const sidecars = sourceArtifacts.filter(artifact => artifact.kind !== 'database');
+                    for (const sidecar of sidecars) await deleteArtifact(sidecar);
+                    if (deletionErrors.length === errorCount) {
+                        const deletedCount = deletedArtifacts.length;
+                        await deleteArtifact(databaseArtifact);
+                        if (deletedArtifacts.length > deletedCount) {
+                            deletedArtifacts.splice(deletedCount, 1);
+                            deletedArtifacts.unshift('database');
                         }
                     }
                 }
@@ -725,12 +765,19 @@ class BmpApp {
         if (this.worker && this.runningPersistenceEnabled) {
             return this.sendWorkerQuery(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS, null, null);
         }
-        if (!fs.existsSync(this.persistenceDbPath)) {
+        const databaseInfo = this.getPersistenceDatabaseInfo();
+        if (databaseInfo.clientDatabaseCount === 0) {
             return successResponse(
                 {
                     enabled: this.worker ? this.runningPersistenceEnabled : true,
                     ready: false,
                     dbPath: this.persistenceDbPath,
+                    storageMode: databaseInfo.storageMode,
+                    storageDirectory: databaseInfo.storageDirectory,
+                    clientDatabaseCount: 0,
+                    clientDatabases: [],
+                    legacyDatabaseExists: databaseInfo.legacyDatabaseExists,
+                    legacyDatabasePath: databaseInfo.legacyDatabasePath,
                     running: Boolean(this.worker)
                 },
                 'BMP持久化数据库尚未创建'
@@ -740,6 +787,8 @@ class BmpApp {
         return successResponse(
             {
                 ...status,
+                legacyDatabaseExists: databaseInfo.legacyDatabaseExists,
+                legacyDatabasePath: databaseInfo.legacyDatabasePath,
                 enabled: this.worker ? this.runningPersistenceEnabled : true,
                 running: Boolean(this.worker)
             },

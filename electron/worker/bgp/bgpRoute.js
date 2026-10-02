@@ -1,5 +1,7 @@
+const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../const/bgpConst');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { ATTRIBUTE_DEFAULTS, attributeRegistry } = require('../../utils/bgpAttributeRegistry');
 
 const DEFAULT_PUBLIC_RD = '0:0';
 const DEFAULT_PATH_ID = 0;
@@ -30,6 +32,22 @@ class BgpRoute {
         return numericPathId;
     }
 
+    static normalizeNlriEncoding(value) {
+        const encoding = value ?? attributeRegistry.route.defaults.nlriEncoding;
+        if (!['auto', 'mpReach'].includes(encoding)) throw new Error('IPv4 NLRI编码仅支持auto或mpReach');
+        return encoding;
+    }
+
+    static normalizeMpNextHop(value) {
+        if (value === null) return null;
+        if (value === undefined || value === '') return '';
+        try {
+            return ipaddr.parse(String(value)).toString();
+        } catch (_error) {
+            throw new Error('MP Next Hop请输入有效的IPv4或IPv6地址');
+        }
+    }
+
     static makeKey(ip, mask) {
         return `${ip}|${mask}`;
     }
@@ -38,12 +56,39 @@ class BgpRoute {
         return `${BgpRoute.normalizeRd(rd)}|${BgpRoute.normalizePathId(pathId)}|${ip}|${mask}`;
     }
 
+    static makeLabelUnicastKey(pathId, ip, mask) {
+        const id = BgpRoute.normalizePathId(pathId);
+        return id === 0 ? BgpRoute.makeKey(ip, mask) : `${id}|${ip}|${mask}`;
+    }
+
     static makeUnicastPrefixKey(rd, ip, mask) {
         return `${BgpRoute.normalizeRd(rd)}|${ip}|${mask}`;
     }
 
     static makeQpKey(dqpn, ip, mask) {
         return `${dqpn}|${ip}|${mask}`;
+    }
+
+    static makeMvpnKey(route) {
+        const routeType = Number(route.routeType);
+        const canonicalIp = value => (value ? ipaddr.parse(String(value)).toString() : '');
+        if (routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.LEAF_AD && route.leafRouteKey) {
+            const leafRouteKey = String(route.leafRouteKey).replace(/\s+/g, '').toLowerCase();
+            if (!/^(?:[0-9a-f]{2})+$/.test(leafRouteKey)) throw new Error('MVPN Leaf route key must be hexadecimal');
+            return `${routeType}|leaf:${leafRouteKey}|${canonicalIp(route.originatingRouterIp)}`;
+        }
+        const [administrator, assigned] = BgpRoute.normalizeRd(route.rd).split(':');
+        const rd = `${administrator?.includes('.') ? canonicalIp(administrator) : Number(administrator)}:${Number(assigned)}`;
+        const sourceAs = [2, 6, 7].includes(routeType) ? Number(route.sourceAs ?? 0) : '';
+        const sourceIp = [3, 5, 6, 7].includes(routeType) ? canonicalIp(route.sourceIp) : '';
+        const groupIp = [3, 5, 6, 7].includes(routeType) ? canonicalIp(route.groupIp) : '';
+        const originatingRouterIp = [1, 3, 4].includes(routeType) ? canonicalIp(route.originatingRouterIp) : '';
+        return [routeType, rd, sourceAs, sourceIp, groupIp, originatingRouterIp].join('|');
+    }
+
+    static parseMvpnLeafRouteKey(key) {
+        const match = /^4\|leaf:((?:[0-9a-f]{2})+)\|/.exec(String(key));
+        return match ? match[1] : null;
     }
 
     static parseKey(key) {
@@ -55,8 +100,14 @@ class BgpRoute {
         const addressFamily = getAddrFamilyType(this.bgpInstance.afi, this.bgpInstance.safi);
         const routeInfo = {
             asPath: routeAttr.asPath || '',
-            med: routeAttr.med ?? 0,
-            localPref: routeAttr.localPref ?? 100,
+            med:
+                routeAttr.attributePolicy === 'configured'
+                    ? (routeAttr.med ?? null)
+                    : (routeAttr.med ?? ATTRIBUTE_DEFAULTS.med.value),
+            localPref:
+                routeAttr.attributePolicy === 'configured'
+                    ? (routeAttr.localPref ?? null)
+                    : (routeAttr.localPref ?? ATTRIBUTE_DEFAULTS.localPref.value),
             communities: routeAttr.communities || [],
             nextHop: routeAttr.nextHop || '',
             origin: routeAttr.origin ?? null,
@@ -64,6 +115,12 @@ class BgpRoute {
             rt: routeAttr.rt || '',
             addressFamily: addressFamily
         };
+        if (Object.prototype.hasOwnProperty.call(routeAttr, 'extendedCommunities')) {
+            routeInfo.extendedCommunities = routeAttr.extendedCommunities || [];
+        }
+        if (this.nlriEncoding !== undefined) routeInfo.nlriEncoding = this.nlriEncoding;
+        if (this.mpNextHop !== undefined) routeInfo.mpNextHop = this.mpNextHop;
+        if (routeAttr.attributePolicy === 'configured') routeInfo.pathAttributes = routeAttr.pathAttributes || [];
 
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST) {
             routeInfo.ip = this.ip;
@@ -73,6 +130,7 @@ class BgpRoute {
             if (routeAttr.srv6Sid) {
                 routeInfo.srv6Sid = routeAttr.srv6Sid;
                 routeInfo.srv6EndpointBehavior = routeAttr.srv6EndpointBehavior ?? null;
+                if (routeAttr.srv6SidStructure) routeInfo.srv6SidStructure = { ...routeAttr.srv6SidStructure };
             }
         }
 
@@ -80,6 +138,7 @@ class BgpRoute {
             routeInfo.ip = this.ip;
             routeInfo.mask = this.mask;
             routeInfo.label = this.label;
+            routeInfo.pathId = BgpRoute.normalizePathId(this.pathId);
         }
 
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
@@ -89,6 +148,7 @@ class BgpRoute {
             routeInfo.sourceIp = this.sourceIp;
             routeInfo.groupIp = this.groupIp;
             routeInfo.sourceAs = this.sourceAs;
+            if (this.leafRouteKey !== undefined) routeInfo.leafRouteKey = this.leafRouteKey;
         }
 
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {

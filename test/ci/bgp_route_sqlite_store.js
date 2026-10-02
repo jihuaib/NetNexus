@@ -262,7 +262,7 @@ try {
 
 const incompatibleTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bgp-route-schema-'));
 try {
-    for (const version of [1, 2, BgpRouteSqliteStore.SCHEMA_VERSION + 1]) {
+    for (const version of [1, 2, 3, 5, BgpRouteSqliteStore.SCHEMA_VERSION + 1]) {
         const incompatiblePath = path.join(incompatibleTempDir, `schema-${version}.sqlite3`);
         const incompatibleDb = new Database(incompatiblePath);
         incompatibleDb.pragma(`user_version = ${version}`);

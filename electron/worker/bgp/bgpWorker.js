@@ -1,4 +1,5 @@
 const net = require('net');
+const ipaddr = require('ipaddr.js');
 const util = require('util');
 const BgpConst = require('../../const/bgpConst');
 const { forEachGeneratedRouteIp } = require('../../utils/ipUtils');
@@ -20,6 +21,48 @@ const {
     buildRandomAsPathGenerationContext,
     getGeneratedRandomAsPath
 } = require('../../utils/bgpRouteGenerator');
+const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../utils/bgpAttributeRules');
+
+function validateTreePrefixRange(config, ipType, prefixStep = 1) {
+    const count = Math.floor(Number(config.count));
+    if (!Number.isFinite(count) || count <= 0) return;
+    const bits = ipType === BgpConst.IP_TYPE.IPV6 ? 128 : 32;
+    const mask = Number(config.mask);
+    if (!Number.isInteger(mask) || mask < 0 || mask > bits) throw new Error('路由前缀长度无效');
+    const address = ipaddr.parse(config.prefix);
+    if ((address.kind() === 'ipv6' ? 128 : 32) !== bits) throw new Error('路由前缀地址族无效');
+    const number = address.toByteArray().reduce((value, byte) => value * 256n + BigInt(byte), 0n);
+    const step = (1n << BigInt(bits - mask)) * BigInt(prefixStep);
+    const networkStep = 1n << BigInt(bits - mask);
+    const network = (number / networkStep) * networkStep;
+    const prefixes = count;
+    if (network + BigInt(prefixes - 1) * step > (1n << BigInt(bits)) - 1n) throw new Error('路由前缀递增超出地址范围');
+}
+
+function* iterateTreeRouteInputs(config, ipType, pathCount, prefixStep = 1) {
+    if (Array.isArray(config.routes)) {
+        yield* config.routes;
+        return;
+    }
+    const bits = ipType === BgpConst.IP_TYPE.IPV6 ? 128 : 32;
+    const address = ipaddr.parse(config.prefix);
+    const raw = address.toByteArray().reduce((value, byte) => value * 256n + BigInt(byte), 0n);
+    const networkStep = 1n << BigInt(bits - Number(config.mask));
+    const step = networkStep * BigInt(prefixStep);
+    const start = (raw / networkStep) * networkStep;
+    for (let index = 0; index < Number(config.count); index += 1) {
+        let number = start + BigInt(index) * step;
+        const bytes = Array(bits / 8).fill(0);
+        for (let byte = bytes.length - 1; byte >= 0; byte -= 1) {
+            bytes[byte] = Number(number & 255n);
+            number >>= 8n;
+        }
+        const ip = ipaddr.fromByteArray(bytes).toString();
+        for (let pathId = 0; pathId < pathCount; pathId += 1) {
+            yield { ip, mask: Number(config.mask), rd: config.rd, pathId };
+        }
+    }
+}
 
 function formatBgpListenError(error, port, platform = process.platform) {
     if (error?.code === 'EADDRINUSE') return `BGP监听端口${port}已被其他进程占用`;
@@ -30,6 +73,9 @@ function formatBgpListenError(error, port, platform = process.platform) {
 }
 
 function makeRouteLookupKey(addressFamily, route) {
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+        return BgpRoute.makeLabelUnicastKey(route?.pathId, route?.ip, route?.mask);
+    }
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
         return BgpRoute.makeUnicastKey(route?.pathId, route?.rd, route?.ip, route?.mask);
     }
@@ -45,30 +91,94 @@ function makeRouteLookupKey(addressFamily, route) {
     return BgpRoute.makeKey(route?.ip, route?.mask);
 }
 
-function getMvpnRouteKeySourceAs(routeType, sourceAs) {
-    const type = Number(routeType);
-    return [
-        BgpConst.BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD,
-        BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN,
-        BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
-    ].includes(type)
-        ? sourceAs || ''
-        : '';
+function makeMvpnRouteKey(route) {
+    return BgpRoute.makeMvpnKey(route);
 }
 
-function makeMvpnRouteKey(route) {
-    return [
-        route?.routeType,
-        route?.rd,
-        getMvpnRouteKeySourceAs(route?.routeType, route?.sourceAs),
-        route?.sourceIp || '',
-        route?.groupIp || '',
-        route?.originatingRouterIp || ''
-    ].join('|');
+function* iterateQpTreeRouteInputs(config, ipType) {
+    if (Array.isArray(config.routes)) {
+        yield* config.routes;
+        return;
+    }
+    const mode = config.routeGrowthMode ?? BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
+    if (!Object.values(BgpConst.BGP_QP_ROUTE_GROWTH_MODE).includes(mode)) throw new Error('QP增长模式无效');
+    const growIp = mode !== BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN;
+    const ipStep = Number(config.ipStep ?? 1);
+    if (!Number.isSafeInteger(ipStep) || ipStep < 0) throw new Error('QP IP步长必须为非负整数');
+    validateTreePrefixRange({ ...config, count: growIp ? config.count : 1 }, ipType, ipStep);
+    if (growIp) yield* iterateTreeRouteInputs(config, ipType, 1, ipStep);
+    else {
+        const [base] = iterateTreeRouteInputs({ ...config, count: 1 }, ipType, 1);
+        for (let index = 0; index < Number(config.count); index += 1) yield { ...base };
+    }
+}
+
+function normalizeMvpnTreeInput(input) {
+    const routeType = Number(input.routeType);
+    if (!Number.isInteger(routeType) || routeType < 1 || routeType > 7) throw new Error('MVPN路由类型范围为1~7');
+    const route = { routeType, rd: input.rd };
+    const ipFields =
+        {
+            1: ['originatingRouterIp'],
+            3: ['sourceIp', 'groupIp', 'originatingRouterIp'],
+            4: ['originatingRouterIp'],
+            5: ['sourceIp', 'groupIp'],
+            6: ['sourceIp', 'groupIp'],
+            7: ['sourceIp', 'groupIp']
+        }[routeType] || [];
+    for (const field of ipFields) {
+        let address;
+        try {
+            address = ipaddr.parse(String(input[field] ?? ''));
+        } catch (_error) {
+            throw new Error(`MVPN ${field}必须是IPv4地址`);
+        }
+        if (address.kind() !== 'ipv4') throw new Error(`MVPN ${field}必须是IPv4地址`);
+        route[field] = address.toString();
+    }
+    if ([2, 6, 7].includes(routeType)) {
+        const sourceAs = Number(input.sourceAs);
+        if (input.sourceAs === undefined || !Number.isInteger(sourceAs) || sourceAs < 0 || sourceAs > 0xffffffff)
+            throw new Error('MVPN Source AS范围为0~4294967295');
+        route.sourceAs = sourceAs;
+    }
+    if (routeType === 4) {
+        const leafRouteKey = String(input.leafRouteKey ?? '')
+            .replace(/\s/g, '')
+            .toLowerCase();
+        if (!/^(?:[0-9a-f]{2})+$/.test(leafRouteKey) || leafRouteKey.length / 2 + 4 > 255)
+            throw new Error('Leaf Route Key必须为非空十六进制，含Origin地址后不能超过255字节');
+        route.leafRouteKey = leafRouteKey;
+        delete route.rd;
+    }
+    return route;
+}
+
+function* iterateMvpnTreeRouteInputs(config) {
+    if (Array.isArray(config.routes)) {
+        for (const route of config.routes) yield normalizeMvpnTreeInput(route);
+        return;
+    }
+    const base = normalizeMvpnTreeInput(config);
+    const count = Number(config.count);
+    if (base.routeType === 2) {
+        if (base.sourceAs + count - 1 > 0xffffffff) throw new Error('MVPN Source AS递增超出uint32范围');
+        for (let index = 0; index < count; index += 1) yield { ...base, sourceAs: base.sourceAs + index };
+        return;
+    }
+    const field = [1, 4].includes(base.routeType) ? 'originatingRouterIp' : 'groupIp';
+    const prefix = base[field];
+    validateTreePrefixRange({ prefix, mask: 32, count }, BgpConst.IP_TYPE.IPV4);
+    for (const route of iterateTreeRouteInputs({ prefix, mask: 32, count }, BgpConst.IP_TYPE.IPV4, 1))
+        yield { ...base, [field]: route.ip };
 }
 
 function isUnicastAddressFamily(addressFamily) {
     return addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
+}
+
+function supportsAddPathAddressFamily(addressFamily) {
+    return isUnicastAddressFamily(addressFamily) || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
 }
 
 function hasExplicitPathId(route) {
@@ -81,10 +191,10 @@ function shouldEnableAddPathForAddressFamily(config, addressFamily) {
         config?.addressFamilyConfig?.[String(normalizedFamily)] ||
         config?.addressFamilyConfig?.[normalizedFamily] ||
         {};
-    return isUnicastAddressFamily(normalizedFamily) && familyConfig.sendAddPath === true;
+    return supportsAddPathAddressFamily(normalizedFamily) && familyConfig.sendAddPath === true;
 }
 
-function enableLocalAddPathForUnicastFamilies(bgpSession, config, addressFamilies) {
+function enableLocalAddPathForFamilies(bgpSession, config, addressFamilies) {
     (addressFamilies || []).forEach(family => {
         const addressFamily = Number(family);
         if (!shouldEnableAddPathForAddressFamily(config, addressFamily)) {
@@ -160,6 +270,9 @@ class BgpWorker {
         this.bgpSessionMap = new Map();
         this.bgpInstanceMap = new Map();
         this.routeStore = null;
+        this.routeGroupMutation = Promise.resolve();
+        this.pendingRouteGroupMutations = 0;
+        this.bulkRouteMutation = null;
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler();
@@ -189,6 +302,14 @@ class BgpWorker {
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTES, this.getRoutes.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.GET_ROUTE_DETAIL, this.getRouteDetail.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.SEND_RAW_PACKET, this.sendRawPacket.bind(this));
+        this.messageHandler.registerHandler(
+            BgpConst.BGP_REQ_TYPES.GET_ROUTE_GROUP_STATES,
+            this.getRouteGroupStates.bind(this)
+        );
+        this.messageHandler.registerHandler(
+            BgpConst.BGP_REQ_TYPES.WITHDRAW_ROUTE_GROUP,
+            this.withdrawRouteGroup.bind(this)
+        );
 
         // MVPN
         this.messageHandler.registerHandler(
@@ -343,7 +464,10 @@ class BgpWorker {
             this.routeStore.open();
         } catch (error) {
             logger.error(`BGP SQLite路由库打开失败: ${error.message}`);
-            this.messageHandler.sendErrorResponse(messageId, `BGP路由库打开失败: ${error.message}`);
+            const recoveryHint = error.message.startsWith('BGP route SQLite schema')
+                ? '；请在“设置 → 数据”中删除旧 BGP 路由数据库后重试'
+                : '';
+            this.messageHandler.sendErrorResponse(messageId, `BGP路由库打开失败: ${error.message}${recoveryHint}`);
             return;
         }
 
@@ -479,7 +603,7 @@ class BgpWorker {
                     bgpSession.localCapFlags,
                     BgpConst.BGP_CAP_FLAGS.ADD_PATH
                 );
-                enableLocalAddPathForUnicastFamilies(bgpSession, ipv4PeerConfigData, ipv4PeerConfigData.addressFamily);
+                enableLocalAddPathForFamilies(bgpSession, ipv4PeerConfigData, ipv4PeerConfigData.addressFamily);
             }
         });
         bgpSession.openCapCustom = ipv4PeerConfigData.openCapCustom;
@@ -614,11 +738,7 @@ class BgpWorker {
                     bgpSession.localCapFlags,
                     BgpConst.BGP_CAP_FLAGS.ADD_PATH
                 );
-                enableLocalAddPathForUnicastFamilies(
-                    bgpSession,
-                    ipv6PeerConfigData,
-                    ipv6PeerConfigData.addressFamilyIpv6
-                );
+                enableLocalAddPathForFamilies(bgpSession, ipv6PeerConfigData, ipv6PeerConfigData.addressFamilyIpv6);
             }
         });
         bgpSession.openCapCustom = ipv6PeerConfigData.openCapCustomIpv6;
@@ -717,6 +837,9 @@ class BgpWorker {
     }
 
     stopBgp(messageId) {
+        if (this.pendingRouteGroupMutations || this.bulkRouteMutation) {
+            return Promise.all([this.routeGroupMutation, this.bulkRouteMutation]).then(() => this.stopBgp(messageId));
+        }
         if (this.server) {
             this.server.close();
             this.server = null;
@@ -761,6 +884,161 @@ class BgpWorker {
         this.messageHandler.sendSuccessResponse(messageId, null, 'bgp协议停止成功');
     }
 
+    getRouteStores() {
+        return [
+            ...new Set(
+                [this.routeStore, ...Array.from(this.bgpInstanceMap.values(), instance => instance.routeStore)].filter(
+                    Boolean
+                )
+            )
+        ];
+    }
+
+    assertUnmanagedRouteOwnership(instance, routes) {
+        if (
+            !instance.routeStore.listRouteGroups().some(group => {
+                const { afi, safi } = getAfiAndSafi(group.addressFamily);
+                return instance.afi === afi && instance.safi === safi;
+            })
+        )
+            return;
+        const definition = instance.routeStore.getInstance(instance.instanceKey);
+        const candidates = (function* () {
+            for (const route of routes)
+                yield {
+                    ...route,
+                    routeKey: makeRouteLookupKey(getAddrFamilyType(instance.afi, instance.safi), route),
+                    prefix: route.ip,
+                    prefixLength: route.mask,
+                    rd: instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST ? undefined : route.rd
+                };
+        })();
+        instance.routeStore.assertRouteOwnership(definition, candidates);
+    }
+
+    assertLegacyAttributeRefreshAllowed(instance, changed) {
+        if (!changed) return;
+        if (
+            instance.routeStore.listRouteGroups().some(group => {
+                const { afi, safi } = getAfiAndSafi(group.addressFamily);
+                return instance.afi === afi && instance.safi === safi;
+            })
+        )
+            throw new Error('该地址族存在路由组快照，请通过路由组编辑属性');
+    }
+
+    getRouteGroupStates(messageId) {
+        const groups = this.getRouteStores().flatMap(store => store.listRouteGroups());
+        this.messageHandler.sendSuccessResponse(messageId, { groups }, '路由组状态查询成功');
+    }
+
+    assertRouteMutationsAvailable() {
+        if (this.pendingRouteGroupMutations || this.bulkRouteMutation) {
+            throw new Error('路由组生成或撤销正在进行，请完成后重试');
+        }
+    }
+
+    serializeRouteGroupMutation(operation) {
+        if (this.bulkRouteMutation) throw new Error('路由批量删除正在进行，请完成后重试');
+        this.pendingRouteGroupMutations += 1;
+        const pending = this.routeGroupMutation.then(operation, operation).finally(() => {
+            this.pendingRouteGroupMutations -= 1;
+        });
+        this.routeGroupMutation = pending.catch(() => {});
+        return pending;
+    }
+
+    async withdrawStoredGroupRoutes(rows) {
+        const batches = new Map();
+        for (const row of rows || []) {
+            const instance = this.bgpInstanceMap.get(row.instanceKey);
+            if (!instance) continue;
+            if (!batches.has(instance)) batches.set(instance, []);
+            const batch = batches.get(instance);
+            const route = instance.hydrateRoute(row);
+            if (row.forceWithdraw) route._forceWithdraw = true;
+            if (row.label === null) route._labelAbsent = true;
+            if (row.dqpn === null && instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) route._dqpnAbsent = true;
+            batch.push(route);
+            if (batch.length === 2000) {
+                await instance.withdrawRoute(batch);
+                batches.set(instance, []);
+            }
+        }
+        for (const [instance, routes] of batches) {
+            if (routes.length) await instance.withdrawRoute(routes);
+        }
+    }
+
+    async announceStoredGroup(instance, groupId) {
+        const streams = Array.from(instance.peerMap.values(), peer =>
+            peer.createRouteBatchStream({ abandonOnBackpressure: false })
+        );
+        let batch = [];
+        const write = async () => {
+            if (!batch.length) return;
+            const routes = batch;
+            batch = [];
+            await Promise.all(streams.map(stream => stream.write(routes)));
+        };
+        for (const row of instance.routeStore.iterateRouteGroupRoutes(groupId, { batchSize: 2000 })) {
+            batch.push(instance.hydrateRoute(row));
+            if (batch.length === 2000) await write();
+        }
+        await write();
+        await Promise.all(streams.map(stream => stream.end()));
+    }
+
+    assertTreeRouteEncodable(instance, route) {
+        for (const peer of instance.peerMap.values()) {
+            if (peer.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) continue;
+            const builder = peer.getRouteGroupBuilder(route);
+            if (!builder) continue;
+            const result = builder([route], 0);
+            if (result.buffer?.length > BgpConst.BGP_MAX_PKT_SIZE)
+                throw new Error(`路由 ${route.routeKey} 的BGP报文超过${BgpConst.BGP_MAX_PKT_SIZE}字节上限`);
+            if (!result.status || result.index !== 1 || !Buffer.isBuffer(result.buffer))
+                throw new Error(`路由 ${route.routeKey} 无法编码到BGP报文`);
+        }
+    }
+
+    commitGeneratedRouteGroup(messageId, config, instance, routes) {
+        return this.serializeRouteGroupMutation(async () => {
+            const stats = instance.routeStore.replaceRouteGroup(config.groupId, {
+                groupName: config.groupName || config.groupId,
+                addressFamily: Number(config.addressFamily),
+                instanceKey: instance.instanceKey,
+                routes,
+                includeOldRoutes: false
+            });
+            await this.withdrawStoredGroupRoutes(stats.withdrawnRoutes || stats.oldRoutes);
+            await this.announceStoredGroup(instance, config.groupId);
+            this.messageHandler.sendSuccessResponse(
+                messageId,
+                {
+                    added: stats.inserted,
+                    updated: stats.updated,
+                    unchanged: stats.unchanged,
+                    deleted: stats.deleted,
+                    total: instance.routeMap.size
+                },
+                '路由组生成成功'
+            );
+        });
+    }
+
+    withdrawRouteGroup(messageId, config = {}) {
+        if (typeof config.groupId !== 'string' || !config.groupId.trim()) throw new Error('路由组ID不能为空');
+        return this.serializeRouteGroupMutation(async () => {
+            const store = this.getRouteStores().find(candidate =>
+                candidate.listRouteGroups().some(group => group.groupId === config.groupId)
+            );
+            const result = store ? store.withdrawRouteGroup(config.groupId) : { deleted: 0, routes: [] };
+            await this.withdrawStoredGroupRoutes(result.routes);
+            this.messageHandler.sendSuccessResponse(messageId, { deleted: result.deleted }, '路由组撤销成功');
+        });
+    }
+
     generateRoutes(messageId, config) {
         const { afi, safi } = getAfiAndSafi(config.addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
@@ -775,30 +1053,90 @@ class BgpWorker {
         const isLabelUnicast = addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
         const isSrv6CapableUnicast =
             addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC;
-        const labelContext = isLabelUnicast ? buildLabelGenerationContext(config) : null;
-        const generatedUnicastPathIds = isSrv6CapableUnicast ? getGeneratedUnicastPathIds(config) : [null];
+        const managedGroup = config.groupId !== undefined;
+        if (!managedGroup) this.assertRouteMutationsAvailable();
+        if (managedGroup && (typeof config.groupId !== 'string' || !config.groupId.trim()))
+            throw new Error('路由组ID不能为空');
+        if (
+            managedGroup &&
+            (Array.isArray(config.routes)
+                ? !config.routes.length
+                : !Number.isSafeInteger(Number(config.count)) || Number(config.count) < 1)
+        )
+            throw new Error('路由组数量必须为正整数');
         const routeCount = Number(config.count);
-        const randomAsPathContext = buildRandomAsPathGenerationContext(config);
-        const srv6Context = isSrv6CapableUnicast
-            ? buildSrv6SidGenerationContext(
-                  {
-                      ...config,
-                      count:
-                          Number.isFinite(routeCount) && routeCount > 0
-                              ? Math.floor(routeCount) * generatedUnicastPathIds.length
-                              : config.count
-                  },
-                  {
-                      defaultEndpointBehavior: getDefaultSrv6EndpointBehavior(addressFamily)
-                  }
-              )
-            : null;
+        const attributeRuleContext = buildAttributeRuleContext(
+            config,
+            Math.random,
+            Array.isArray(config.routes) ? config.routes.length : routeCount
+        );
+        if (managedGroup && !attributeRuleContext.enabled) throw new Error('路由组必须使用树属性配置');
+        const nlriEncoding =
+            attributeRuleContext.enabled || config.nlriEncoding !== undefined
+                ? BgpRoute.normalizeNlriEncoding(config.nlriEncoding)
+                : null;
+        if (Array.isArray(config.routes)) {
+            config.routes.forEach(route => {
+                if (route.nlriEncoding !== undefined) BgpRoute.normalizeNlriEncoding(route.nlriEncoding);
+                if (route.mpNextHop !== undefined) BgpRoute.normalizeMpNextHop(route.mpNextHop);
+            });
+        }
+        const generatedUnicastPathIds = isSrv6CapableUnicast
+            ? attributeRuleContext.enabled
+                ? [0]
+                : getGeneratedUnicastPathIds(config)
+            : [null];
+        const prefixStep =
+            attributeRuleContext.enabled && !Array.isArray(config.routes) ? Number(config.ipStep ?? 1) : 1;
+        if (attributeRuleContext.enabled && !Array.isArray(config.routes)) {
+            if (!Number.isSafeInteger(prefixStep) || prefixStep < 1) throw new Error('路由前缀IP步长必须为正整数');
+            validateTreePrefixRange(config, ipType, prefixStep);
+        }
+        const hasLabelRule = attributeRuleContext.rules.some(rule => rule.type === 'label');
+        if (hasLabelRule && !isLabelUnicast) throw new Error('MPLS Label属性仅适用于IPv4 Label地址族');
+        if (
+            !supportsAddPathAddressFamily(addressFamily) &&
+            attributeRuleContext.rules.some(rule => rule.type === 'addPath')
+        ) {
+            throw new Error('ADD-PATH节点仅适用于Unicast和IPv4 Label地址族');
+        }
+        if (!isSrv6CapableUnicast && attributeRuleContext.rules.some(rule => rule.type === 'srv6')) {
+            throw new Error('SRv6节点仅适用于Unicast地址族');
+        }
+        const labelContext =
+            isLabelUnicast && !attributeRuleContext.enabled ? buildLabelGenerationContext(config) : null;
+        const randomAsPathContext = attributeRuleContext.enabled
+            ? { enabled: false }
+            : buildRandomAsPathGenerationContext(config);
+        const srv6Context =
+            isSrv6CapableUnicast && !attributeRuleContext.enabled
+                ? buildSrv6SidGenerationContext(
+                      {
+                          ...config,
+                          count:
+                              Number.isFinite(routeCount) && routeCount > 0
+                                  ? Math.floor(routeCount) * generatedUnicastPathIds.length
+                                  : config.count
+                      },
+                      {
+                          defaultEndpointBehavior: getDefaultSrv6EndpointBehavior(addressFamily)
+                      }
+                  )
+                : null;
+        if (!managedGroup)
+            this.assertUnmanagedRouteOwnership(instance, iterateTreeRouteInputs(config, ipType, 1, prefixStep));
         const nextCustomAttr = config.customAttr || '';
         const nextRt = config.rt || '';
-        const hasAttrChanged = instance.customAttr !== nextCustomAttr || instance.rt !== nextRt;
-        instance.customAttr = nextCustomAttr;
-        instance.rt = nextRt;
-        const routeBatchStream = hasAttrChanged ? null : instance.createRouteBatchStream();
+        const hasAttrChanged =
+            !managedGroup &&
+            !attributeRuleContext.enabled &&
+            (instance.customAttr !== nextCustomAttr || instance.rt !== nextRt);
+        this.assertLegacyAttributeRefreshAllowed(instance, hasAttrChanged);
+        if (!managedGroup && !attributeRuleContext.enabled) {
+            instance.customAttr = nextCustomAttr;
+            instance.rt = nextRt;
+        }
+        const routeBatchStream = managedGroup || hasAttrChanged ? null : instance.createRouteBatchStream();
 
         let inserted = 0;
         let updated = 0;
@@ -822,21 +1160,39 @@ class BgpWorker {
         const addRoute = route => {
             const isUnicast = isUnicastAddressFamily(addressFamily);
             const rd = isUnicast ? BgpRoute.normalizeRd(route.rd ?? config.rd) : null;
-            const pathId = isUnicast ? BgpRoute.normalizePathId(route.pathId) : null;
-            const key = isUnicast
-                ? BgpRoute.makeUnicastKey(pathId, rd, route.ip, route.mask)
-                : BgpRoute.makeKey(route.ip, route.mask);
-            const label = route.label !== undefined && route.label !== null ? route.label : null;
-            const attr = instance.makeRouteAttr(null, {
-                customAttr: instance.customAttr,
-                rt: instance.rt,
-                asPath:
-                    route.asPath !== undefined
-                        ? route.asPath
-                        : randomAsPathContext.enabled
-                          ? getGeneratedRandomAsPath(randomAsPathContext)
-                          : undefined
-            });
+            const generatedAttributes = attributeRuleContext.enabled
+                ? getGeneratedAttributeValues(attributeRuleContext, routeIndex)
+                : null;
+            const pathId = supportsAddPathAddressFamily(addressFamily)
+                ? BgpRoute.normalizePathId(generatedAttributes?.pathId ?? route.pathId)
+                : null;
+            const key = isLabelUnicast
+                ? BgpRoute.makeLabelUnicastKey(pathId, route.ip, route.mask)
+                : isUnicast
+                  ? BgpRoute.makeUnicastKey(pathId, rd, route.ip, route.mask)
+                  : BgpRoute.makeKey(route.ip, route.mask);
+            const label = generatedAttributes ? (generatedAttributes.label ?? null) : (route.label ?? null);
+            const attr = instance.makeRouteAttr(
+                null,
+                generatedAttributes
+                    ? {
+                          customAttr: '',
+                          rt: '',
+                          ...generatedAttributes.attr,
+                          attributePolicy: 'configured',
+                          configuredAttributes: attributeRuleContext.attributeRules.map(rule => rule.type)
+                      }
+                    : {
+                          customAttr: instance.customAttr,
+                          rt: instance.rt,
+                          asPath:
+                              route.asPath !== undefined
+                                  ? route.asPath
+                                  : randomAsPathContext.enabled
+                                    ? getGeneratedRandomAsPath(randomAsPathContext)
+                                    : undefined
+                      }
+            );
 
             if (srv6Context) {
                 const generatedSid = srv6Context.enabled ? getGeneratedSrv6Sid(srv6Context, routeIndex) : '';
@@ -852,20 +1208,54 @@ class BgpWorker {
             const bgpRoute = new BgpRoute(instance);
             bgpRoute.ip = route.ip;
             bgpRoute.mask = route.mask;
+            if (route.nlriEncoding !== undefined || nlriEncoding !== null) {
+                bgpRoute.nlriEncoding = BgpRoute.normalizeNlriEncoding(route.nlriEncoding ?? nlriEncoding);
+            }
+            if (generatedAttributes || route.mpNextHop !== undefined) {
+                bgpRoute.mpNextHop = BgpRoute.normalizeMpNextHop(
+                    generatedAttributes ? generatedAttributes.mpNextHop : route.mpNextHop
+                );
+            }
             if (isUnicast) {
                 bgpRoute.rd = rd;
-                bgpRoute.pathId = pathId;
             }
+            if (supportsAddPathAddressFamily(addressFamily)) bgpRoute.pathId = pathId;
             if (isLabelUnicast) bgpRoute.label = label;
             bgpRoute._routeAttr = attr;
-            entries.push({ routeKey: key, route: bgpRoute, attr });
+            bgpRoute.routeKey = key;
+            const entry = { routeKey: key, route: bgpRoute, attr };
             generatedCount += 1;
             routeIndex += 1;
+            if (generatedAttributes) this.assertTreeRouteEncodable(instance, bgpRoute);
+            if (managedGroup) {
+                return { routeKey: key, ...instance.serializeRoute(bgpRoute), attr };
+            }
+            entries.push(entry);
             if (entries.length >= 2000) flush();
         };
 
+        if (managedGroup) {
+            const inputs = iterateTreeRouteInputs(
+                config,
+                ipType,
+                supportsAddPathAddressFamily(addressFamily) ? attributeRuleContext.pathCount : 1,
+                prefixStep
+            );
+            const candidates = (function* () {
+                for (const route of inputs) yield addRoute(route);
+            })();
+            return this.commitGeneratedRouteGroup(messageId, config, instance, candidates);
+        }
         if (Array.isArray(config.routes)) {
             config.routes.forEach(addRoute);
+        } else if (attributeRuleContext.enabled) {
+            for (const route of iterateTreeRouteInputs(
+                config,
+                ipType,
+                supportsAddPathAddressFamily(addressFamily) ? attributeRuleContext.pathCount : 1,
+                prefixStep
+            ))
+                addRoute(route);
         } else {
             forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, (route, index) => {
                 if (isSrv6CapableUnicast) {
@@ -906,6 +1296,7 @@ class BgpWorker {
     }
 
     deleteRoute(messageId, config) {
+        this.assertRouteMutationsAvailable();
         const { afi, safi } = getAfiAndSafi(config.addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
         if (!instance) {
@@ -916,7 +1307,8 @@ class BgpWorker {
 
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
         const addressFamily = Number(config.addressFamily);
-        const isUnicast = isUnicastAddressFamily(addressFamily);
+        const isUnicast = supportsAddPathAddressFamily(addressFamily);
+        const isLabel = addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
         let withdrawnRoutes = [];
         let deleteKeys = new Set();
         let deleted = 0;
@@ -937,7 +1329,7 @@ class BgpWorker {
                     if (replacements.has(prefixKey)) return;
                     const replacement = instance.routeMap.queryPrefix(route.ip, {
                         prefixLength: route.mask,
-                        rd: BgpRoute.normalizeRd(route.rd),
+                        rd: isLabel ? undefined : BgpRoute.normalizeRd(route.rd),
                         bestPathOnly: true,
                         pageSize: 1,
                         includeTotal: false
@@ -961,14 +1353,18 @@ class BgpWorker {
                 const rd = BgpRoute.normalizeRd(route.rd ?? config.rd);
                 if (hasExplicitPathId(route)) {
                     queueExisting(
-                        instance.routeMap.get(BgpRoute.makeUnicastKey(route.pathId, rd, route.ip, route.mask))
+                        instance.routeMap.get(
+                            isLabel
+                                ? BgpRoute.makeLabelUnicastKey(route.pathId, route.ip, route.mask)
+                                : BgpRoute.makeUnicastKey(route.pathId, rd, route.ip, route.mask)
+                        )
                     );
                 } else {
                     let cursor = null;
                     do {
                         const page = instance.routeMap.queryPrefix(route.ip, {
                             prefixLength: route.mask,
-                            rd,
+                            rd: isLabel ? undefined : rd,
                             pageSize: 2000,
                             afterRouteId: cursor,
                             includeTotal: false
@@ -978,7 +1374,7 @@ class BgpWorker {
                     } while (cursor !== null);
                 }
             } else {
-                queueExisting(instance.routeMap.get(BgpRoute.makeKey(route.ip, route.mask)));
+                queueExisting(instance.routeMap.get(makeRouteLookupKey(addressFamily, route)));
             }
         };
 
@@ -1002,7 +1398,16 @@ class BgpWorker {
         this.messageHandler.sendSuccessResponse(messageId, { deleted, total: instance.routeMap.size }, '路由删除成功');
     }
 
-    async deleteAllRoutesByFamily(messageId, queryInfo) {
+    deleteAllRoutesByFamily(messageId, queryInfo) {
+        this.assertRouteMutationsAvailable();
+        const pending = this.deleteAllRoutesByFamilyNow(messageId, queryInfo);
+        this.bulkRouteMutation = pending;
+        return pending.finally(() => {
+            if (this.bulkRouteMutation === pending) this.bulkRouteMutation = null;
+        });
+    }
+
+    async deleteAllRoutesByFamilyNow(messageId, queryInfo) {
         try {
             const { addressFamily, routeType } = queryInfo;
             const { afi, safi } = getAfiAndSafi(addressFamily);
@@ -1046,7 +1451,85 @@ class BgpWorker {
         }
     }
 
+    generateSpecialTreeRoutes(messageId, config) {
+        const { afi, safi } = getAfiAndSafi(config.addressFamily);
+        const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
+        if (!instance) throw new Error('实例不存在');
+        const managed = config.groupId !== undefined;
+        if (managed && (typeof config.groupId !== 'string' || !config.groupId.trim()))
+            throw new Error('路由组ID不能为空');
+        if (!managed) this.assertRouteMutationsAvailable();
+        const count = Array.isArray(config.routes) ? config.routes.length : Number(config.count);
+        if (!Number.isSafeInteger(count) || count < 1) throw new Error('路由组数量必须为正整数');
+        const isQp = safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP;
+        if (!isQp && Number(config.addressFamily) !== BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN)
+            throw new Error('当前地址族不支持专用树生成');
+        const context = buildAttributeRuleContext(config, Math.random, count);
+        if (!context.enabled) throw new Error('路由组必须使用树属性配置');
+        if (context.rules.some(rule => ['addPath', 'label', 'srv6'].includes(rule.type)))
+            throw new Error('当前地址族不支持ADD-PATH、Label或Unicast SRv6节点');
+        if (isQp && context.rules.some(rule => rule.type === 'mpNextHop'))
+            throw new Error('QP的MP下一跳请通过BSID节点配置');
+        const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IP_TYPE.IPV6 : BgpConst.IP_TYPE.IPV4;
+        const inputs = isQp ? iterateQpTreeRouteInputs(config, ipType) : iterateMvpnTreeRouteInputs(config);
+        const assertEncodable = route => this.assertTreeRouteEncodable(instance, route);
+        const candidates = (function* () {
+            let index = 0;
+            for (const input of inputs) {
+                const generated = getGeneratedAttributeValues(context, index);
+                const route = new BgpRoute(instance);
+                instance.copyRouteNlriFields(route, input);
+                route.nlriEncoding = BgpRoute.normalizeNlriEncoding(config.nlriEncoding);
+                route.mpNextHop = BgpRoute.normalizeMpNextHop(generated.mpNextHop);
+                if (isQp) route.dqpn = generated.dqpn ?? null;
+                const attr = instance.makeRouteAttr(null, {
+                    customAttr: '',
+                    rt: '',
+                    ...generated.attr,
+                    attributePolicy: 'configured',
+                    configuredAttributes: context.attributeRules.map(rule => rule.type)
+                });
+                route._routeAttr = attr;
+                route.routeKey = makeRouteLookupKey(Number(config.addressFamily), route);
+                assertEncodable(route);
+                index += 1;
+                yield { routeKey: route.routeKey, ...instance.serializeRoute(route), attr };
+            }
+        })();
+        if (managed) return this.commitGeneratedRouteGroup(messageId, config, instance, candidates);
+        const entries = Array.from(candidates, entry => ({
+            routeKey: entry.routeKey,
+            route: instance.hydrateRoute({ ...entry.route, routeKey: entry.routeKey, routeAttr: entry.attr }),
+            attr: entry.attr
+        }));
+        this.assertUnmanagedRouteOwnership(
+            instance,
+            entries.map(entry => entry.route)
+        );
+        let inserted = 0;
+        let updated = 0;
+        let unchanged = 0;
+        const stream = instance.createRouteBatchStream();
+        for (let index = 0; index < entries.length; index += 2000) {
+            const batch = entries.slice(index, index + 2000);
+            const stats = instance.upsertRouteBatch(batch);
+            inserted += stats.inserted;
+            updated += stats.updated;
+            unchanged += stats.unchanged;
+            if (stats.changed) stream.write(batch.map(entry => entry.route));
+        }
+        stream.end();
+        this.messageHandler.sendSuccessResponse(
+            messageId,
+            { added: inserted, updated, unchanged, total: instance.routeMap.size },
+            '路由生成成功'
+        );
+    }
+
     generateQpRoutes(messageId, config) {
+        if (config.attributeRules !== undefined || config.nlriRules !== undefined || config.groupId !== undefined)
+            return this.generateSpecialTreeRoutes(messageId, config);
+        this.assertRouteMutationsAvailable();
         try {
             const { afi, safi } = getAfiAndSafi(config.addressFamily);
             const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
@@ -1059,6 +1542,15 @@ class BgpWorker {
             const nextCustomAttr = config.customAttr || '';
             const randomAsPathContext = buildRandomAsPathGenerationContext(config);
             const hasAttrChanged = instance.customAttr !== nextCustomAttr;
+            this.assertLegacyAttributeRefreshAllowed(instance, hasAttrChanged);
+            if (
+                instance.routeStore
+                    .listRouteGroups()
+                    .some(group => group.addressFamily === Number(config.addressFamily))
+            ) {
+                const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
+                forEachQpGeneratedRoute(config, ipType, route => this.assertUnmanagedRouteOwnership(instance, [route]));
+            }
             if (hasAttrChanged) {
                 instance.customAttr = nextCustomAttr;
             }
@@ -1129,6 +1621,19 @@ class BgpWorker {
     }
 
     deleteQpRoute(messageId, config) {
+        if (Array.isArray(config.routes)) return this.deleteRoute(messageId, config);
+        if (Object.hasOwn(config, 'dqpn') || config.startDqpn === null)
+            return this.deleteRoute(messageId, {
+                ...config,
+                routes: [
+                    {
+                        ip: config.ip ?? config.prefix,
+                        mask: config.mask,
+                        dqpn: Object.hasOwn(config, 'dqpn') ? config.dqpn : config.startDqpn
+                    }
+                ]
+            });
+        this.assertRouteMutationsAvailable();
         try {
             const { afi, safi } = getAfiAndSafi(config.addressFamily);
             const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
@@ -1338,6 +1843,9 @@ class BgpWorker {
     }
 
     generateMvpnRoutes(messageId, config) {
+        if (config.attributeRules !== undefined || config.nlriRules !== undefined || config.groupId !== undefined)
+            return this.generateSpecialTreeRoutes(messageId, config);
+        this.assertRouteMutationsAvailable();
         const { afi, safi } = getAfiAndSafi(config.addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
         if (!instance) {
@@ -1348,6 +1856,18 @@ class BgpWorker {
         const randomAsPathContext = buildRandomAsPathGenerationContext(config);
         const nextRt = config.rt || '';
         const hasAttrChanged = instance.rt !== nextRt;
+        this.assertLegacyAttributeRefreshAllowed(instance, hasAttrChanged);
+        if (instance.routeStore.listRouteGroups().some(group => group.addressFamily === Number(config.addressFamily))) {
+            this.forEachMvpnGeneratedIp(config, ipObj => {
+                const routeType = Number(config.routeType);
+                const row = {
+                    ...config,
+                    originatingRouterIp: routeType === 1 ? ipObj.ip : config.originatingRouterIp,
+                    groupIp: [3, 5, 6, 7].includes(routeType) ? ipObj.ip : config.groupIp
+                };
+                this.assertUnmanagedRouteOwnership(instance, [row]);
+            });
+        }
         instance.rt = nextRt;
         const routeBatchStream = hasAttrChanged ? null : instance.createRouteBatchStream();
         let inserted = 0;
@@ -1405,6 +1925,7 @@ class BgpWorker {
                     break;
                 case BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN:
                     bgpRoute.sourceAs = config.sourceAs;
+                    bgpRoute.sourceIp = config.sourceIp;
                     bgpRoute.groupIp = currentGroupIp;
                     break;
                 case BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN:
@@ -1435,6 +1956,9 @@ class BgpWorker {
     }
 
     deleteMvpnRoutes(messageId, config) {
+        if (Array.isArray(config.routes)) return this.deleteRoute(messageId, config);
+        if (config.leafRouteKey) return this.deleteRoute(messageId, { ...config, routes: [config] });
+        this.assertRouteMutationsAvailable();
         const { afi, safi } = getAfiAndSafi(config.addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
         if (!instance) {
@@ -1473,7 +1997,8 @@ class BgpWorker {
                 sourceAs: config.sourceAs,
                 sourceIp: config.sourceIp,
                 groupIp: currentGroupIp,
-                originatingRouterIp: currentOrigRouterIp
+                originatingRouterIp: currentOrigRouterIp,
+                leafRouteKey: config.leafRouteKey
             });
 
             const bgpRoute = instance.routeMap.get(routeKey);
@@ -1492,6 +2017,7 @@ class BgpWorker {
     }
 
     importRoutes(messageId, config) {
+        this.assertRouteMutationsAvailable();
         const { addressFamily, routes, announce = true, instanceAttrs = {} } = config;
         const routeList = Array.isArray(routes) ? routes : [];
         const { afi, safi } = getAfiAndSafi(addressFamily);
@@ -1506,6 +2032,8 @@ class BgpWorker {
             (instanceAttrs.customAttr !== undefined && instance.customAttr !== (instanceAttrs.customAttr || '')) ||
             (instanceAttrs.rt !== undefined && instance.rt !== (instanceAttrs.rt || ''));
 
+        this.assertUnmanagedRouteOwnership(instance, routeList);
+        this.assertLegacyAttributeRefreshAllowed(instance, hasInstanceAttrChanged);
         if (instanceAttrs.customAttr !== undefined) {
             instance.customAttr = instanceAttrs.customAttr || '';
         }
@@ -1526,7 +2054,10 @@ class BgpWorker {
         const entries = [];
         routeList.forEach(route => {
             let key;
-            if (isUnicastAddressFamily(addressFamily)) {
+            if (Number(addressFamily) === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+                route.pathId = BgpRoute.normalizePathId(route.pathId);
+                key = BgpRoute.makeLabelUnicastKey(route.pathId, route.ip, route.mask);
+            } else if (isUnicastAddressFamily(addressFamily)) {
                 route.rd = BgpRoute.normalizeRd(route.rd);
                 route.pathId = BgpRoute.normalizePathId(route.pathId);
                 key = BgpRoute.makeUnicastKey(route.pathId, route.rd, route.ip, route.mask);

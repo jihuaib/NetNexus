@@ -11,10 +11,16 @@ const ROUTE_ATTR_FIELDS = [
     'med',
     'localPref',
     'communities',
+    'extendedCommunities',
     'customAttr',
     'rt',
     'srv6Sid',
-    'srv6EndpointBehavior'
+    'srv6EndpointBehavior',
+    'srv6SidStructure',
+    'attributePolicy',
+    'configuredAttributes',
+    'pathAttributes',
+    'mrtMpNextHopBytes'
 ];
 const ROUTE_NLRI_FIELDS = [
     'ip',
@@ -27,7 +33,10 @@ const ROUTE_NLRI_FIELDS = [
     'sourceAs',
     'dqpn',
     'label',
-    'pathId'
+    'pathId',
+    'leafRouteKey',
+    'nlriEncoding',
+    'mpNextHop'
 ];
 
 class BgpInstance {
@@ -80,7 +89,11 @@ class BgpInstance {
                 attr[field] = source[field];
             }
         }
-        if (source.formatted !== undefined) {
+        if (
+            source.formatted !== undefined &&
+            source.attributePolicy !== 'configured' &&
+            source.customAttr === undefined
+        ) {
             attr.customAttr = source.formatted;
         }
         return attr;

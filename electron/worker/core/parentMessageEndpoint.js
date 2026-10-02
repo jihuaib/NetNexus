@@ -1,4 +1,10 @@
 const { parentPort: workerThreadParentPort } = require('node:worker_threads');
+const {
+    PROTOCOL_PROCESS_IPC_CODEC,
+    PROTOCOL_PROCESS_IPC_CODEC_ENV,
+    encodeProtocolProcessMessage,
+    decodeProtocolProcessMessage
+} = require('./protocolProcessSerialization');
 
 function createWorkerThreadEndpoint() {
     if (!workerThreadParentPort) {
@@ -46,17 +52,23 @@ function createChildProcessEndpoint() {
         return null;
     }
 
+    const jsonIpc = process.env[PROTOCOL_PROCESS_IPC_CODEC_ENV] === PROTOCOL_PROCESS_IPC_CODEC;
+
     return {
         kind: 'child-process',
         on(eventName, listener) {
-            process.on(eventName, listener);
+            if (eventName === 'message' && jsonIpc) {
+                process.on(eventName, message => listener(decodeProtocolProcessMessage(message)));
+            } else {
+                process.on(eventName, listener);
+            }
             return this;
         },
         postMessage(message) {
             if (!process.connected) {
                 throw new Error('Parent process IPC channel is closed');
             }
-            process.send(message);
+            process.send(jsonIpc ? encodeProtocolProcessMessage(message) : message);
         }
     };
 }

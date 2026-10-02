@@ -5,6 +5,7 @@ const BMP_PERSISTENCE_OP = Object.freeze({
     QUERY_ROUTES: 'query-routes',
     QUERY_ROUTE_SCOPE: 'query-route-scope',
     QUERY_SCOPE_SUMMARY: 'query-scope-summary',
+    QUERY_REFRESH_DEADLINE: 'query-refresh-deadline',
     QUERY_TOPOLOGY: 'query-topology',
     QUERY_STATISTICS_REPORTS: 'query-statistics-reports',
     PURGE_SOURCE: 'purge-source',

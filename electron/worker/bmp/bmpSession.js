@@ -21,6 +21,7 @@ const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { splitSessionStatisticsReport, getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
 const BmpBgpInstance = require('./bmpBgpInstance');
 const IdentityFallbackMap = require('./identityFallbackMap');
+const { canonicalizeBmpRouteAttr } = require('./bmpRouteAttrStore');
 const {
     buildScope,
     buildConnectionMutation,
@@ -1169,7 +1170,7 @@ class BmpSession {
     }
 
     // 辅助方法：设置路由属性
-    setRouteAttributes(route, bgpUpdate) {
+    extractRouteAttributes(bgpUpdate, includeMpNextHop = true) {
         const routeAttr = {};
 
         for (const attr of bgpUpdate.pathAttributes || []) {
@@ -1206,9 +1207,48 @@ class BmpSession {
                     routeAttr.prefixSid = attr.prefixSid?.formatted || null;
                     break;
                 case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI:
-                    routeAttr.nextHop = attr.mpReach.nextHop;
+                    if (includeMpNextHop) routeAttr.nextHop = attr.mpReach.nextHop;
             }
         }
+
+        return routeAttr;
+    }
+
+    createRouteAttributeContext(bgpUpdate) {
+        // Only the parser's local UPDATE context shares attributes. Public
+        // setRouteAttributes callers may mutate/reuse their parsed packet.
+        return {
+            base: canonicalizeBmpRouteAttr(this.extractRouteAttributes(bgpUpdate, false)),
+            families: new Map()
+        };
+    }
+
+    getSharedRouteAttributes(context, afi, safi, mpReach = null) {
+        const familyKey = `${afi}|${safi}`;
+        let nextHops = context.families.get(familyKey);
+        if (!nextHops) {
+            nextHops = new Map();
+            context.families.set(familyKey, nextHops);
+        }
+        // Classical IPv4 NLRI uses NEXT_HOP, not another family's MP_REACH.
+        // MP NLRI uses the next hop belonging to its own MP_REACH group.
+        const nextHop = mpReach ? mpReach.nextHop : context.base.nextHop;
+        let shared = nextHops.get(nextHop);
+        if (!shared) {
+            // Extracted BMP attribute values are scalars (AS_PATH/communities
+            // and PREFIX_SID are already formatted strings).
+            shared = Object.freeze({ ...context.base, nextHop });
+            nextHops.set(nextHop, shared);
+        }
+        return shared;
+    }
+
+    setRouteAttributes(route, bgpUpdate, sharedAttributes = null) {
+        if (sharedAttributes && typeof route.assignSharedRouteAttr === 'function') {
+            route.assignSharedRouteAttr(sharedAttributes);
+            return;
+        }
+        const routeAttr = sharedAttributes || this.extractRouteAttributes(bgpUpdate);
 
         if (typeof route.assignRouteAttr === 'function') {
             route.assignRouteAttr(routeAttr);
@@ -1490,7 +1530,13 @@ class BmpSession {
 
             isNotify = false;
             // 处理IPv4 NLRI
+            const routeAttributeContext = this.createRouteAttributeContext(parsedBgpUpdate);
             if (parsedBgpUpdate.nlri && parsedBgpUpdate.nlri.length > 0) {
+                const sharedAttributes = this.getSharedRouteAttributes(
+                    routeAttributeContext,
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                );
                 for (const ribType of ribTypes) {
                     this.ensureBgpSessionRouteScope(
                         bgpSession,
@@ -1509,7 +1555,7 @@ class BmpSession {
                         );
 
                         // 设置路由属性
-                        this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
+                        this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate, sharedAttributes);
                         this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
                         this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                         bmpBgpRoute.markActive(
@@ -1552,6 +1598,12 @@ class BmpSession {
             }
 
             if (mpReachNlri && mpReachNlri.nlri && mpReachNlri.nlri.length > 0) {
+                const sharedAttributes = this.getSharedRouteAttributes(
+                    routeAttributeContext,
+                    mpReachNlri.afi,
+                    mpReachNlri.safi,
+                    mpReachNlri
+                );
                 // 寻找匹配的多协议peer
                 for (const ribType of ribTypes) {
                     this.ensureBgpSessionRouteScope(bgpSession, mpReachNlri.afi, mpReachNlri.safi, ribType);
@@ -1561,7 +1613,7 @@ class BmpSession {
                         this.setRouteNlri(bmpBgpRoute, nlri, mpReachNlri.afi, mpReachNlri.safi);
 
                         // 设置路由属性
-                        this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
+                        this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate, sharedAttributes);
                         this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
                         this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                         bmpBgpRoute.markActive(bgpSession.getRibEpoch(mpReachNlri.afi, mpReachNlri.safi, ribType));
@@ -1731,7 +1783,13 @@ class BmpSession {
 
             isNotify = false;
             // 处理IPv4 NLRI
+            const routeAttributeContext = this.createRouteAttributeContext(parsedBgpUpdate);
             if (parsedBgpUpdate.nlri && parsedBgpUpdate.nlri.length > 0) {
+                const sharedAttributes = this.getSharedRouteAttributes(
+                    routeAttributeContext,
+                    BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+                    BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
+                );
                 const bgpInstance = this.getOrCreateLocRibInstance(
                     locRibPeer,
                     BgpConst.BGP_AFI_TYPE.AFI_IPV4,
@@ -1750,7 +1808,7 @@ class BmpSession {
                     );
 
                     // 设置路由属性
-                    this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
+                    this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate, sharedAttributes);
                     this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
                     this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                     bmpBgpRoute.markActive(bgpInstance.getRibEpoch());
@@ -1785,6 +1843,12 @@ class BmpSession {
             }
 
             if (mpReachNlri && mpReachNlri.nlri && mpReachNlri.nlri.length > 0) {
+                const sharedAttributes = this.getSharedRouteAttributes(
+                    routeAttributeContext,
+                    mpReachNlri.afi,
+                    mpReachNlri.safi,
+                    mpReachNlri
+                );
                 // 寻找匹配的多协议peer
                 const bgpInstance = this.getOrCreateLocRibInstance(locRibPeer, mpReachNlri.afi, mpReachNlri.safi, {
                     routeTlvs: routePayload.routeTlvs
@@ -1796,7 +1860,7 @@ class BmpSession {
                     this.setRouteNlri(bmpBgpRoute, nlri, mpReachNlri.afi, mpReachNlri.safi);
 
                     // 设置路由属性
-                    this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate);
+                    this.setRouteAttributes(bmpBgpRoute, parsedBgpUpdate, sharedAttributes);
                     this.applyPathMarkings(bmpBgpRoute, pathMarkingAssignments, nlri);
                     this.applyRouteTlvs(bmpBgpRoute, routeTlvAssignments, nlri);
                     bmpBgpRoute.markActive(bgpInstance.getRibEpoch());

@@ -259,7 +259,18 @@ async function installLayoutApiFallbacks(page) {
         installFallback('bgpApi', {
             getInstanceInfo: [],
             getPeerInfo: {},
-            getRoutes: { list: [], total: 0 }
+            getRoutes: { list: [], total: 0 },
+            getRouteDatabaseInfo: {
+                dbPath: '/tmp/netnexus/e2e-mock/bgp-routes.sqlite3',
+                exists: false,
+                running: false,
+                starting: false,
+                stopping: false,
+                deleting: false,
+                busy: false,
+                totalSize: 0,
+                fileCount: 0
+            }
         });
         installFallback('bmpApi', {
             getBgpInstanceRoutes: { list: [], total: 0 },
@@ -281,6 +292,76 @@ async function installLayoutApiFallbacks(page) {
             setRouteAssuranceEnabled: true
         });
     });
+}
+
+async function setupBgpDatabaseSettingsMock(page, info = {}) {
+    await installLayoutApiFallbacks(page);
+    await page.goto('/#/tools/packet-parser');
+    await page.evaluate(overrides => {
+        const state = {
+            deleteCalls: 0,
+            statusCalls: 0,
+            statusError: '',
+            deleteError: '',
+            deferDelete: true,
+            finishDelete: null,
+            info: {
+                dbPath: '/tmp/netnexus/e2e-mock/bgp-routes.sqlite3',
+                exists: true,
+                running: false,
+                starting: false,
+                stopping: false,
+                deleting: false,
+                busy: false,
+                totalSize: 3072,
+                fileCount: 3,
+                ...overrides
+            }
+        };
+        window.__bgpDataSettingsE2e = state;
+        const methods = {
+            getRouteDatabaseInfo: async () => {
+                state.statusCalls += 1;
+                return state.statusError
+                    ? { status: 'error', msg: state.statusError }
+                    : { status: 'success', msg: 'ok', data: { ...state.info } };
+            },
+            deleteRouteDatabase: () => {
+                state.deleteCalls += 1;
+                return new Promise(resolve => {
+                    state.finishDelete = () => {
+                        if (state.deleteError) {
+                            resolve({ status: 'error', msg: state.deleteError });
+                            return;
+                        }
+                        state.info = { ...state.info, exists: false, totalSize: 0, fileCount: 0 };
+                        resolve({
+                            status: 'success',
+                            msg: 'BGP 路由数据库删除成功',
+                            data: { ...state.info, deleted: true }
+                        });
+                    };
+                    if (!state.deferDelete) state.finishDelete();
+                });
+            }
+        };
+        window.bgpApi = methods;
+        window.bmpApi = {
+            getPersistenceDatabaseInfo: async () => ({
+                status: 'success',
+                data: {
+                    dbPath: '/tmp/netnexus/e2e-mock/bmp.sqlite3',
+                    exists: true,
+                    running: false,
+                    starting: false,
+                    deleting: false,
+                    busy: false,
+                    totalSize: 1536,
+                    fileCount: 2
+                }
+            })
+        };
+    }, info);
 }
 
 async function expectHeaderSwitchTokens(toggle, trackToken, handleToken) {
@@ -1230,6 +1311,7 @@ test.describe('Custom UI component interactions', () => {
     });
 
     test('uses settings primitives without flattening complex page layouts', async ({ page }) => {
+        await installLayoutApiFallbacks(page);
         await page.goto('/#/tools/packet-parser');
         await page.evaluate(() => {
             window.__settingsLayoutSaveCalls = [];
@@ -1345,7 +1427,15 @@ test.describe('Custom UI component interactions', () => {
             },
             {
                 tab: '数据',
-                description: 'BMP SQLite 数据库维护',
+                description: 'BGP 与 BMP SQLite 数据库维护',
+                root: '.bgp-data-settings',
+                layout: '.database-panel',
+                items: 1,
+                sections: ['BGP 路由数据库']
+            },
+            {
+                tab: '数据',
+                description: 'BGP 与 BMP SQLite 数据库维护',
                 root: '.bmp-data-settings',
                 layout: '.database-panel',
                 items: 1,
@@ -2138,6 +2228,150 @@ test.describe('Custom UI component interactions', () => {
         await expect(settingsDialog.getByTestId('tcp-ao-key-secret-0-1')).toHaveValue('');
     });
 
+    test('deletes the stopped BGP database after cancellation and confirmation without affecting BMP', async ({
+        page
+    }) => {
+        await setupBgpDatabaseSettingsMock(page);
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: '数据', exact: true }).click();
+        const bgpSettings = settingsDialog.locator('.bgp-data-settings');
+        const bmpSettings = settingsDialog.locator('.bmp-data-settings');
+        const deleteButton = bgpSettings.getByTestId('bgp-database-delete-button');
+        const refreshButton = bgpSettings.getByTestId('bgp-database-refresh-button');
+        const deleteHint = bgpSettings.getByTestId('bgp-database-delete-hint');
+
+        await expect(bgpSettings.getByText('/tmp/netnexus/e2e-mock/bgp-routes.sqlite3', { exact: true })).toBeVisible();
+        await expect(bgpSettings.getByText('3.00 KB', { exact: true })).toBeVisible();
+        await expect(deleteButton).toBeEnabled();
+        await expect(deleteButton).toHaveAttribute('aria-describedby', 'bgp-database-delete-hint');
+        await expect(deleteHint).toContainText('可以删除数据库');
+        await expect(bmpSettings.getByText('/tmp/netnexus/e2e-mock/bmp.sqlite3', { exact: true })).toBeVisible();
+        await expect(bmpSettings.getByTestId('bmp-database-delete-button')).toBeEnabled();
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.statusCalls)).toBe(1);
+        await refreshButton.click();
+        await expect.poll(() => page.evaluate(() => window.__bgpDataSettingsE2e.statusCalls)).toBe(2);
+
+        await deleteButton.click();
+        const confirmDialog = page.getByRole('dialog', { name: '确认删除 BGP 数据库' });
+        await expect(confirmDialog).toBeVisible();
+        await confirmDialog.getByRole('button', { name: '取消', exact: true }).click();
+        await expect(confirmDialog).toBeHidden();
+        await expect(deleteButton).toBeFocused();
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(0);
+
+        await deleteButton.click();
+        await confirmDialog.getByRole('button', { name: '永久删除', exact: true }).click();
+        await expect(confirmDialog.getByRole('button', { name: '处理中...', exact: true })).toBeVisible();
+        await expect(deleteButton).toBeDisabled();
+        await expect(refreshButton).toBeDisabled();
+        await page.keyboard.press('Escape');
+        await expect(confirmDialog).toBeVisible();
+        await page.evaluate(() => window.__bgpDataSettingsE2e.finishDelete());
+        await expect(confirmDialog).toBeHidden();
+        await expect(bgpSettings.getByText('不存在', { exact: true })).toBeVisible();
+        await expect(bgpSettings.getByText('0 B', { exact: true })).toBeVisible();
+        await expect(deleteButton).toBeDisabled();
+        await expect(deleteHint).toContainText('没有可删除');
+        await expect.poll(() => page.evaluate(() => window.__bgpDataSettingsE2e.statusCalls)).toBe(3);
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(1);
+        await expect(bmpSettings.getByTestId('bmp-database-delete-button')).toBeEnabled();
+        await expect(bmpSettings.getByText('1.50 KB', { exact: true })).toBeVisible();
+    });
+
+    test('disables BGP database deletion while running starting stopping deleting or busy', async ({ page }) => {
+        await setupBgpDatabaseSettingsMock(page);
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: '数据', exact: true }).click();
+        const bgpSettings = settingsDialog.locator('.bgp-data-settings');
+        const deleteButton = bgpSettings.getByTestId('bgp-database-delete-button');
+        const refreshButton = bgpSettings.getByTestId('bgp-database-refresh-button');
+        const deleteHint = bgpSettings.getByTestId('bgp-database-delete-hint');
+        await expect(deleteButton).toBeEnabled();
+
+        for (const flag of ['running', 'starting', 'stopping', 'deleting', 'busy']) {
+            await page.evaluate(activeFlag => {
+                const state = window.__bgpDataSettingsE2e;
+                state.info = {
+                    ...state.info,
+                    running: false,
+                    starting: false,
+                    stopping: false,
+                    deleting: false,
+                    busy: false,
+                    [activeFlag]: true
+                };
+            }, flag);
+            await refreshButton.click();
+            await expect(deleteButton, `deletion must be disabled while ${flag}`).toBeDisabled();
+            await expect(deleteHint).not.toBeEmpty();
+            await expect(deleteHint).not.toContainText('可以删除数据库');
+        }
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(0);
+        await expect(
+            settingsDialog.locator('.bmp-data-settings').getByTestId('bmp-database-delete-button')
+        ).toBeEnabled();
+
+        await page.evaluate(() => {
+            const state = window.__bgpDataSettingsE2e;
+            state.info.busy = false;
+        });
+        await refreshButton.click();
+        await expect(deleteButton).toBeEnabled();
+    });
+
+    test('recovers from BGP database status and deletion errors after refreshing', async ({ page }) => {
+        await setupBgpDatabaseSettingsMock(page);
+        await page.evaluate(() => {
+            window.__bgpDataSettingsE2e.statusError = 'E2E BGP 数据库状态读取失败';
+        });
+        const settingsDialog = await openSettingsDialog(page);
+        await settingsDialog.getByRole('tab', { name: '数据', exact: true }).click();
+        const bgpSettings = settingsDialog.locator('.bgp-data-settings');
+        const deleteButton = bgpSettings.getByTestId('bgp-database-delete-button');
+        const refreshButton = bgpSettings.getByTestId('bgp-database-refresh-button');
+        await expect(bgpSettings).toContainText('E2E BGP 数据库状态读取失败');
+        await expect(deleteButton).toBeDisabled();
+        await expect(bgpSettings.getByTestId('bgp-database-delete-hint')).toContainText('刷新');
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(0);
+
+        await page.evaluate(() => {
+            const state = window.__bgpDataSettingsE2e;
+            state.statusError = '';
+            state.deleteError = 'E2E BGP 数据库删除失败';
+            state.deferDelete = false;
+        });
+        await refreshButton.click();
+        await expect(deleteButton).toBeEnabled();
+        await deleteButton.click();
+        const confirmDialog = page.getByRole('dialog', { name: '确认删除 BGP 数据库' });
+        await confirmDialog.getByRole('button', { name: '永久删除', exact: true }).click();
+        await expect(page.locator('.nn-toast').filter({ hasText: 'E2E BGP 数据库删除失败' })).toBeVisible();
+        await expect(confirmDialog).toBeVisible();
+        await expect(confirmDialog.getByRole('button', { name: '永久删除', exact: true })).toBeEnabled();
+        await expect(bgpSettings.getByTestId('bgp-database-delete-error')).toContainText('E2E BGP 数据库删除失败');
+        await expect.poll(() => page.evaluate(() => window.__bgpDataSettingsE2e.statusCalls)).toBe(3);
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(1);
+        await expect(deleteButton).toBeEnabled();
+
+        await page.evaluate(() => {
+            window.__bgpDataSettingsE2e.deleteError = '';
+        });
+        await confirmDialog.getByRole('button', { name: '永久删除', exact: true }).click();
+        await expect(confirmDialog).toBeHidden();
+        await expect(deleteButton).toBeDisabled();
+        await expect(bgpSettings.getByText('不存在', { exact: true })).toBeVisible();
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(2);
+        await expect.poll(() => page.evaluate(() => window.__bgpDataSettingsE2e.statusCalls)).toBe(4);
+
+        await page.evaluate(() => {
+            window.bgpApi = { getRouteDatabaseInfo: null, deleteRouteDatabase: null };
+        });
+        await refreshButton.click();
+        await expect(bgpSettings.getByTestId('bgp-database-delete-hint')).toHaveText('请重启应用后使用 BGP 数据库管理');
+        await expect(deleteButton).toBeDisabled();
+        expect(await page.evaluate(() => window.__bgpDataSettingsE2e.deleteCalls)).toBe(2);
+    });
+
     test('deletes the stopped BMP database from data management after confirmation', async ({ page }) => {
         await installLayoutApiFallbacks(page);
         await page.goto('/#/tools/packet-parser');
@@ -2192,15 +2426,17 @@ test.describe('Custom UI component interactions', () => {
 
         const settingsDialog = await openSettingsDialog(page);
         await settingsDialog.getByRole('tab', { name: '数据', exact: true }).click();
-        await expect(settingsDialog.getByText('/tmp/netnexus/bmp/bmp.sqlite3', { exact: true })).toBeVisible();
-        await expect(settingsDialog.getByText('1.50 KB', { exact: true })).toBeVisible();
+        const bmpSettings = settingsDialog.locator('.bmp-data-settings');
+        await expect(settingsDialog.locator('.bgp-data-settings')).toBeVisible();
+        await expect(bmpSettings.getByText('/tmp/netnexus/bmp/bmp.sqlite3', { exact: true })).toBeVisible();
+        await expect(bmpSettings.getByText('1.50 KB', { exact: true })).toBeVisible();
         expect(await page.evaluate(() => window.__bmpDataSettingsE2e.statusCalls)).toBe(1);
         const baselineOverlayState = await page.evaluate(() => ({
             stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
             lockCount: window.__NETNEXUS_UI_OVERLAY_STATE__.lockCount
         }));
 
-        const deleteButton = settingsDialog.getByTestId('bmp-database-delete-button');
+        const deleteButton = bmpSettings.getByTestId('bmp-database-delete-button');
         await expect(deleteButton).toBeEnabled();
         await deleteButton.click();
         let confirmDialog = page.getByRole('dialog', { name: '确认删除 BMP 数据库' });
@@ -2245,7 +2481,7 @@ test.describe('Custom UI component interactions', () => {
         await expect(settingsDialog).toBeVisible();
         await page.evaluate(() => window.__bmpDataSettingsE2e.finishDelete());
         await expect(confirmDialog).toBeHidden();
-        await expect(settingsDialog.getByText('不存在', { exact: true })).toBeVisible();
+        await expect(bmpSettings.getByText('不存在', { exact: true })).toBeVisible();
         await expect(deleteButton).toBeDisabled();
         expect(await page.evaluate(() => window.__bmpDataSettingsE2e.deleteCalls)).toBe(1);
         await expect
@@ -2403,7 +2639,8 @@ test.describe('Custom UI component interactions', () => {
         await page.goto('/#/bgp/route-ipv6');
         await expect(page.getByText('IPv6-UNC路由配置', { exact: true })).toBeVisible();
 
-        await page.getByRole('button', { name: '生成IPv6路由' }).click();
+        await expect(page.getByTestId('bgp-ipv6-generate-routes-button')).toBeEnabled();
+        await page.getByTestId('bgp-ipv6-generate-routes-button').click();
 
         const routeList = page.locator('.bgp-route-list-card');
         await expect(routeList.getByText('2001:db8::/64', { exact: true }).first()).toBeVisible();

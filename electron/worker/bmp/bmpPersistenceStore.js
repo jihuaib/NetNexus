@@ -21,6 +21,7 @@ const SCHEMA_VERSION = 13;
 const ROUTE_KEY_ALGORITHM = 'sha256';
 const DEFAULT_PAGE_SIZE = 100;
 const GC_KIND = Object.freeze({ IDENTITY: 1, PAYLOAD: 2, ATTRIBUTE: 3 });
+const ROUTE_UPSERT_EVENTS = new Set(['upsert', 'announce', 'replace', 'refresh']);
 // Rows per multi-row INSERT in prefillRouteObjectCaches (14 columns x 250 =
 // 3,500 bound parameters, well under SQLite's default limit).
 const BULK_ROWS = 250;
@@ -966,7 +967,8 @@ class BmpPersistenceStore {
         )`;
         this.statements = {
             findScopePartition: this.db.prepare(`
-                SELECT scope_pk, source_pk, partition_id, scope_kind, afi, safi
+                SELECT scope_pk, source_pk, partition_id, scope_kind, afi, safi,
+                       scope_state, current_epoch, last_connection_pk, vrf_name
                   FROM bmp_rib_scopes
                  WHERE scope_id = @scopeId
                  LIMIT 1
@@ -975,6 +977,13 @@ class BmpPersistenceStore {
             findConnectionPk: this.db.prepare(
                 'SELECT connection_pk FROM bmp_connections WHERE connection_id = @connectionId LIMIT 1'
             ),
+            findSourceContext: this.db.prepare(`
+                SELECT remote_ip, sys_name FROM bmp_sources WHERE source_id = @id LIMIT 1
+            `),
+            findConnectionContext: this.db.prepare(`
+                SELECT local_ip, local_port, remote_ip, remote_port
+                  FROM bmp_connections WHERE connection_id = @id LIMIT 1
+            `),
             insertBatch: this.db.prepare(`
                 INSERT OR IGNORE INTO bmp_ingest_batches(batch_id, created_at_ms, mutation_count)
                 VALUES (@batchId, @createdAtMs, @mutationCount)
@@ -993,7 +1002,7 @@ class BmpPersistenceStore {
                     sys_desc = COALESCE(NULLIF(excluded.sys_desc, ''), bmp_sources.sys_desc),
                     last_seen_ms = MAX(bmp_sources.last_seen_ms, excluded.last_seen_ms),
                     metadata_json = COALESCE(excluded.metadata_json, bmp_sources.metadata_json)
-                RETURNING source_pk
+                RETURNING source_pk, remote_ip, sys_name
             `),
             upsertConnection: this.db.prepare(`
                 INSERT INTO bmp_connections(
@@ -1009,7 +1018,7 @@ class BmpPersistenceStore {
                     local_port = COALESCE(excluded.local_port, bmp_connections.local_port),
                     remote_ip = COALESCE(excluded.remote_ip, bmp_connections.remote_ip),
                     remote_port = COALESCE(excluded.remote_port, bmp_connections.remote_port)
-                RETURNING connection_pk, last_sequence
+                RETURNING connection_pk, last_sequence, local_ip, local_port, remote_ip, remote_port
             `),
             // Replay protection: mutations arrive in source_sequence order per
             // connection, so a mutation at or below the connection's committed
@@ -1122,6 +1131,7 @@ class BmpPersistenceStore {
                     END
                 WHERE bmp_rib_scopes.partition_id = excluded.partition_id
                   AND bmp_rib_scopes.source_pk = excluded.source_pk
+                RETURNING scope_pk, scope_state, current_epoch, last_connection_pk, vrf_name
             `),
             markScopeEor: this.db.prepare(`
                 UPDATE bmp_rib_scopes
@@ -1246,9 +1256,29 @@ class BmpPersistenceStore {
                              LIMIT 1
                         `),
                         findCurrentRouteRefs: this.db.prepare(`
-                            SELECT payload_id, attr_pk
+                            SELECT payload_id, attr_pk, connection_pk, rib_epoch, explicit_state, last_sequence
                               FROM ${table}
                              WHERE scope_pk = @scopePk AND route_pk = @routePk
+                        `),
+                        // An identical path still advances observation metadata, but
+                        // must not rewrite its three mutable-reference indexes or
+                        // fire INSERT/route-count triggers.
+                        refreshRouteMetadata: this.db.prepare(`
+                            UPDATE ${table}
+                               SET last_seen_ms = MAX(last_seen_ms, @eventAtMs),
+                                   source_timestamp_ms = @sourceTimestampMs,
+                                   last_sequence = @sequence
+                             WHERE scope_pk = @scopePk AND route_pk = @routePk
+                               AND payload_id = @payloadId AND attr_pk IS @attrPk
+                               AND connection_pk = @connectionPk AND rib_epoch = @epoch
+                               AND explicit_state = 'active' AND last_sequence <= @sequence
+                               AND EXISTS (
+                                   SELECT 1 FROM bmp_rib_scopes scope
+                                    WHERE scope.scope_pk = @scopePk
+                                      AND scope.partition_id = @partitionId
+                                      AND scope.last_connection_pk = @connectionPk
+                                      AND scope.current_epoch = @epoch
+                               )
                         `),
                         upsertRoute: this.db.prepare(`
                             INSERT INTO ${table}(
@@ -1463,14 +1493,39 @@ class BmpPersistenceStore {
         return { attributes, payloads, identities };
     }
 
-    resolveSourcePk(source, eventAtMs, batchCache) {
-        const sourceSignature = `${source.identityJson}|${source.remoteIp || ''}|${source.sysName || ''}|${
-            source.sysDesc || ''
-        }|${asJson(source.metadata) || ''}`;
+    getSourceSignature(source, batchCache) {
+        const cached = batchCache?.sourceSignatures?.get(source);
+        if (cached) return cached;
+        let metadataJson;
+        if (source.metadata && typeof source.metadata === 'object' && batchCache?.sourceMetadataJson) {
+            if (batchCache.sourceMetadataJson.has(source.metadata)) {
+                metadataJson = batchCache.sourceMetadataJson.get(source.metadata);
+            } else {
+                metadataJson = asJson(source.metadata);
+                batchCache.sourceMetadataJson.set(source.metadata, metadataJson);
+            }
+        } else {
+            metadataJson = asJson(source.metadata);
+        }
+        const signature = JSON.stringify([
+            source.identityJson,
+            source.remoteIp || '',
+            source.sysName || '',
+            source.sysDesc || '',
+            metadataJson
+        ]);
+        const result = { signature, metadataJson };
+        batchCache?.sourceSignatures?.set(source, result);
+        return result;
+    }
+
+    resolveSourcePk(source, eventAtMs, batchCache, contextChanges = null) {
+        const { signature: sourceSignature, metadataJson } = this.getSourceSignature(source, batchCache);
         const cached = batchCache?.sources.get(source.id);
         if (cached && cached.signature === sourceSignature) {
             return cached.pk;
         }
+        const previousContext = contextChanges ? this.statements.findSourceContext.get({ id: source.id }) : null;
         const row = this.statements.upsertSource.get({
             id: source.id,
             keyJson: source.keyJson,
@@ -1479,18 +1534,40 @@ class BmpPersistenceStore {
             sysName: source.sysName || null,
             sysDesc: source.sysDesc || null,
             eventAtMs,
-            metadataJson: asJson(source.metadata)
+            metadataJson
         });
+        if (previousContext && ['remote_ip', 'sys_name'].some(field => previousContext[field] !== row[field])) {
+            contextChanges.changed = true;
+        }
         const pk = Number(row.source_pk);
         batchCache?.sources.set(source.id, { signature: sourceSignature, pk });
         return pk;
     }
 
-    resolveConnection(connection, sourcePk, eventAtMs, batchCache) {
+    resolveConnection(connection, sourcePk, eventAtMs, batchCache, contextChanges = null) {
+        let signature = batchCache?.connectionSignatures?.get(connection);
+        if (!signature || signature.sourcePk !== sourcePk) {
+            signature = {
+                sourcePk,
+                value: JSON.stringify([
+                    sourcePk,
+                    finiteNumber(connection.generation, 0),
+                    connection.localIp || '',
+                    finiteNumber(connection.localPort),
+                    connection.remoteIp || '',
+                    finiteNumber(connection.remotePort),
+                    connection.openedAtMs ?? ''
+                ])
+            };
+            batchCache?.connectionSignatures?.set(connection, signature);
+        }
         const cached = batchCache?.connections.get(connection.id);
-        if (cached !== undefined) {
+        if (cached?.signature === signature.value) {
             return cached;
         }
+        const previousContext = contextChanges
+            ? this.statements.findConnectionContext.get({ id: connection.id })
+            : null;
         const row = this.statements.upsertConnection.get({
             id: connection.id,
             sourcePk,
@@ -1501,7 +1578,19 @@ class BmpPersistenceStore {
             remotePort: finiteNumber(connection.remotePort),
             openedAtMs: finiteNumber(connection.openedAtMs, eventAtMs)
         });
-        const state = { pk: Number(row.connection_pk), lastSequence: finiteNumber(row.last_sequence, 0) };
+        if (
+            previousContext &&
+            ['local_ip', 'local_port', 'remote_ip', 'remote_port'].some(field => previousContext[field] !== row[field])
+        ) {
+            contextChanges.changed = true;
+        }
+        const pk = Number(row.connection_pk);
+        if (cached && cached.pk !== pk) {
+            throw new Error(`BMP connection primary key changed within batch for ${connection.id}`);
+        }
+        const state = cached || { pk, lastSequence: 0 };
+        state.lastSequence = Math.max(state.lastSequence, finiteNumber(row.last_sequence, 0));
+        state.signature = signature.value;
         batchCache?.connections.set(connection.id, state);
         return state;
     }
@@ -1542,6 +1631,10 @@ class BmpPersistenceStore {
         const route = mutation.route || null;
         const eventAtMs = finiteNumber(mutation.eventAtMs, Date.now());
         const includeDeltas = options.includeDeltas !== false;
+        // Analysis ignores observation timestamps, but source/scope presentation
+        // changes affect routes that this batch may never re-announce. A complete
+        // rebuild is safer than refreshing only this mutation's NLRI group.
+        const contextChanges = includeDeltas ? { changed: false } : null;
 
         if (!source?.id || !connection?.id) {
             throw new Error('BMP persistence mutation requires source and connection identities');
@@ -1553,15 +1646,20 @@ class BmpPersistenceStore {
                 : resolveBmpRoutePartition({ scopeKind: scope.kind, afi: scope.afi, safi: scope.safi })
             : null;
 
-        const sourcePk = this.resolveSourcePk(source, eventAtMs, batchCache);
-        const connectionState = this.resolveConnection(connection, sourcePk, eventAtMs, batchCache);
+        const sourcePk = this.resolveSourcePk(source, eventAtMs, batchCache, contextChanges);
+        const connectionState = this.resolveConnection(connection, sourcePk, eventAtMs, batchCache, contextChanges);
         const connectionPk = connectionState.pk;
+        if (contextChanges?.changed && batchCache) {
+            batchCache.requiresProjectionRebuild = true;
+        }
         // A replayed (connection, sequence) pair must be a complete no-op: the
         // scope and route upserts below would otherwise roll newer state back.
         const sequence = finiteNumber(mutation.sequence);
         if (sequence !== null) {
             if (sequence <= connectionState.lastSequence) {
-                return { applied: false, delta: null };
+                const result = { applied: false, delta: null };
+                if (contextChanges?.changed) result.requiresProjectionRebuild = true;
+                return result;
             }
             connectionState.lastSequence = sequence;
             connectionState.dirty = true;
@@ -1593,14 +1691,40 @@ class BmpPersistenceStore {
                 batchCache?.validatedScopes.add(scopeValidationKey);
                 if (existingScope) {
                     batchCache?.scopePks.set(scope.id, Number(existingScope.scope_pk));
+                    batchCache?.scopeContexts.set(scope.id, existingScope);
                 }
             }
 
-            const scopeSignature = `${partition.partitionId}|${connectionPk}|${scope.epoch}|${scope.state || 'syncing'}|${
-                mutation.reason || scope.reason || ''
-            }|${scope.vrfName || ''}|${mutation.eventType}`;
+            const reason = mutation.reason || scope.reason || '';
+            let signatureMemo = batchCache?.scopeSignatures?.get(scope);
+            if (
+                !signatureMemo ||
+                signatureMemo.partitionId !== partition.partitionId ||
+                signatureMemo.connectionPk !== connectionPk ||
+                signatureMemo.reason !== reason ||
+                signatureMemo.eventType !== mutation.eventType
+            ) {
+                signatureMemo = {
+                    partitionId: partition.partitionId,
+                    connectionPk,
+                    reason,
+                    eventType: mutation.eventType,
+                    value: JSON.stringify([
+                        partition.partitionId,
+                        connectionPk,
+                        scope.epoch,
+                        scope.state || 'syncing',
+                        reason,
+                        scope.vrfName || '',
+                        mutation.eventType
+                    ])
+                };
+                batchCache?.scopeSignatures?.set(scope, signatureMemo);
+            }
+            const scopeSignature = signatureMemo.value;
             if (!batchCache || batchCache.scopes.get(scope.id) !== scopeSignature) {
-                this.statements.upsertScope.run({
+                const previousContext = batchCache?.scopeContexts.get(scope.id) || existingScope;
+                const currentScope = this.statements.upsertScope.get({
                     id: scope.id,
                     sourcePk,
                     partitionId: partition.partitionId,
@@ -1626,6 +1750,21 @@ class BmpPersistenceStore {
                     connectionPk,
                     eventAtMs
                 });
+                if (
+                    contextChanges &&
+                    previousContext &&
+                    currentScope &&
+                    ['scope_state', 'current_epoch', 'last_connection_pk', 'vrf_name'].some(
+                        field => previousContext[field] !== currentScope[field]
+                    )
+                ) {
+                    contextChanges.changed = true;
+                    if (batchCache) batchCache.requiresProjectionRebuild = true;
+                }
+                if (currentScope) {
+                    batchCache?.scopePks.set(scope.id, Number(currentScope.scope_pk));
+                    batchCache?.scopeContexts.set(scope.id, currentScope);
+                }
                 batchCache?.scopes.set(scope.id, scopeSignature);
             }
             scopePk = batchCache?.scopePks.get(scope.id) ?? null;
@@ -1690,16 +1829,32 @@ class BmpPersistenceStore {
         const isRouteUpsert = ['upsert', 'announce', 'replace', 'refresh'].includes(mutation.eventType);
         const isRouteDelete = ['delete', 'withdraw', 'purge'].includes(mutation.eventType);
         const routeStatements = partition ? this.getPartitionStatements(partition) : null;
-        // The fully expanded previous row is only needed to describe the delta;
-        // without deltas a primary-key probe for the replaced object references
-        // (garbage-collection candidates) is enough.
-        const previousRow =
+        const cachedRefs = isRouteUpsert
+            ? batchCache?.currentRouteRefs?.get(partition.partitionId)?.get(scope.id)
+            : null;
+        // Probe integer references first even with analysis enabled. An identical
+        // path needs neither expanded old JSON nor an analysis delta.
+        let previousRow =
             route && scope && (isRouteUpsert || isRouteDelete)
-                ? includeDeltas
-                    ? routeStatements.findCurrentRoute.get({ scopePk, routePk })
-                    : routeStatements.findCurrentRouteRefs.get({ scopePk, routePk })
+                ? cachedRefs?.has(routePk)
+                    ? cachedRefs.get(routePk)
+                    : includeDeltas && !isRouteUpsert
+                      ? routeStatements.findCurrentRoute.get({ scopePk, routePk })
+                      : routeStatements.findCurrentRouteRefs.get({ scopePk, routePk })
                 : null;
-        const previousRoute = includeDeltas ? this.mapDeltaRouteRow(previousRow) : null;
+        const metadataOnly = Boolean(
+            isRouteUpsert &&
+                previousRow &&
+                previousRow.payload_id === payloadId &&
+                previousRow.attr_pk === attrPk &&
+                previousRow.connection_pk === connectionPk &&
+                previousRow.rib_epoch === finiteNumber(scope.epoch, 0) &&
+                previousRow.explicit_state === 'active'
+        );
+        if (includeDeltas && isRouteUpsert && previousRow && !metadataOnly) {
+            previousRow = routeStatements.findCurrentRoute.get({ scopePk, routePk });
+        }
+        const previousRoute = includeDeltas && !metadataOnly ? this.mapDeltaRouteRow(previousRow) : null;
 
         let delta = null;
         switch (mutation.eventType) {
@@ -1707,7 +1862,8 @@ class BmpPersistenceStore {
             case 'announce':
             case 'replace':
             case 'refresh': {
-                const routeResult = routeStatements.upsertRoute.run({
+                const statement = metadataOnly ? routeStatements.refreshRouteMetadata : routeStatements.upsertRoute;
+                const routeParams = {
                     partitionId: partition.partitionId,
                     scopePk,
                     routePk,
@@ -1718,20 +1874,53 @@ class BmpPersistenceStore {
                     sourceTimestampMs: finiteNumber(mutation.sourceTimestampMs),
                     sequence: sequence ?? 0,
                     connectionPk
-                });
-                const projectionChanged = routeResult.changes > 0;
+                };
+                let routeResult;
+                if (metadataOnly && batchCache?.deferredMetadataRefresh) {
+                    batchCache.deferredMetadataRefresh.rows.push(routeParams);
+                    // Unique paths are not read again in this batch. Observation
+                    // updates can run together without changing semantic deltas.
+                    routeResult = { changes: 0 };
+                } else {
+                    routeResult = statement.run(routeParams);
+                }
+                if (routeResult.changes > 0 && batchCache?.currentRouteRepeatKeys?.get(cachedRefs)?.has(routePk)) {
+                    if (metadataOnly) {
+                        previousRow.last_sequence = sequence ?? 0;
+                    } else {
+                        cachedRefs.set(routePk, {
+                            route_pk: routePk,
+                            payload_id: payloadId,
+                            attr_pk: attrPk,
+                            connection_pk: connectionPk,
+                            rib_epoch: finiteNumber(scope.epoch, 0),
+                            explicit_state: 'active',
+                            last_sequence: sequence ?? 0
+                        });
+                    }
+                }
+                const projectionChanged = routeResult.changes > 0 && !metadataOnly;
                 const classification = projectionChanged
                     ? previousRow
-                        ? (previousRow.attr_id || null) === (route.attrId || null)
+                        ? previousRow.attr_pk === attrPk
                             ? 'refresh'
                             : 'replace'
                         : 'announce'
                     : 'upsert-noop';
                 if (projectionChanged && previousRow) {
-                    // The replaced payload/attribute may now be unreferenced.
-                    this.addGcCandidates([{ payload_id: previousRow.payload_id, attr_pk: previousRow.attr_pk }]);
+                    const payloadChanged = previousRow.payload_id !== payloadId;
+                    const attributeChanged = previousRow.attr_pk !== attrPk;
+                    if (payloadChanged || attributeChanged) {
+                        // Only a genuinely replaced reference can become orphaned.
+                        this.addGcCandidates([
+                            {
+                                payload_id: payloadChanged ? previousRow.payload_id : null,
+                                attr_pk: attributeChanged ? previousRow.attr_pk : null
+                            }
+                        ]);
+                    }
                 }
-                if (includeDeltas) {
+                if (includeDeltas && !metadataOnly) {
                     delta = this.buildCommittedRouteDelta(mutation, {
                         action: 'upsert',
                         classification,
@@ -1827,7 +2016,9 @@ class BmpPersistenceStore {
                 break;
         }
 
-        return { applied: true, delta };
+        const result = { applied: true, delta };
+        if (contextChanges?.changed) result.requiresProjectionRebuild = true;
+        return result;
     }
 
     getBulkStatement(kind, rowCount) {
@@ -1841,11 +2032,13 @@ class BmpPersistenceStore {
         const list = Array.from({ length: rowCount }, () => '?').join(', ');
         switch (kind) {
             case 'insertIdentities':
+            case 'insertIdentitiesReturning':
                 statement = this.db.prepare(`
                     INSERT OR IGNORE INTO bmp_route_identities(
                         route_id, route_key_version, legacy_route_key, afi, safi, path_id,
                         rd, prefix, prefix_length, nlri_kind, nlri_json, nlri_flags, first_seen_ms, last_seen_ms
                     ) VALUES ${rows(14)}
+                    ${kind === 'insertIdentitiesReturning' ? 'RETURNING route_id, route_pk' : ''}
                 `);
                 break;
             case 'selectIdentities':
@@ -1856,9 +2049,11 @@ class BmpPersistenceStore {
                 `);
                 break;
             case 'insertPayloads':
+            case 'insertPayloadsReturning':
                 statement = this.db.prepare(`
                     INSERT OR IGNORE INTO bmp_route_payloads(payload_hash, route_json, first_seen_ms, last_seen_ms)
                     VALUES ${rows(4)}
+                    ${kind === 'insertPayloadsReturning' ? 'RETURNING payload_id, payload_hash, route_json' : ''}
                 `);
                 break;
             case 'selectPayloads':
@@ -1869,9 +2064,11 @@ class BmpPersistenceStore {
                 `);
                 break;
             case 'insertAttributes':
+            case 'insertAttributesReturning':
                 statement = this.db.prepare(`
                     INSERT OR IGNORE INTO bmp_route_attributes(attr_id, attr_json, first_seen_ms, last_seen_ms)
                     VALUES ${rows(4)}
+                    ${kind === 'insertAttributesReturning' ? 'RETURNING attr_id, attr_pk' : ''}
                 `);
                 break;
             case 'selectAttributes':
@@ -1888,10 +2085,9 @@ class BmpPersistenceStore {
         return statement;
     }
 
-    // Resolves the shared route objects of a whole batch up front: one
-    // multi-row INSERT OR IGNORE plus one SELECT per object kind and chunk,
-    // instead of a RETURNING upsert per path. Hash collisions are detected by
-    // comparing the stored canonical JSON with what the batch carries.
+    // Existing objects only need an indexed read. New objects are inserted in
+    // bulk with RETURNING, so a replay avoids all uniqueness-conflict inserts
+    // without adding another native statement call to the first-ingest path.
     prefillRouteObjectCaches(mutations, batchCache) {
         const identities = new Map();
         const payloads = new Map();
@@ -1928,8 +2124,13 @@ class BmpPersistenceStore {
         };
 
         chunked(Array.from(identities.entries()), BULK_ROWS, chunk => {
+            this.getBulkStatement('selectIdentities', chunk.length)
+                .all(...chunk.map(([routeId]) => routeId))
+                .forEach(row => batchCache.routeIdentities.set(row.route_id, Number(row.route_pk)));
+            const missing = chunk.filter(([routeId]) => !batchCache.routeIdentities.has(routeId));
+            if (missing.length === 0) return;
             const params = [];
-            chunk.forEach(([routeId, { route, eventAtMs }]) => {
+            missing.forEach(([routeId, { route, eventAtMs }]) => {
                 params.push(
                     routeId,
                     Number(route.keyVersion),
@@ -1947,19 +2148,14 @@ class BmpPersistenceStore {
                     eventAtMs
                 );
             });
-            this.getBulkStatement('insertIdentities', chunk.length).run(...params);
-            this.getBulkStatement('selectIdentities', chunk.length)
-                .all(...chunk.map(([routeId]) => routeId))
+            this.getBulkStatement('insertIdentitiesReturning', missing.length)
+                .all(...params)
                 .forEach(row => batchCache.routeIdentities.set(row.route_id, Number(row.route_pk)));
         });
 
         chunked(Array.from(payloads.entries()), BULK_ROWS, chunk => {
-            const params = [];
-            chunk.forEach(([, { hash, routeJson, eventAtMs }]) => params.push(hash, routeJson, eventAtMs, eventAtMs));
-            this.getBulkStatement('insertPayloads', chunk.length).run(...params);
-            this.getBulkStatement('selectPayloads', chunk.length)
-                .all(...chunk.map(([, { hash }]) => hash))
-                .forEach(row => {
+            const resolveRows = rows =>
+                rows.forEach(row => {
                     const hashHex = row.payload_hash.toString('hex');
                     const expected = payloads.get(hashHex);
                     if (expected && row.route_json !== expected.routeJson) {
@@ -1967,16 +2163,227 @@ class BmpPersistenceStore {
                     }
                     batchCache.routePayloads.set(hashHex, Number(row.payload_id));
                 });
+            resolveRows(
+                this.getBulkStatement('selectPayloads', chunk.length).all(...chunk.map(([, { hash }]) => hash))
+            );
+            const missing = chunk.filter(([hashHex]) => !batchCache.routePayloads.has(hashHex));
+            if (missing.length === 0) return;
+            const params = [];
+            missing.forEach(([, { hash, routeJson, eventAtMs }]) => params.push(hash, routeJson, eventAtMs, eventAtMs));
+            resolveRows(this.getBulkStatement('insertPayloadsReturning', missing.length).all(...params));
         });
 
         chunked(Array.from(attributes.entries()), BULK_ROWS, chunk => {
-            const params = [];
-            chunk.forEach(([attrId, { attrJson, eventAtMs }]) => params.push(attrId, attrJson, eventAtMs, eventAtMs));
-            this.getBulkStatement('insertAttributes', chunk.length).run(...params);
             this.getBulkStatement('selectAttributes', chunk.length)
                 .all(...chunk.map(([attrId]) => attrId))
                 .forEach(row => batchCache.attributes.set(row.attr_id, Number(row.attr_pk)));
+            const missing = chunk.filter(([attrId]) => !batchCache.attributes.has(attrId));
+            if (missing.length === 0) return;
+            const params = [];
+            missing.forEach(([attrId, { attrJson, eventAtMs }]) => params.push(attrId, attrJson, eventAtMs, eventAtMs));
+            this.getBulkStatement('insertAttributesReturning', missing.length)
+                .all(...params)
+                .forEach(row => batchCache.attributes.set(row.attr_id, Number(row.attr_pk)));
         });
+    }
+
+    // Only pure route-upsert batches can keep their physical rows in a small
+    // batch-local cache. Lifecycle/deletion batches retain the scalar read path.
+    prefillCurrentRouteRefs(mutations, batchCache) {
+        if (
+            mutations.length < 2 ||
+            !mutations.every(
+                mutation =>
+                    ROUTE_UPSERT_EVENTS.has(mutation?.eventType) &&
+                    typeof mutation?.source?.id === 'string' &&
+                    typeof mutation?.connection?.id === 'string' &&
+                    typeof mutation?.scope?.id === 'string' &&
+                    typeof mutation?.route?.id === 'string' &&
+                    batchCache.routeIdentities.has(mutation.route.id)
+            )
+        ) {
+            return;
+        }
+        const groups = new Map();
+        const repeatKeys = new WeakMap();
+        for (const mutation of mutations) {
+            const partition = assertBmpRouteMatchesScope(mutation.route, mutation.scope);
+            let scopes = groups.get(partition.partitionId);
+            if (!scopes) {
+                scopes = new Map();
+                groups.set(partition.partitionId, scopes);
+            }
+            let refs = scopes.get(mutation.scope.id);
+            if (!refs) {
+                refs = new Map();
+                scopes.set(mutation.scope.id, refs);
+            }
+            // Presence with null means the row was queried and did not exist;
+            // it must not fall back to another per-route SQLite probe.
+            const routePk = batchCache.routeIdentities.get(mutation.route.id);
+            if (refs.has(routePk)) {
+                let repeated = repeatKeys.get(refs);
+                if (!repeated) {
+                    repeated = new Set();
+                    repeatKeys.set(refs, repeated);
+                }
+                repeated.add(routePk);
+            }
+            refs.set(routePk, null);
+        }
+        for (const [partitionId, scopes] of groups) {
+            const partition = getBmpRoutePartitionById(partitionId);
+            for (const [scopeId, refs] of scopes) {
+                const routePks = Array.from(refs.keys());
+                for (let index = 0; index < routePks.length; index += BULK_ROWS) {
+                    const chunk = routePks.slice(index, index + BULK_ROWS);
+                    const statementKey = `currentRefs:${partitionId}:${chunk.length}`;
+                    let statement = this.bulkStatements.get(statementKey);
+                    if (!statement) {
+                        statement = this.db.prepare(`
+                            SELECT route_pk, payload_id, attr_pk, connection_pk,
+                                   rib_epoch, explicit_state, last_sequence
+                              FROM ${partition.quotedTableName}
+                             WHERE scope_pk = (
+                                 SELECT scope_pk FROM bmp_rib_scopes WHERE scope_id = ? LIMIT 1
+                             )
+                               AND route_pk IN (${chunk.map(() => '?').join(', ')})
+                        `);
+                        this.bulkStatements.set(statementKey, statement);
+                    }
+                    statement.all(scopeId, ...chunk).forEach(row => refs.set(Number(row.route_pk), row));
+                }
+            }
+        }
+        batchCache.currentRouteRefs = groups;
+        // Unique paths are never read again in this batch. Avoid allocating a
+        // seven-field row after every new insert just to discard it at commit.
+        batchCache.currentRouteRepeatKeys = repeatKeys;
+    }
+
+    prepareDeferredMetadataRefresh(mutations, batchCache) {
+        if (!batchCache.currentRouteRefs || mutations.length < 2) return;
+        const first = mutations[0];
+        const sourceSignature = this.getSourceSignature(first.source, batchCache).signature;
+        const descriptorSignatures = new WeakMap();
+        const signature = descriptor => {
+            let value = descriptorSignatures.get(descriptor);
+            if (value === undefined) {
+                try {
+                    value = asJson(descriptor);
+                } catch (_error) {
+                    // Unused DTO fields may contain structured-clone values
+                    // such as cycles or BigInts. They only disable this fast
+                    // path; the existing per-route SQL does not inspect them.
+                    value = null;
+                }
+                descriptorSignatures.set(descriptor, value);
+            }
+            return value;
+        };
+        const connectionSignature = signature(first.connection);
+        const scopeSignature = signature(first.scope);
+        if (connectionSignature === null || scopeSignature === null) return;
+        // JSON equality alone is insufficient for public callers whose toJSON
+        // hides identity/context fields. Never merge distinct physical scopes
+        // or connections into the first queued row's SQL parameters.
+        const connectionFields = [
+            'id',
+            'sourceId',
+            'generation',
+            'localIp',
+            'localPort',
+            'remoteIp',
+            'remotePort',
+            'openedAtMs'
+        ];
+        const scopeFields = [
+            'id',
+            'sourceId',
+            'keyJson',
+            'identityJson',
+            'kind',
+            'ownerKey',
+            'peerType',
+            'peerRd',
+            'peerIp',
+            'peerAs',
+            'vrfName',
+            'afi',
+            'safi',
+            'ribType',
+            'epoch',
+            'state',
+            'reason'
+        ];
+        const sameFields = (descriptor, original, fields) =>
+            descriptor === original || fields.every(field => descriptor[field] === original[field]);
+        const reason = first.reason || first.scope.reason || '';
+        const routes = new Set();
+        for (const mutation of mutations) {
+            if (
+                mutation.source.id !== first.source.id ||
+                mutation.source.keyJson !== first.source.keyJson ||
+                this.getSourceSignature(mutation.source, batchCache).signature !== sourceSignature ||
+                !sameFields(mutation.connection, first.connection, connectionFields) ||
+                !sameFields(mutation.scope, first.scope, scopeFields) ||
+                signature(mutation.connection) !== connectionSignature ||
+                signature(mutation.scope) !== scopeSignature ||
+                (mutation.reason || mutation.scope.reason || '') !== reason ||
+                routes.has(mutation.route.id)
+            )
+                return;
+            routes.add(mutation.route.id);
+        }
+        batchCache.deferredMetadataRefresh = { rows: [] };
+    }
+
+    flushDeferredMetadataRefresh(batchCache) {
+        const rows = batchCache.deferredMetadataRefresh?.rows;
+        if (!rows?.length) return;
+        const first = rows[0];
+        const partition = getBmpRoutePartitionById(first.partitionId);
+        for (let index = 0; index < rows.length; index += BULK_ROWS) {
+            const chunk = rows.slice(index, index + BULK_ROWS);
+            const key = `refreshMetadata:${partition.partitionId}:${chunk.length}`;
+            let statement = this.bulkStatements.get(key);
+            if (!statement) {
+                // Correlate each seen row to a unique path PK before targeting
+                // the UPDATE. A direct target/seen join may instead scan the
+                // entire scope/epoch index for every 250-row chunk on large RIBs.
+                statement = this.db.prepare(`
+                    WITH seen(route_pk, payload_id, attr_pk, event_at_ms, source_timestamp_ms, sequence) AS (
+                        VALUES ${chunk.map(() => '(?, ?, ?, ?, ?, ?)').join(', ')}
+                    )
+                    UPDATE ${partition.quotedTableName} AS r
+                       SET last_seen_ms = MAX(r.last_seen_ms, seen.event_at_ms),
+                           source_timestamp_ms = seen.source_timestamp_ms,
+                           last_sequence = seen.sequence
+                      FROM seen
+                     WHERE r.path_pk = (
+                         SELECT candidate.path_pk
+                           FROM ${partition.quotedTableName} AS candidate
+                                INDEXED BY "sqlite_autoindex_${partition.tableName}_1"
+                          WHERE candidate.scope_pk = ? AND candidate.route_pk = seen.route_pk
+                            AND candidate.payload_id = seen.payload_id AND candidate.attr_pk IS seen.attr_pk
+                            AND candidate.connection_pk = ? AND candidate.rib_epoch = ?
+                            AND candidate.explicit_state = 'active' AND candidate.last_sequence <= seen.sequence
+                            AND EXISTS (
+                                SELECT 1 FROM bmp_rib_scopes scope
+                                 WHERE scope.scope_pk = candidate.scope_pk AND scope.partition_id = ?
+                                   AND scope.last_connection_pk = candidate.connection_pk
+                                   AND scope.current_epoch = candidate.rib_epoch
+                            )
+                       )
+                `);
+                this.bulkStatements.set(key, statement);
+            }
+            const params = [];
+            for (const row of chunk) {
+                params.push(row.routePk, row.payloadId, row.attrPk, row.eventAtMs, row.sourceTimestampMs, row.sequence);
+            }
+            statement.run(...params, first.scopePk, first.connectionPk, first.epoch, first.partitionId);
+        }
     }
 
     applyBatch(batch = {}) {
@@ -2008,9 +2415,14 @@ class BmpPersistenceStore {
             const deltas = includeDeltas ? [] : null;
             const batchCache = {
                 sources: new Map(),
+                sourceSignatures: new WeakMap(),
+                sourceMetadataJson: new WeakMap(),
+                connectionSignatures: new WeakMap(),
                 connections: new Map(),
                 scopes: new Map(),
+                scopeSignatures: new WeakMap(),
                 scopePks: new Map(),
+                scopeContexts: new Map(),
                 validatedScopes: new Set(),
                 attributes: new Map(),
                 routeIdentities: new Map(),
@@ -2018,6 +2430,8 @@ class BmpPersistenceStore {
                 routePayloadHashes: new Map()
             };
             this.prefillRouteObjectCaches(mutations, batchCache);
+            this.prefillCurrentRouteRefs(mutations, batchCache);
+            this.prepareDeferredMetadataRefresh(mutations, batchCache);
             mutations.forEach(mutation => {
                 const mutationResult = this.applyMutation(batchId, mutation, batchCache, { includeDeltas });
                 if (mutationResult.applied) {
@@ -2027,8 +2441,13 @@ class BmpPersistenceStore {
                     deltas.push(mutationResult.delta);
                 }
             });
+            this.flushDeferredMetadataRefresh(batchCache);
             this.commitConnectionSequences(batchCache);
-            return this.buildApplyBatchResult(false, applied, deltas, includeDeltas);
+            const result = this.buildApplyBatchResult(false, applied, deltas, includeDeltas);
+            if (includeDeltas && batchCache.requiresProjectionRebuild) {
+                result.requiresProjectionRebuild = true;
+            }
+            return result;
         });
 
         return transaction();
@@ -3456,6 +3875,51 @@ class BmpPersistenceStore {
         };
     }
 
+    queryRefreshDeadline() {
+        if (!this.db) {
+            this.open();
+        }
+
+        return (
+            this.db
+                .prepare(
+                    `
+                    WITH single_open_connections AS (
+                        SELECT source_pk,
+                               MIN(connection_generation) AS connection_generation,
+                               MIN(opened_at_ms) AS opened_at_ms
+                          FROM bmp_connections
+                         WHERE connection_state = 'open'
+                         GROUP BY source_pk
+                        HAVING COUNT(*) = 1
+                    ), refresh_starts AS (
+                        SELECT source_pk, refresh_started_ms AS started_at_ms
+                          FROM bmp_rib_scopes
+                         WHERE scope_state = 'syncing'
+                           AND refresh_started_ms IS NOT NULL
+                        UNION ALL
+                        SELECT scope.source_pk, replacement.opened_at_ms AS started_at_ms
+                          FROM bmp_rib_scopes scope
+                          JOIN bmp_connections previous
+                            ON previous.connection_pk = scope.last_connection_pk
+                          JOIN single_open_connections replacement
+                            ON replacement.source_pk = scope.source_pk
+                         WHERE scope.scope_state IN ('stale', 'down')
+                           AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
+                           AND previous.connection_state = 'closed'
+                           AND replacement.connection_generation > previous.connection_generation
+                    )
+                    SELECT src.source_id, refresh_starts.started_at_ms
+                      FROM refresh_starts
+                      JOIN bmp_sources src ON src.source_pk = refresh_starts.source_pk
+                     ORDER BY refresh_starts.started_at_ms, src.source_id
+                     LIMIT 1
+                `
+                )
+                .get() || null
+        );
+    }
+
     sweep(options = {}) {
         if (this.readOnly) {
             throw new Error('Cannot sweep a read-only BMP persistence store');
@@ -3737,42 +4201,7 @@ class BmpPersistenceStore {
             const attributes = garbage.attributes;
             const payloads = garbage.payloads;
             const identities = garbage.identities;
-            const nextRefresh = this.db
-                .prepare(
-                    `
-                    WITH single_open_connections AS (
-                        SELECT source_pk,
-                               MIN(connection_generation) AS connection_generation,
-                               MIN(opened_at_ms) AS opened_at_ms
-                          FROM bmp_connections
-                         WHERE connection_state = 'open'
-                         GROUP BY source_pk
-                        HAVING COUNT(*) = 1
-                    ), refresh_starts AS (
-                        SELECT source_pk, refresh_started_ms AS started_at_ms
-                          FROM bmp_rib_scopes
-                         WHERE scope_state = 'syncing'
-                           AND refresh_started_ms IS NOT NULL
-                        UNION ALL
-                        SELECT scope.source_pk, replacement.opened_at_ms AS started_at_ms
-                          FROM bmp_rib_scopes scope
-                          JOIN bmp_connections previous
-                            ON previous.connection_pk = scope.last_connection_pk
-                          JOIN single_open_connections replacement
-                            ON replacement.source_pk = scope.source_pk
-                         WHERE scope.scope_state IN ('stale', 'down')
-                           AND COALESCE(scope.stale_reason, '') <> 'reconnect-refresh-timeout'
-                           AND previous.connection_state = 'closed'
-                           AND replacement.connection_generation > previous.connection_generation
-                    )
-                    SELECT src.source_id, refresh_starts.started_at_ms
-                      FROM refresh_starts
-                      JOIN bmp_sources src ON src.source_pk = refresh_starts.source_pk
-                     ORDER BY refresh_starts.started_at_ms, src.source_id
-                     LIMIT 1
-                `
-                )
-                .get();
+            const nextRefresh = this.queryRefreshDeadline();
             return {
                 routes,
                 statistics,

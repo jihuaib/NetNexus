@@ -1,5 +1,6 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
+const { isDeepStrictEqual } = require('util');
 const { BMP_PERSISTENCE_OP } = require('./bmpPersistenceConst');
 
 const DEFAULT_BATCH_SIZE = 5000;
@@ -25,7 +26,15 @@ function positiveInteger(value, fallback) {
 
 class BmpPersistenceClient {
     constructor(options = {}) {
+        if (options.partitionByClient === true && options.clientDatabaseWorker !== true) {
+            const BmpClientPersistenceClient = require('./bmpClientPersistenceClient');
+            return new BmpClientPersistenceClient(options);
+        }
         this.dbPath = options.dbPath;
+        this.partitionByClient = options.partitionByClient === true;
+        this.workerIndex = options.workerIndex;
+        this.workerCount = options.workerCount;
+        this.maxOpenDatabases = options.maxOpenDatabases;
         this.readOnly = options.readOnly === true;
         this.logLevel = typeof options.logLevel === 'string' ? options.logLevel : 'off';
         this.batchSize = positiveInteger(options.batchSize, DEFAULT_BATCH_SIZE);
@@ -100,7 +109,11 @@ class BmpPersistenceClient {
         const result = await this.sendRequest(BMP_PERSISTENCE_OP.OPEN, {
             dbPath: this.dbPath,
             readOnly: this.readOnly,
-            logLevel: this.logLevel
+            logLevel: this.logLevel,
+            partitionByClient: this.partitionByClient,
+            workerIndex: this.workerIndex,
+            workerCount: this.workerCount,
+            maxOpenDatabases: this.maxOpenDatabases
         });
         this.logLevel = result?.logLevel || this.logLevel;
         return result;
@@ -331,13 +344,33 @@ class BmpPersistenceClient {
         const sourceIndex = new Map();
         const connectionIndex = new Map();
         const scopeIndex = new Map();
-        const intern = (index, table, key, value) => {
-            let position = index.get(key);
+        const sourceObjects = new WeakMap();
+        const connectionObjects = new WeakMap();
+        const scopeObjects = new WeakMap();
+        const intern = (index, objects, table, value) => {
+            const existing = objects.get(value);
+            if (existing !== undefined) return existing;
+            // An identity alone is not a descriptor version: metadata, scope
+            // context or connection endpoints can change within the batch.
+            // Shared immutable DTOs only pay this cost on their first use.
+            let key;
+            try {
+                key = JSON.stringify(value);
+            } catch (_error) {
+                // Keep descriptors supported by structured clone (for example
+                // cyclic objects or BigInt) without adding an encoding error.
+            }
+            const positions = typeof key === 'string' ? index.get(key) : null;
+            let position = positions?.find(candidate => isDeepStrictEqual(table[candidate], value));
             if (position === undefined) {
                 position = table.length;
                 table.push(value);
-                index.set(key, position);
+                if (typeof key === 'string') {
+                    if (positions) positions.push(position);
+                    else index.set(key, [position]);
+                }
             }
+            objects.set(value, position);
             return position;
         };
         const encoded = mutations.map(mutation => {
@@ -346,22 +379,15 @@ class BmpPersistenceClient {
             }
             const copy = { ...mutation };
             if (mutation.source && typeof mutation.source === 'object' && mutation.source.id) {
-                copy.sourceRef = intern(sourceIndex, refs.sources, mutation.source.id, mutation.source);
+                copy.sourceRef = intern(sourceIndex, sourceObjects, refs.sources, mutation.source);
                 delete copy.source;
             }
             if (mutation.connection && typeof mutation.connection === 'object' && mutation.connection.id) {
-                copy.connectionRef = intern(
-                    connectionIndex,
-                    refs.connections,
-                    mutation.connection.id,
-                    mutation.connection
-                );
+                copy.connectionRef = intern(connectionIndex, connectionObjects, refs.connections, mutation.connection);
                 delete copy.connection;
             }
             if (mutation.scope && typeof mutation.scope === 'object' && mutation.scope.id) {
-                const scope = mutation.scope;
-                const key = `${scope.id}\u001f${scope.epoch}\u001f${scope.state}\u001f${scope.reason}\u001f${scope.vrfName}`;
-                copy.scopeRef = intern(scopeIndex, refs.scopes, key, scope);
+                copy.scopeRef = intern(scopeIndex, scopeObjects, refs.scopes, mutation.scope);
                 delete copy.scope;
             }
             return copy;

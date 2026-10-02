@@ -25,12 +25,20 @@ const ADDRESS_FAMILY_CAPS = {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST
     },
+    'ipv4-label': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+    },
     'ipv4-mvpn': {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_MVPN
     },
     'ipv4-qp': {
         afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
+        safi: BgpConst.BGP_SAFI_TYPE.SAFI_QP
+    },
+    'ipv6-qp': {
+        afi: BgpConst.BGP_AFI_TYPE.AFI_IPV6,
         safi: BgpConst.BGP_SAFI_TYPE.SAFI_QP
     }
 };
@@ -210,6 +218,7 @@ function summarizeNlri(route) {
         nlriLength: route.nlriLength,
         routeType: route.routeType,
         rawNlri: route.rawNlri,
+        dqpn: route.dqpn === undefined ? undefined : route.dqpn,
         pathId: route.pathId ?? 0,
         labels: route.labels || undefined,
         warnings: route.warnings || undefined
@@ -238,10 +247,42 @@ function summarizePrefixSid(prefixSid) {
     };
 }
 
+function summarizePathAttribute(attribute) {
+    const summary = {
+        typeCode: attribute.typeCode,
+        flags: attribute.flags,
+        length: attribute.length,
+        valueHex: Buffer.from(attribute.value || []).toString('hex')
+    };
+    for (const field of ['origin', 'nextHop', 'med', 'localPref']) {
+        if (attribute[field] !== undefined) summary[field] = attribute[field];
+    }
+    if (attribute.segments) {
+        summary.asPath = attribute.segments.flatMap(segment => segment.asNumbers).join(' ');
+    }
+    if (attribute.communities) summary.communities = attribute.communities.map(community => community.formatted);
+    if (attribute.extCommunities) {
+        summary.extendedCommunities = attribute.extCommunities.map(community => ({
+            type: community.type,
+            subType: community.subType,
+            rawHex: community.rawHex,
+            formatted: community.formatted,
+            kind:
+                [0, 1, 2].includes(community.type) && community.subType === 2
+                    ? 'route-target'
+                    : [0, 1, 2].includes(community.type) && community.subType === 3
+                      ? 'site-of-origin'
+                      : 'raw'
+        }));
+    }
+    return summary;
+}
+
 function summarizeUpdatePacket(parsed) {
     const pathAttributes = Array.isArray(parsed.pathAttributes) ? parsed.pathAttributes : [];
     const mpReachAttr = pathAttributes.find(attr => attr.mpReach);
     const mpReach = mpReachAttr?.mpReach || null;
+    const mpUnreach = pathAttributes.find(attr => attr.mpUnreach)?.mpUnreach || null;
     const prefixSidAttr = pathAttributes.find(attr => attr.prefixSid);
 
     return {
@@ -253,11 +294,21 @@ function summarizeUpdatePacket(parsed) {
         withdrawnCount: Array.isArray(parsed.withdrawnRoutes) ? parsed.withdrawnRoutes.length : 0,
         pathAttrTypes: pathAttributes.map(attr => attr.typeCode),
         pathAttrCount: pathAttributes.length,
+        pathAttributes: pathAttributes.map(summarizePathAttribute),
         prefixSid: summarizePrefixSid(prefixSidAttr?.prefixSid),
+        mpUnreach: mpUnreach
+            ? {
+                  afi: mpUnreach.afi,
+                  safi: mpUnreach.safi,
+                  withdrawnRoutes: (mpUnreach.withdrawnRoutes || []).map(summarizeNlri),
+                  withdrawnCount: (mpUnreach.withdrawnRoutes || []).length
+              }
+            : null,
         mpReach: mpReach
             ? {
                   afi: mpReach.afi,
                   safi: mpReach.safi,
+                  nextHopLength: mpReach.nextHopLength,
                   nextHop: mpReach.nextHop,
                   nlri: Array.isArray(mpReach.nlri) ? mpReach.nlri.map(summarizeNlri) : [],
                   nlriCount: Array.isArray(mpReach.nlri) ? mpReach.nlri.length : 0

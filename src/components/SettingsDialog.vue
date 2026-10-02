@@ -24,7 +24,7 @@
     import UpdateSettings from '../view/settings/UpdateSettings.vue';
     import FtpSettings from '../view/settings/FtpSettings.vue';
     import ApiSettings from '../view/settings/ApiSettings.vue';
-    import BmpDataSettings from '../view/settings/BmpDataSettings.vue';
+    import DataSettings from '../view/settings/DataSettings.vue';
     import RuntimeSettings from '../view/settings/RuntimeSettings.vue';
     import TcpAoSettings from '../view/settings/TcpAoSettings.vue';
     import TcpMd5Settings from '../view/settings/TcpMd5Settings.vue';
@@ -91,7 +91,7 @@
         {
             key: 'data-management',
             label: '数据',
-            description: 'BMP SQLite 数据库维护',
+            description: 'BGP 与 BMP SQLite 数据库维护',
             icon: settingsNavigationIcons.dataManagement
         },
         {
@@ -125,7 +125,7 @@
         tools: ToolsSettings,
         ftp: FtpSettings,
         api: ApiSettings,
-        'data-management': BmpDataSettings,
+        'data-management': DataSettings,
         runtime: RuntimeSettings,
         'tcp-ao': TcpAoSettings,
         'tcp-md5': TcpMd5Settings,

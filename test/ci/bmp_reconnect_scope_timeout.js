@@ -105,6 +105,7 @@ try {
     assert.equal(routes.total, 1);
     assert.equal(routes.list[0].routeState, 'stale');
     assert.equal(routes.list[0].scopeState, 'down');
+    assert.equal(store.queryRefreshDeadline(), null, 'an offline source without a replacement has no deadline');
 
     const replacement = makeContext('replacement-connection', 200, replacementOpenedAtMs);
     store.applyBatch(
@@ -142,6 +143,11 @@ try {
     assert.equal(protectedByConcurrentConnection.routes, 0);
     assert.equal(protectedByConcurrentConnection.reconnectTimeoutScopes, 0);
     assert.equal(
+        store.queryRefreshDeadline(),
+        null,
+        'ambiguous same-source feeds must not create a reconnect deadline'
+    );
+    assert.equal(
         store.queryRoutes({ routeState: 'all' }).total,
         1,
         'ambiguous same-source concurrent feeds must not purge each other'
@@ -162,6 +168,50 @@ try {
     const topologyBeforeTimeout = store.queryTopology();
     assert.equal(topologyBeforeTimeout.clients[0].isOnline, true, 'the BMP source itself is online');
     assert.equal(topologyBeforeTimeout.clients[0].sessions[0].isOnline, false, 'a peer without PU stays offline');
+
+    const unrelated = makeContext('unrelated-client-connection', 300, replacementOpenedAtMs + 300);
+    unrelated.bmpSession.remoteIp = '192.0.2.20';
+    unrelated.bmpSession.sysName = 'unrelated-client';
+    store.applyBatch(
+        batch(
+            'unrelated-client-open',
+            [
+                buildConnectionMutation(unrelated.bmpSession, 'connection_open', {
+                    eventAtMs: replacementOpenedAtMs + 300
+                })
+            ],
+            replacementOpenedAtMs + 300
+        )
+    );
+    const snapshotSources = () => ({
+        sources: store.db.prepare('SELECT * FROM bmp_sources ORDER BY source_id').all(),
+        connections: store.db.prepare('SELECT * FROM bmp_connections ORDER BY connection_id').all(),
+        scopes: store.db.prepare('SELECT * FROM bmp_rib_scopes ORDER BY scope_id').all(),
+        routes: store.queryRoutes({ routeState: 'all' })
+    });
+    const beforeDeadlineQuery = snapshotSources();
+    assert.equal(beforeDeadlineQuery.sources.length, 2);
+    const changesBeforeDeadlineQuery = store.db.prepare('SELECT total_changes() AS changes').get().changes;
+    const expectedDeadline = { source_id: initialScope.source.id, started_at_ms: replacementOpenedAtMs };
+    assert.deepEqual(store.queryRefreshDeadline(), expectedDeadline);
+    assert.deepEqual(snapshotSources(), beforeDeadlineQuery, 'deadline discovery must not modify any source or RIB');
+    assert.equal(store.db.prepare('SELECT total_changes() AS changes').get().changes, changesBeforeDeadlineQuery);
+    const independentReader = new BmpPersistenceStore({ dbPath: store.dbPath, readOnly: true });
+    try {
+        assert.deepEqual(
+            independentReader.queryRefreshDeadline(),
+            expectedDeadline,
+            'a fresh read-only store can query deadlines'
+        );
+        assert.equal(independentReader.db.prepare('SELECT total_changes() AS changes').get().changes, 0);
+    } finally {
+        independentReader.close();
+    }
+    assert.deepEqual(
+        snapshotSources(),
+        beforeDeadlineQuery,
+        'opening a deadline reader must not recover or mutate writers'
+    );
 
     const unrelatedClientSweep = store.sweep({
         mode: 'lifecycle',
@@ -204,6 +254,7 @@ try {
     assert.equal(afterTimeout.affectedScopes[0].scopeId, initialScope.scope.id);
     assert.equal(afterTimeout.affectedScopes[0].reason, 'reconnect-refresh-timeout');
     assert.equal(afterTimeout.nextRefreshStartedMs, null);
+    assert.equal(store.queryRefreshDeadline(), null, 'a completed reconnect timeout must not retain a deadline');
     assert.equal(store.queryRoutes({ routeState: 'all' }).total, 0);
 
     const topologyAfterTimeout = store.queryTopology();

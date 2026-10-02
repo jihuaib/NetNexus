@@ -1,6 +1,9 @@
 <template>
     <nn-settings class="bmp-data-settings">
-        <nn-settings-section title="BMP SQLite 数据库" description="无需启动 BMP 即可查看并删除本地数据库。">
+        <nn-settings-section
+            title="BMP SQLite 数据库"
+            description="每个 BMP 客户端独立保存路由和属性，无需启动 BMP 即可查看并删除本地数据库。"
+        >
             <template #actions>
                 <span class="database-live-status" role="status" aria-live="polite">
                     <nn-tag :color="statusTag.color">{{ statusTag.text }}</nn-tag>
@@ -11,7 +14,16 @@
                 type="warning"
                 show-icon
                 message="删除后无法恢复"
-                description="此操作会永久删除全部 BMP 客户端、会话、RIB 路由、历史事件和统计数据。BMP 配置不会被删除，下次启动时会创建空数据库。"
+                description="此操作会永久删除全部客户端数据库中的会话、RIB 路由和统计数据。BMP 配置不会被删除，客户端下次连接时会创建空数据库。"
+                class="database-warning"
+            />
+
+            <nn-alert
+                v-if="databaseInfo.legacyDatabaseExists"
+                type="info"
+                show-icon
+                message="旧共享数据库已保留"
+                :description="`旧文件 ${databaseInfo.legacyDatabasePath} 不参与当前查询，也不会被此处的删除操作移除。`"
                 class="database-warning"
             />
 
@@ -72,6 +84,10 @@
 
     const databaseInfo = ref({
         dbPath: '',
+        storageDirectory: '',
+        clientDatabaseCount: 0,
+        legacyDatabaseExists: false,
+        legacyDatabasePath: null,
         exists: false,
         running: false,
         starting: false,
@@ -118,13 +134,16 @@
         if (!hasLoaded.value) return '检测中';
         if (!databaseInfo.value.exists) return '不存在';
         const count = Number(databaseInfo.value.fileCount) || 1;
-        return `已创建（${count} 个 SQLite 文件）`;
+        const clients = Number(databaseInfo.value.clientDatabaseCount) || 0;
+        return `已创建（${clients} 个客户端数据库，${count} 个文件）`;
     });
 
     const databaseSizeText = computed(() =>
         hasLoaded.value && !loadError.value ? formatBytes(databaseInfo.value.totalSize) : '-'
     );
-    const displayDatabasePath = computed(() => (hasLoaded.value && !loadError.value ? databaseInfo.value.dbPath : ''));
+    const displayDatabasePath = computed(() =>
+        hasLoaded.value && !loadError.value ? databaseInfo.value.storageDirectory || databaseInfo.value.dbPath : ''
+    );
 
     const canDeleteDatabase = computed(
         () =>
@@ -192,7 +211,7 @@
 
         dialog.confirm({
             title: '确认删除 BMP 数据库',
-            content: '将永久删除全部 BMP 客户端、会话、路由、历史事件和统计数据，且无法恢复。是否继续？',
+            content: '将永久删除全部客户端数据库中的会话、路由和统计数据，且无法恢复。旧共享数据库会保留。是否继续？',
             okText: '永久删除',
             cancelText: '取消',
             okType: 'danger',

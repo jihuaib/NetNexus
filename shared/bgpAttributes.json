@@ -1,0 +1,1236 @@
+{
+    "version": 1,
+    "modes": [
+        {
+            "value": "auto",
+            "label": "自动",
+            "help": "使用连接的本地地址作为下一跳。"
+        },
+        {
+            "value": "fixed",
+            "label": "固定值",
+            "help": "所有路由使用相同属性值。"
+        },
+        {
+            "value": "increment",
+            "label": "递增",
+            "help": "每条路由按起始值和步长生成。"
+        },
+        {
+            "value": "random",
+            "label": "随机",
+            "help": "每条路由在上下限内独立取值。"
+        },
+        {
+            "value": "list",
+            "label": "值列表",
+            "help": "每行一个值，按顺序循环用于路由。"
+        }
+    ],
+    "summary": {
+        "auto": "自动 · 连接本地地址",
+        "fixed": "固定 {value}",
+        "increment": "递增 {start} · 步长 {step}",
+        "random": "随机 {min}–{max}",
+        "list": "列表 · {values.length} 个值"
+    },
+    "route": {
+        "defaults": {
+            "addressFamily": 1,
+            "prefix": "1.1.1.1",
+            "mask": "32",
+            "count": "10",
+            "ipStep": "1",
+            "nlriEncoding": "auto"
+        },
+        "fields": [
+            {
+                "key": "addressFamily",
+                "label": "地址族",
+                "type": "select",
+                "options": [
+                    {
+                        "label": "IPv4-UNC",
+                        "value": 1
+                    },
+                    {
+                        "label": "IPv4 Label",
+                        "value": 12
+                    }
+                ]
+            },
+            {
+                "key": "nlriEncoding",
+                "label": "NLRI 编码",
+                "type": "select",
+                "testId": "bgp-ipv4-nlri-encoding-select",
+                "visibleWhen": {
+                    "field": "addressFamily",
+                    "equals": 1
+                },
+                "options": [
+                    {
+                        "label": "自动（传统 NLRI）",
+                        "value": "auto"
+                    },
+                    {
+                        "label": "MP_REACH_NLRI",
+                        "value": "mpReach"
+                    }
+                ],
+                "help": "自动模式下 IPv4 邻居使用传统 NLRI；选择 MP_REACH_NLRI 可发送多协议 NLRI。Label 路由始终使用 MP_REACH_NLRI。未添加 MP Next Hop 节点时，下一跳长度为 0。"
+            },
+            {
+                "key": "prefix",
+                "label": "Prefix",
+                "type": "input",
+                "testId": "bgp-ipv4-route-prefix-input",
+                "help": "起始 IPv4 地址"
+            },
+            {
+                "key": "mask",
+                "label": "Mask",
+                "type": "input",
+                "testId": "bgp-ipv4-route-mask-input",
+                "help": "前缀长度，0–32"
+            },
+            {
+                "key": "count",
+                "label": "Count",
+                "type": "input",
+                "testId": "bgp-ipv4-route-count-input",
+                "help": "生成的前缀数；添加 ADD-PATH 节点后，总路由数为 Count × 每前缀路径数。"
+            },
+            {
+                "key": "ipStep",
+                "label": "IP 步长",
+                "type": "input",
+                "testId": "bgp-ipv4-route-ipStep-input",
+                "help": "以子网为单位递增，默认为 1。例如 /24、步长 2 时，每次跳过一个 /24 子网。"
+            }
+        ]
+    },
+    "attributes": [
+        {
+            "type": "origin",
+            "valueType": "origin",
+            "label": "Origin",
+            "description": "路由来源，默认 IGP；可重复添加或移除以构造测试报文。",
+            "defaultNode": true,
+            "modes": ["fixed", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 0,
+                "start": 0,
+                "step": 1,
+                "min": 0,
+                "max": 2,
+                "values": ["0", "1", "2"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 2
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "Origin",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "IGP (0)",
+                                "value": 0
+                            },
+                            {
+                                "label": "EGP (1)",
+                                "value": 1
+                            },
+                            {
+                                "label": "Incomplete (2)",
+                                "value": 2
+                            }
+                        ]
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Origin",
+                "key": "origin",
+                "width": 90,
+                "options": [
+                    {
+                        "label": "IGP",
+                        "value": 0
+                    },
+                    {
+                        "label": "EGP",
+                        "value": 1
+                    },
+                    {
+                        "label": "Incomplete",
+                        "value": 2
+                    }
+                ]
+            },
+            "repeatable": true
+        },
+        {
+            "type": "asPath",
+            "valueType": "asPath",
+            "label": "AS Path",
+            "description": "按配置直接编码 AS Path；支持固定、递增、随机或值列表，可重复添加或移除。",
+            "defaultNode": true,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "",
+                "start": 65001,
+                "step": 1,
+                "min": 64512,
+                "max": 65534,
+                "minLength": 1,
+                "maxLength": 5,
+                "values": ["65001", "65002 65003"]
+            },
+            "validation": {
+                "min": 1,
+                "max": 4294967295,
+                "maxLength": 255
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input",
+                        "help": "ASN 用空格分隔；留空发送空 AS Path。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小 ASN",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大 ASN",
+                        "type": "input"
+                    },
+                    {
+                        "key": "minLength",
+                        "label": "最少 AS 数",
+                        "type": "input"
+                    },
+                    {
+                        "key": "maxLength",
+                        "label": "最多 AS 数",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一条 AS 路径，ASN 用空格分隔。"
+                    }
+                ]
+            },
+            "summary": {
+                "random": "随机 {min}–{max} · {minLength}–{maxLength} AS"
+            },
+            "resultColumn": {
+                "title": "AS 路径",
+                "key": "asPath",
+                "width": 180
+            },
+            "repeatable": true
+        },
+        {
+            "type": "nextHop",
+            "valueType": "ipv4",
+            "label": "Next Hop",
+            "description": "独立的 NEXT_HOP 路径属性（Type 3）；与 MP_REACH_NLRI 内的下一跳无关，可重复添加或移除。",
+            "defaultNode": true,
+            "modes": ["auto", "fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "auto",
+                "value": "192.0.2.1",
+                "start": "192.0.2.1",
+                "step": 1,
+                "min": "192.0.2.1",
+                "max": "192.0.2.254",
+                "values": ["192.0.2.1", "192.0.2.2"]
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "以 IPv4 地址数为单位。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ],
+                "auto": []
+            },
+            "resultColumn": {
+                "title": "Next Hop",
+                "key": "nextHop",
+                "width": 140
+            },
+            "repeatable": true
+        },
+        {
+            "type": "mpNextHop",
+            "valueType": "ipAddress",
+            "label": "MP Next Hop",
+            "description": "MP_REACH_NLRI 内部的独立下一跳，支持 IPv4 或 IPv6。删除节点后下一跳长度为 0；自动模式使用连接本地地址，不读取 NEXT_HOP 路径属性。",
+            "defaultNode": false,
+            "modes": ["auto", "fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "auto",
+                "value": "192.0.2.1",
+                "start": "192.0.2.1",
+                "step": 1,
+                "min": "192.0.2.1",
+                "max": "192.0.2.254",
+                "values": ["192.0.2.1", "2001:db8::1"]
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "MP 下一跳",
+                        "type": "input",
+                        "help": "IPv4 或 IPv6 地址。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "按 IPv4 或 IPv6 地址数递增。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ],
+                "auto": []
+            },
+            "resultColumn": {
+                "title": "MP Next Hop",
+                "key": "mpNextHop",
+                "width": 180
+            },
+            "repeatable": false,
+            "section": "nlri",
+            "treeGroup": "mpNlri",
+            "addressFamilies": [1, 2, 6, 12]
+        },
+        {
+            "type": "med",
+            "valueType": "uint32",
+            "label": "MED",
+            "description": "多出口判别值；移除后不发送 MED。",
+            "defaultNode": true,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 0,
+                "start": 0,
+                "step": 10,
+                "min": 0,
+                "max": 100,
+                "values": ["0", "50", "100"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 4294967295
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "MED",
+                "key": "med",
+                "width": 90
+            },
+            "repeatable": true
+        },
+        {
+            "type": "localPref",
+            "valueType": "uint32",
+            "label": "Local Pref",
+            "description": "按配置编码 Local Preference；可重复添加或移除，也可在 eBGP 报文中用于测试。",
+            "defaultNode": true,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 100,
+                "start": 100,
+                "step": 10,
+                "min": 100,
+                "max": 200,
+                "values": ["100", "200"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 4294967295
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Local Pref",
+                "key": "localPref",
+                "width": 100
+            },
+            "repeatable": true
+        },
+        {
+            "type": "communities",
+            "valueType": "community",
+            "label": "Community",
+            "description": "标准 Community；单个属性可包含多个值。固定值支持空格或换行分隔，递增和随机模式可设置每条路由的值数量。",
+            "defaultNode": true,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "",
+                "base": "65000",
+                "start": 100,
+                "step": 1,
+                "min": 100,
+                "max": 200,
+                "values": ["65000:100", "65000:200"],
+                "valueCount": 1
+            },
+            "validation": {
+                "min": 0,
+                "max": 65535
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "textarea",
+                        "help": "同一属性的多个值用空格或换行分隔，例如 65000:100 65000:200。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "base",
+                        "label": "ASN",
+                        "type": "input"
+                    },
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "每个值的递增步长；跨路由连续取值。"
+                    },
+                    {
+                        "key": "valueCount",
+                        "label": "每条路由值数量",
+                        "type": "input",
+                        "help": "所有值编码在同一个属性中，默认为 1。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "base",
+                        "label": "ASN",
+                        "type": "input"
+                    },
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "valueCount",
+                        "label": "每条路由值数量",
+                        "type": "input",
+                        "help": "所有值编码在同一个属性中，默认为 1。"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一组 Community，组内多个值用空格分隔；按行循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Community",
+                "key": "communities",
+                "width": 150
+            },
+            "repeatable": true,
+            "valueCountValidation": {
+                "min": 1,
+                "max": 16383
+            },
+            "modeHelp": {
+                "increment": "每条路由取 {valueCount} 个值，按起始值和步长连续生成，随后继续用于下一条路由。",
+                "random": "每条路由生成 {valueCount} 个值，每个值独立在上下限内取样。"
+            }
+        },
+        {
+            "type": "extendedCommunities",
+            "valueType": "extendedCommunity",
+            "label": "Extended Community",
+            "description": "通用 8 字节扩展 Community，支持 RT、SoO 及原始十六进制条目。单个属性可包含多个值，保留输入顺序；递增和随机模式可设置每条路由的值数量。",
+            "defaultNode": true,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "",
+                "base": "65000",
+                "start": 100,
+                "step": 1,
+                "min": 100,
+                "max": 200,
+                "values": ["rt:65000:100", "soo:65000:200"],
+                "subtype": "rt",
+                "valueCount": 1
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "textarea",
+                        "help": "同一属性的多个条目用空格或换行分隔，例如 rt:65000:100 soo:65000:200 hex:0002fde800000064；IPv4 格式为 rt:192.0.2.1:20。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "subtype",
+                        "label": "子类型",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "Route Target (RT)",
+                                "value": "rt"
+                            },
+                            {
+                                "label": "Site of Origin (SoO)",
+                                "value": "soo"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "base",
+                        "label": "ASN / IPv4",
+                        "type": "input",
+                        "help": "ASN为0–4294967295，或填写IPv4地址；2字节ASN的数值部分为32位，其他格式为16位。"
+                    },
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "每个值的递增步长；跨路由连续取值。"
+                    },
+                    {
+                        "key": "valueCount",
+                        "label": "每条路由值数量",
+                        "type": "input",
+                        "help": "所有值编码在同一个属性中，默认为 1。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "subtype",
+                        "label": "子类型",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "Route Target (RT)",
+                                "value": "rt"
+                            },
+                            {
+                                "label": "Site of Origin (SoO)",
+                                "value": "soo"
+                            }
+                        ]
+                    },
+                    {
+                        "key": "base",
+                        "label": "ASN / IPv4",
+                        "type": "input",
+                        "help": "ASN为0–4294967295，或填写IPv4地址；2字节ASN的数值部分为32位，其他格式为16位。"
+                    },
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "valueCount",
+                        "label": "每条路由值数量",
+                        "type": "input",
+                        "help": "所有值编码在同一个属性中，默认为 1。"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一组完整扩展 Community，组内多个条目用空格分隔；按行循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Extended Community",
+                "key": "extendedCommunities",
+                "width": 220
+            },
+            "repeatable": true,
+            "valueCountValidation": {
+                "min": 1,
+                "max": 8191
+            },
+            "modeHelp": {
+                "increment": "每条路由取 {valueCount} 个值，按起始值和步长连续生成，随后继续用于下一条路由。",
+                "random": "每条路由生成 {valueCount} 个值，每个值独立在上下限内取样。"
+            }
+        },
+        {
+            "type": "label",
+            "section": "nlri",
+            "valueType": "label",
+            "label": "MPLS Label",
+            "description": "IPv4 Label NLRI 的 20 bit MPLS 标签，与前缀一起编码。",
+            "defaultNode": true,
+            "addressFamilies": [12],
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 16,
+                "start": 16,
+                "step": 1,
+                "min": 16,
+                "max": 1048575,
+                "values": ["16", "100"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 1048575
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Label",
+                "key": "label",
+                "width": 90
+            }
+        },
+        {
+            "type": "addPath",
+            "section": "nlri",
+            "valueType": "pathCount",
+            "label": "ADD-PATH",
+            "description": "每个前缀生成指定数量的路径，Path ID 为 0 到路径数减 1；总路由数为 Count × 路径数。",
+            "defaultNode": false,
+            "addressFamilies": [1, 2, 12],
+            "repeatable": false,
+            "modes": [],
+            "default": {
+                "count": 2
+            },
+            "validation": {
+                "min": 1,
+                "max": 4294967296
+            },
+            "fields": {
+                "common": [
+                    {
+                        "key": "count",
+                        "label": "每前缀路径数",
+                        "type": "input",
+                        "help": "Path ID 从 0 依次递增，每个前缀使用相同的 ID 集合。"
+                    }
+                ]
+            },
+            "summary": {
+                "default": "每前缀 {count} 条路径"
+            },
+            "resultColumn": {
+                "title": "Path ID",
+                "key": "pathId",
+                "width": 90
+            }
+        },
+        {
+            "type": "srv6",
+            "valueType": "srv6",
+            "label": "SRv6",
+            "description": "按配置编码 SRv6 Prefix-SID 和 SID 结构参数；可重复添加或移除。",
+            "defaultNode": false,
+            "addressFamilies": [1, 2],
+            "modes": ["fixed", "increment", "list"],
+            "familyDefaults": {
+                "2": {
+                    "endpointBehavior": 18
+                }
+            },
+            "default": {
+                "mode": "fixed",
+                "value": "2001:db8:1::1",
+                "start": "2001:db8:1::1",
+                "step": 1,
+                "values": ["2001:db8:1::1", "2001:db8:1::2"],
+                "endpointBehavior": 19,
+                "locatorBlockLength": 48,
+                "locatorNodeLength": 16,
+                "functionLength": 16,
+                "argumentLength": 0,
+                "transpositionLength": 0,
+                "transpositionOffset": 0
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "SID",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始 SID",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "SID 步长",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "SID 列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个 IPv6 SID；按路径顺序循环。"
+                    }
+                ],
+                "common": [
+                    {
+                        "key": "endpointBehavior",
+                        "label": "Endpoint",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "End.DT4",
+                                "value": 19
+                            },
+                            {
+                                "label": "End.DT6",
+                                "value": 18
+                            },
+                            {
+                                "label": "End.DX4",
+                                "value": 17
+                            },
+                            {
+                                "label": "End.DX6",
+                                "value": 16
+                            },
+                            {
+                                "label": "End.DT46",
+                                "value": 20
+                            }
+                        ]
+                    },
+                    {
+                        "key": "locatorBlockLength",
+                        "label": "Locator Block 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "locatorNodeLength",
+                        "label": "Locator Node 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "functionLength",
+                        "label": "Function 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "argumentLength",
+                        "label": "Argument 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionLength",
+                        "label": "Transposition 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionOffset",
+                        "label": "Transposition 偏移",
+                        "type": "input"
+                    }
+                ]
+            },
+            "summary": {
+                "fixed": "固定 SID {value}",
+                "increment": "SID {start} · 步长 {step}",
+                "list": "SID 列表 · {values.length} 个值"
+            },
+            "resultColumn": {
+                "title": "SRv6 SID",
+                "key": "srv6Sid",
+                "width": 220
+            },
+            "repeatable": true
+        },
+        {
+            "type": "custom",
+            "valueType": "raw",
+            "label": "自定义 Path Attribute",
+            "description": "按类型码、Flags 和十六进制内容构造属性；类型码留空表示完整属性报文。",
+            "repeatable": true,
+            "modes": ["fixed", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "00",
+                "typeCode": 99,
+                "flags": 192,
+                "values": ["00", "01"]
+            },
+            "fields": {
+                "common": [
+                    {
+                        "key": "typeCode",
+                        "label": "属性类型码",
+                        "type": "input",
+                        "help": "1–255；留空输入完整 Path Attribute 报文。"
+                    },
+                    {
+                        "key": "flags",
+                        "label": "Flags",
+                        "type": "input",
+                        "help": "十进制，例如 192 = Optional + Transitive。"
+                    }
+                ],
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性内容",
+                        "type": "textarea",
+                        "help": "十六进制字节，例如 00 ff。"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个十六进制属性值，循环用于路由。"
+                    }
+                ]
+            }
+        },
+        {
+            "type": "dqpn",
+            "valueType": "uint32",
+            "label": "DQPN",
+            "description": "QP NLRI 的 24 bit DQPN，按本节点的规则为每条路由生成，与 IP 步长独立。删除节点后不编码 DQPN TLV。",
+            "defaultNode": false,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "increment",
+                "value": 1,
+                "start": 1,
+                "step": 1,
+                "min": 1,
+                "max": 16777215,
+                "values": ["1", "2"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 16777215
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "DQPN",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "DQPN",
+                "key": "dqpn",
+                "width": 90
+            },
+            "repeatable": false,
+            "section": "nlri",
+            "addressFamilies": [8, 9]
+        },
+        {
+            "type": "bsid",
+            "valueType": "ipv6",
+            "label": "BSID",
+            "description": "QP MP_REACH_NLRI 的 IPv6 下一跳；删除节点后下一跳长度为 0。自动模式使用连接本地地址，IPv4 地址编码为 IPv4-mapped IPv6。",
+            "defaultNode": false,
+            "modes": ["auto", "fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "auto",
+                "value": "2001:db8::1",
+                "start": "2001:db8::1",
+                "step": 1,
+                "min": "2001:db8::1",
+                "max": "2001:db8::ffff",
+                "values": ["2001:db8::1", "2001:db8::2"]
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "BSID",
+                        "type": "input",
+                        "help": "IPv6 地址。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "按 IPv6 地址数递增。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ],
+                "auto": []
+            },
+            "resultColumn": {
+                "title": "BSID",
+                "key": "mpNextHop",
+                "width": 180
+            },
+            "repeatable": false,
+            "section": "nlri",
+            "treeGroup": "mpNlri",
+            "addressFamilies": [8, 9],
+            "modeHelp": {
+                "auto": "使用连接本地地址；IPv4 地址编码为 IPv4-mapped IPv6。"
+            }
+        }
+    ]
+}

@@ -1,4 +1,6 @@
 const crypto = require('crypto');
+const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgpAttributeRegistry');
+const { normalizeExtendedCommunities } = require('../../../shared/bgpExtendedCommunities');
 
 function normalizeString(value) {
     return value === undefined || value === null ? '' : `${value}`.trim();
@@ -20,18 +22,69 @@ function normalizeCommunities(communities) {
 }
 
 function canonicalizeAttr(attr = {}) {
-    return {
+    const configured = attr.attributePolicy === 'configured';
+    const configuredAttributes = Array.isArray(attr.configuredAttributes)
+        ? [...new Set(attr.configuredAttributes.filter(field => typeof field === 'string'))].sort()
+        : [];
+    const canonical = {
         nextHop: normalizeString(attr.nextHop),
         origin: attr.origin === undefined || attr.origin === null || attr.origin === '' ? null : attr.origin,
         asPath: normalizeString(attr.asPath),
-        med: normalizeNumber(attr.med, 0),
-        localPref: normalizeNumber(attr.localPref, 100),
+        med:
+            configured && !configuredAttributes.includes('med')
+                ? null
+                : normalizeNumber(attr.med, ATTRIBUTE_DEFAULTS.med.value),
+        localPref:
+            configured && !configuredAttributes.includes('localPref')
+                ? null
+                : normalizeNumber(attr.localPref, ATTRIBUTE_DEFAULTS.localPref.value),
         communities: normalizeCommunities(attr.communities),
         customAttr: normalizeString(attr.customAttr),
         rt: normalizeString(attr.rt),
         srv6Sid: normalizeString(attr.srv6Sid),
         srv6EndpointBehavior: normalizeNumber(attr.srv6EndpointBehavior, null)
     };
+    if (Object.prototype.hasOwnProperty.call(attr, 'extendedCommunities')) {
+        canonical.extendedCommunities = normalizeExtendedCommunities(attr.extendedCommunities);
+    }
+    // MRT can contain both the global and link-local IPv6 next hop. Keep the
+    // full encoded pair while the route's mpNextHop remains its display address.
+    if (attr.mrtMpNextHopBytes !== undefined) {
+        if (typeof attr.mrtMpNextHopBytes !== 'string' || !/^[0-9a-f]{64}$/i.test(attr.mrtMpNextHopBytes))
+            throw new Error('MRT IPv6 双下一跳必须为32字节十六进制值');
+        canonical.mrtMpNextHopBytes = attr.mrtMpNextHopBytes.toLowerCase();
+    }
+    if (configured) {
+        canonical.attributePolicy = 'configured';
+        canonical.configuredAttributes = configuredAttributes;
+        canonical.pathAttributes = (Array.isArray(attr.pathAttributes) ? attr.pathAttributes : []).map(entry => {
+            const result = {
+                type: entry.type,
+                value:
+                    entry.type === 'extendedCommunities'
+                        ? normalizeExtendedCommunities(entry.value)
+                        : Array.isArray(entry.value)
+                          ? [...entry.value]
+                          : entry.value
+            };
+            if (entry.type === 'srv6') {
+                result.srv6EndpointBehavior = entry.srv6EndpointBehavior;
+                result.srv6SidStructure = { ...entry.srv6SidStructure };
+            }
+            return result;
+        });
+        if (attr.srv6SidStructure && canonical.srv6Sid) {
+            canonical.srv6SidStructure = {
+                locatorBlockLength: normalizeNumber(attr.srv6SidStructure.locatorBlockLength, null),
+                locatorNodeLength: normalizeNumber(attr.srv6SidStructure.locatorNodeLength, null),
+                functionLength: normalizeNumber(attr.srv6SidStructure.functionLength, null),
+                argumentLength: normalizeNumber(attr.srv6SidStructure.argumentLength, null),
+                transpositionLength: normalizeNumber(attr.srv6SidStructure.transpositionLength, null),
+                transpositionOffset: normalizeNumber(attr.srv6SidStructure.transpositionOffset, null)
+            };
+        }
+    }
+    return canonical;
 }
 
 function hashCanonicalAttr(canonicalJson) {

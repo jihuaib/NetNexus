@@ -1,6 +1,7 @@
 const { parentPort } = require('worker_threads');
 const logger = require('../../log/logger');
 const BmpPersistenceStore = require('./bmpPersistenceStore');
+const BmpClientPersistenceStore = require('./bmpClientPersistenceStore');
 const { BMP_PERSISTENCE_OP } = require('./bmpPersistenceConst');
 
 let store = null;
@@ -73,7 +74,9 @@ function handleMessage(message) {
                 if (store) {
                     store.close();
                 }
-                store = new BmpPersistenceStore(data).open();
+                store = new (data.partitionByClient === true ? BmpClientPersistenceStore : BmpPersistenceStore)(
+                    data
+                ).open();
                 if (typeof store.setLogLevel === 'function') {
                     store.setLogLevel(logger.logLevel);
                 }
@@ -106,6 +109,9 @@ function handleMessage(message) {
                 break;
             case BMP_PERSISTENCE_OP.QUERY_SCOPE_SUMMARY:
                 success(messageId, requireStore().queryScopeSummary(data));
+                break;
+            case BMP_PERSISTENCE_OP.QUERY_REFRESH_DEADLINE:
+                success(messageId, requireStore().queryRefreshDeadline());
                 break;
             case BMP_PERSISTENCE_OP.QUERY_TOPOLOGY:
                 success(messageId, requireStore().queryTopology(data));

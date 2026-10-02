@@ -180,6 +180,10 @@
             const result = await window.bgpApi.importRouteViewsData(filePath, importLimit.value, props.addressFamily);
 
             if (result.status === 'success') {
+                if (result.data?.imported === 0) {
+                    notify.error('MRT 文件中没有可导入当前地址族的路由，请检查地址族和文件格式');
+                    return;
+                }
                 notify.success(result.msg);
                 emit('imported');
                 open.value = false;

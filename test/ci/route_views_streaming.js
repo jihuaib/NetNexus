@@ -57,8 +57,19 @@ async function collectRoutes(iterator) {
         }
 
         assert.strictEqual(streamedRoutes.length, 600);
-        assert.deepStrictEqual(streamedRoutes[0], { ip: '10.0.0.1', mask: 32, formatted: '' });
-        assert.deepStrictEqual(streamedRoutes[599], { ip: '10.2.87.1', mask: 32, formatted: '' });
+        const expectedRoute = ip => ({
+            ip,
+            mask: 32,
+            pathId: 0,
+            createdAtMs: 0,
+            attributePolicy: 'configured',
+            configuredAttributes: [],
+            pathAttributes: [],
+            nlriEncoding: 'auto',
+            mpNextHop: null
+        });
+        assert.deepStrictEqual(streamedRoutes[0], expectedRoute('10.0.0.1'));
+        assert.deepStrictEqual(streamedRoutes[599], expectedRoute('10.2.87.1'));
         assert.deepStrictEqual(progress, ['正在准备解析 MRT 文件...', '已解析 500 条路由...']);
 
         const gzipRoutes = [];

@@ -2,12 +2,13 @@ const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
+const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../const/bgpConst');
 const { getAfiAndSafi } = require('../../utils/bgpUtils');
 const BgpRoute = require('./bgpRoute');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
 
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 6;
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 10000;
 const DEFAULT_ITERATION_BATCH_SIZE = 2000;
@@ -19,10 +20,16 @@ const ATTRIBUTE_FIELDS = [
     'med',
     'localPref',
     'communities',
+    'extendedCommunities',
     'customAttr',
     'rt',
     'srv6Sid',
-    'srv6EndpointBehavior'
+    'srv6EndpointBehavior',
+    'srv6SidStructure',
+    'attributePolicy',
+    'configuredAttributes',
+    'pathAttributes',
+    'mrtMpNextHopBytes'
 ];
 
 const ROUTE_TABLE_FAMILY_NAMES = Object.freeze([
@@ -103,6 +110,8 @@ function routeTableSchemaSql(tableName) {
             source_as INTEGER,
             dqpn INTEGER,
             label INTEGER,
+            nlri_encoding TEXT,
+            mp_next_hop TEXT,
             attr_id INTEGER NOT NULL,
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
@@ -166,22 +175,7 @@ function normalizeInstanceKey(value) {
 }
 
 function makeMvpnRouteKey(route) {
-    const routeType = Number(route?.routeType);
-    const sourceAs = [
-        BgpConst.BGP_MVPN_ROUTE_TYPE.INTER_AS_I_PMSI_AD,
-        BgpConst.BGP_MVPN_ROUTE_TYPE.SHARED_TREE_JOIN,
-        BgpConst.BGP_MVPN_ROUTE_TYPE.SOURCE_TREE_JOIN
-    ].includes(routeType)
-        ? route?.sourceAs || ''
-        : '';
-    return [
-        route?.routeType,
-        route?.rd,
-        sourceAs,
-        route?.sourceIp || '',
-        route?.groupIp || '',
-        route?.originatingRouterIp || ''
-    ].join('|');
+    return BgpRoute.makeMvpnKey(route);
 }
 
 function deriveRouteKey(route) {
@@ -193,6 +187,9 @@ function deriveRouteKey(route) {
     }
     if (route?.routeType !== undefined && route?.routeType !== null && route?.routeType !== '') {
         return makeMvpnRouteKey(route);
+    }
+    if (route?.label !== undefined && route?.label !== null && route?.label !== '') {
+        return BgpRoute.makeLabelUnicastKey(route.pathId, route.ip, route.mask);
     }
     if (
         (route?.rd !== undefined && route?.rd !== null && route?.rd !== '') ||
@@ -256,8 +253,11 @@ function normalizeRouteInput(input, options = {}) {
         sourceIp: nullableString(route.sourceIp),
         groupIp: nullableString(route.groupIp),
         sourceAs: nullableInteger(route.sourceAs),
+        leafRouteKey: nullableString(route.leafRouteKey) ?? BgpRoute.parseMvpnLeafRouteKey(routeKey),
         dqpn: nullableInteger(route.dqpn),
         label: nullableInteger(route.label),
+        nlriEncoding: route.nlriEncoding === undefined ? null : BgpRoute.normalizeNlriEncoding(route.nlriEncoding),
+        mpNextHop: route.mpNextHop === undefined ? null : BgpRoute.normalizeMpNextHop(route.mpNextHop),
         attr
     };
 }
@@ -276,6 +276,220 @@ function getDeleteRouteKey(value) {
         return deriveRouteKey(value.route || value);
     }
     throw new Error('BGP route SQLite delete requires a route key');
+}
+
+function normalizeRouteGroupId(value) {
+    const groupId = String(value ?? '').trim();
+    if (!groupId) throw new Error('BGP route groupId is required');
+    return groupId;
+}
+
+function canonicalRouteRd(value) {
+    const text = String(value === undefined || value === null || value === '' ? '0:0' : value).trim();
+    const parts = text.split(':');
+    if (parts.length !== 2 || !/^\d+$/.test(parts[1])) throw new Error('BGP route group RD is invalid');
+    const assigned = Number(parts[1]);
+    if (!Number.isSafeInteger(assigned)) throw new Error('BGP route group RD is invalid');
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(parts[0])) {
+        const bytes = parts[0].split('.').map(Number);
+        if (bytes.some(byte => byte > 255) || assigned > 0xffff) throw new Error('BGP route group RD is invalid');
+        return `${bytes.join('.')}:${assigned}`;
+    }
+    if (!/^\d+$/.test(parts[0])) throw new Error('BGP route group RD is invalid');
+    const administrator = Number(parts[0]);
+    if (
+        !Number.isSafeInteger(administrator) ||
+        administrator > 0xffffffff ||
+        assigned > (administrator > 0xffff ? 0xffff : 0xffffffff)
+    ) {
+        throw new Error('BGP route group RD is invalid');
+    }
+    return `${administrator}:${assigned}`;
+}
+
+function canonicalRoutePrefix(prefix, prefixLength, afi) {
+    if (
+        prefix === undefined ||
+        prefix === null ||
+        prefix === '' ||
+        prefixLength === undefined ||
+        prefixLength === null ||
+        prefixLength === ''
+    ) {
+        throw new Error('BGP route group requires a valid prefix and mask');
+    }
+    const mask = Number(prefixLength);
+    if (!Number.isInteger(mask) || mask < 0 || mask > (Number(afi) === 1 ? 32 : 128)) {
+        throw new Error('BGP route group mask is invalid');
+    }
+    let address;
+    try {
+        let addressText = String(prefix);
+        if (Number(afi) === 1) {
+            if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(addressText)) throw new Error('invalid IPv4 prefix');
+            const bytes = addressText.split('.').map(Number);
+            if (bytes.some(byte => byte > 255)) throw new Error('invalid IPv4 prefix');
+            addressText = bytes.join('.');
+        }
+        address = ipaddr.parse(addressText);
+        if ((Number(afi) === 1 && address.kind() !== 'ipv4') || (Number(afi) === 2 && address.kind() !== 'ipv6')) {
+            throw new Error('address family mismatch');
+        }
+    } catch (_error) {
+        throw new Error('BGP route group prefix is invalid');
+    }
+    const bytes = address.toByteArray().map((byte, index) => {
+        const bits = Math.max(0, Math.min(8, mask - index * 8));
+        return byte & (bits === 0 ? 0 : (0xff << (8 - bits)) & 0xff);
+    });
+    return { prefix: ipaddr.fromByteArray(bytes).toString(), prefixLength: mask };
+}
+
+function canonicalRouteIp(value, afi, fieldName) {
+    try {
+        let text = String(value ?? '');
+        if (Number(afi) === 1) {
+            if (!/^(\d{1,3}\.){3}\d{1,3}$/.test(text)) throw new Error('invalid IPv4');
+            const bytes = text.split('.').map(Number);
+            if (bytes.some(byte => byte > 255)) throw new Error('invalid IPv4');
+            text = bytes.join('.');
+        }
+        const address = ipaddr.parse(text);
+        if (address.kind() !== (Number(afi) === 1 ? 'ipv4' : 'ipv6')) throw new Error('address family mismatch');
+        return address.toString();
+    } catch (_error) {
+        throw new Error(`BGP route group ${fieldName} is invalid`);
+    }
+}
+
+function normalizeManagedMvpnRoute(route, rawRoute, definition) {
+    const routeType = Number(rawRoute.routeType);
+    if (!Number.isInteger(routeType) || routeType < 1 || routeType > 7)
+        throw new Error('BGP route group MVPN route type is invalid');
+    route.routeType = routeType;
+    route.prefix = null;
+    route.prefixLength = null;
+    route.sourceAs = null;
+    route.sourceIp = null;
+    route.groupIp = null;
+    route.originatingRouterIp = null;
+    route.leafRouteKey = null;
+    if (routeType === BgpConst.BGP_MVPN_ROUTE_TYPE.LEAF_AD && rawRoute.leafRouteKey) {
+        const leafRouteKey = String(rawRoute.leafRouteKey).replace(/\s+/g, '').toLowerCase();
+        if (!/^(?:[0-9a-f]{2})+$/.test(leafRouteKey) || leafRouteKey.length / 2 + 4 > 255)
+            throw new Error('BGP route group MVPN Leaf route key is invalid');
+        route.leafRouteKey = leafRouteKey;
+        route.rd = null;
+    } else {
+        route.rd = canonicalRouteRd(rawRoute.rd);
+    }
+    if ([2, 6, 7].includes(routeType)) {
+        const sourceAs = Number(rawRoute.sourceAs);
+        if (
+            rawRoute.sourceAs === undefined ||
+            rawRoute.sourceAs === null ||
+            rawRoute.sourceAs === '' ||
+            !Number.isInteger(sourceAs) ||
+            sourceAs < 0 ||
+            sourceAs > 0xffffffff
+        )
+            throw new Error('BGP route group MVPN source AS is invalid');
+        route.sourceAs = sourceAs;
+    }
+    if ([3, 5, 6, 7].includes(routeType))
+        route.sourceIp = canonicalRouteIp(rawRoute.sourceIp, definition.afi, 'source IP');
+    if ([3, 5, 6, 7].includes(routeType))
+        route.groupIp = canonicalRouteIp(rawRoute.groupIp, definition.afi, 'group IP');
+    if ([1, 3, 4].includes(routeType))
+        route.originatingRouterIp = canonicalRouteIp(
+            rawRoute.originatingRouterIp,
+            definition.afi,
+            'originating router IP'
+        );
+    route.routeKey = BgpRoute.makeMvpnKey(route);
+}
+
+function managedRouteNlriIdentity(route, definition) {
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
+        const normalized = {};
+        normalizeManagedMvpnRoute(normalized, route, definition);
+        return normalized.routeKey;
+    }
+    const prefix = canonicalRoutePrefix(route.prefix, route.prefixLength, definition.afi);
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP)
+        return BgpRoute.makeQpKey(route.dqpn, prefix.prefix, prefix.prefixLength);
+    return BgpRoute.makeUnicastPrefixKey(canonicalRouteRd(route.rd), prefix.prefix, prefix.prefixLength);
+}
+
+function managedRouteMembership(route, definition) {
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
+        // The existing membership columns also index non-prefix NLRI identities.
+        return { prefix: managedRouteNlriIdentity(route, definition), prefixLength: -1, rd: route.rd ?? '' };
+    }
+    return { prefix: route.prefix, prefixLength: route.prefixLength, rd: route.rd };
+}
+
+function normalizeManagedRoute(input, definition) {
+    const rawRoute = input && input.route && typeof input.route === 'object' ? input.route : input;
+    const route = normalizeRouteInput(input, { routeKey: 'managed-candidate' });
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
+        normalizeManagedMvpnRoute(route, rawRoute, definition);
+        canonicalAttributeJson(route.attr);
+        return route;
+    }
+    Object.assign(
+        route,
+        canonicalRoutePrefix(
+            rawRoute.ip ?? rawRoute.prefix,
+            rawRoute.mask ?? rawRoute.prefixLength ?? rawRoute.length,
+            definition.afi
+        )
+    );
+    route.rd = canonicalRouteRd(rawRoute.rd);
+    const pathId =
+        rawRoute.pathId === undefined || rawRoute.pathId === null || rawRoute.pathId === ''
+            ? 0
+            : Number(rawRoute.pathId);
+    if (!Number.isInteger(pathId) || pathId < 0 || pathId > 0xffffffff)
+        throw new Error('BGP route group Path ID is invalid');
+    route.pathId = pathId;
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+        const dqpnAbsent = rawRoute.dqpn === undefined || rawRoute.dqpn === null;
+        if (
+            !dqpnAbsent &&
+            (rawRoute.dqpn === '' ||
+                !Number.isInteger(Number(rawRoute.dqpn)) ||
+                Number(rawRoute.dqpn) < 0 ||
+                Number(rawRoute.dqpn) > 0xffffff)
+        )
+            throw new Error('BGP route group DQPN is invalid');
+        route.dqpn = dqpnAbsent ? null : Number(rawRoute.dqpn);
+        route.routeKey = BgpRoute.makeQpKey(route.dqpn, route.prefix, route.prefixLength);
+        canonicalAttributeJson(route.attr);
+        return route;
+    }
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST) {
+        const labelAbsent =
+            (rawRoute.label === undefined || rawRoute.label === null) && route.attr.attributePolicy === 'configured';
+        if (
+            !labelAbsent &&
+            (!Number.isInteger(Number(rawRoute.label)) ||
+                Number(rawRoute.label) < 0 ||
+                Number(rawRoute.label) > 0xfffff ||
+                rawRoute.label === '' ||
+                rawRoute.label === undefined ||
+                rawRoute.label === null)
+        ) {
+            throw new Error('BGP route group MPLS label is invalid');
+        }
+        if (labelAbsent) route.label = null;
+    }
+    route.routeKey =
+        definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST
+            ? BgpRoute.makeLabelUnicastKey(route.pathId, route.prefix, route.prefixLength)
+            : BgpRoute.makeUnicastKey(route.pathId, route.rd, route.prefix, route.prefixLength);
+    canonicalAttributeJson(route.attr);
+    return route;
 }
 
 class BgpRouteMapFacade {
@@ -529,6 +743,33 @@ class BgpRouteSqliteStore {
                     attr_hash BLOB NOT NULL UNIQUE,
                     attr_json TEXT NOT NULL
                 );
+
+                CREATE TABLE bgp_route_groups (
+                    group_id TEXT PRIMARY KEY,
+                    group_name TEXT NOT NULL,
+                    address_family INTEGER NOT NULL,
+                    instance_id INTEGER NOT NULL,
+                    route_count INTEGER NOT NULL CHECK(route_count >= 0),
+                    generated_at_ms INTEGER NOT NULL,
+                    FOREIGN KEY (instance_id) REFERENCES bgp_route_instances(instance_id) ON DELETE CASCADE
+                );
+
+                CREATE TABLE bgp_route_group_members (
+                    group_id TEXT NOT NULL,
+                    instance_id INTEGER NOT NULL,
+                    route_key TEXT NOT NULL,
+                    normalized_prefix TEXT NOT NULL,
+                    prefix_length INTEGER NOT NULL,
+                    normalized_rd TEXT NOT NULL,
+                    PRIMARY KEY(instance_id, route_key),
+                    FOREIGN KEY (group_id) REFERENCES bgp_route_groups(group_id) ON DELETE CASCADE,
+                    FOREIGN KEY (instance_id) REFERENCES bgp_route_instances(instance_id) ON DELETE CASCADE
+                ) WITHOUT ROWID;
+
+                CREATE INDEX idx_bgp_route_group_members_group
+                    ON bgp_route_group_members(group_id);
+                CREATE INDEX idx_bgp_route_group_members_prefix
+                    ON bgp_route_group_members(instance_id, normalized_rd, normalized_prefix, prefix_length);
             `);
             ROUTE_TABLE_DEFINITIONS.forEach(definition => {
                 this.db.exec(routeTableSchemaSql(definition.tableName));
@@ -545,10 +786,34 @@ class BgpRouteSqliteStore {
         }
         const required = {
             bgp_route_instances: ['instance_id', 'instance_key', 'afi', 'safi', 'route_count', 'revision'],
-            bgp_route_attributes: ['attr_id', 'attr_hash', 'attr_json']
+            bgp_route_attributes: ['attr_id', 'attr_hash', 'attr_json'],
+            bgp_route_groups: [
+                'group_id',
+                'group_name',
+                'address_family',
+                'instance_id',
+                'route_count',
+                'generated_at_ms'
+            ],
+            bgp_route_group_members: [
+                'group_id',
+                'instance_id',
+                'route_key',
+                'normalized_prefix',
+                'prefix_length',
+                'normalized_rd'
+            ]
         };
         ROUTE_TABLE_DEFINITIONS.forEach(definition => {
-            required[definition.tableName] = ['route_id', 'instance_id', 'route_key', 'prefix', 'attr_id'];
+            required[definition.tableName] = [
+                'route_id',
+                'instance_id',
+                'route_key',
+                'prefix',
+                'attr_id',
+                'nlri_encoding',
+                'mp_next_hop'
+            ];
         });
         Object.entries(required).forEach(([table, columns]) => {
             const actual = new Set(this.db.pragma(`table_info(${table})`).map(column => column.name));
@@ -659,11 +924,11 @@ class BgpRouteSqliteStore {
             insertRoute: this.db.prepare(`
                 INSERT OR IGNORE INTO ${tableName}(
                     instance_id, route_key, prefix, prefix_length, rd, path_id, route_type,
-                    originating_router_ip, source_ip, group_ip, source_as, dqpn, label, attr_id,
+                    originating_router_ip, source_ip, group_ip, source_as, dqpn, label, nlri_encoding, mp_next_hop, attr_id,
                     created_at_ms, updated_at_ms
                 ) VALUES (
                     @instanceId, @routeKey, @prefix, @prefixLength, @rd, @pathId, @routeType,
-                    @originatingRouterIp, @sourceIp, @groupIp, @sourceAs, @dqpn, @label, @attrId,
+                    @originatingRouterIp, @sourceIp, @groupIp, @sourceAs, @dqpn, @label, @nlriEncoding, @mpNextHop, @attrId,
                     @now, @now
                 )
             `),
@@ -680,6 +945,8 @@ class BgpRouteSqliteStore {
                        source_as = @sourceAs,
                        dqpn = @dqpn,
                        label = @label,
+                       nlri_encoding = @nlriEncoding,
+                       mp_next_hop = @mpNextHop,
                        attr_id = @attrId,
                        updated_at_ms = @now
                  WHERE instance_id = @instanceId AND route_key = @routeKey
@@ -688,7 +955,7 @@ class BgpRouteSqliteStore {
                        OR path_id IS NOT @pathId OR route_type IS NOT @routeType
                        OR originating_router_ip IS NOT @originatingRouterIp OR source_ip IS NOT @sourceIp
                        OR group_ip IS NOT @groupIp OR source_as IS NOT @sourceAs OR dqpn IS NOT @dqpn
-                       OR label IS NOT @label OR attr_id IS NOT @attrId
+                       OR label IS NOT @label OR nlri_encoding IS NOT @nlriEncoding OR mp_next_hop IS NOT @mpNextHop OR attr_id IS NOT @attrId
                    )
             `),
             updateRouteAttribute: this.db.prepare(`
@@ -735,7 +1002,8 @@ class BgpRouteSqliteStore {
         if (!ROUTE_TABLE_NAMES.has(tableName)) {
             throw new Error(`Invalid BGP route SQLite table name: ${tableName}`);
         }
-        return `SELECT r.*, attr.attr_hash, attr.attr_json
+        const definition = ROUTE_TABLE_DEFINITIONS.find(entry => entry.tableName === tableName);
+        return `SELECT r.*, attr.attr_hash, attr.attr_json, ${definition.safi} AS route_safi
                   FROM ${tableName} r
                   JOIN bgp_route_attributes attr ON attr.attr_id = r.attr_id`;
     }
@@ -810,9 +1078,418 @@ class BgpRouteSqliteStore {
             sourceAs: route.sourceAs,
             dqpn: route.dqpn,
             label: route.label,
+            nlriEncoding: route.nlriEncoding,
+            mpNextHop: route.mpNextHop,
             attrId,
             now
         };
+    }
+
+    listRouteGroups() {
+        this.ensureOpen();
+        return this.db
+            .prepare(
+                `
+            SELECT group_id, group_name, address_family, route_count, generated_at_ms
+              FROM bgp_route_groups ORDER BY generated_at_ms, group_id
+        `
+            )
+            .all()
+            .map(row => ({
+                groupId: row.group_id,
+                groupName: row.group_name,
+                addressFamily: Number(row.address_family),
+                routeCount: Number(row.route_count),
+                generatedAt: Number(row.generated_at_ms)
+            }));
+    }
+
+    *iterateRouteGroupRoutes(groupId, options = {}) {
+        this.ensureOpen();
+        const id = normalizeRouteGroupId(groupId);
+        const group = this.db
+            .prepare(
+                `
+            SELECT instance.* FROM bgp_route_groups groups
+              JOIN bgp_route_instances instance ON instance.instance_id = groups.instance_id
+             WHERE groups.group_id = ?
+        `
+            )
+            .get(id);
+        if (!group) return;
+        const { tableName } = this.getRouteTableDefinition(group);
+        const statement = this.getDynamicStatement(`${tableName}:route-group-routes`, () =>
+            this.db.prepare(`
+            ${this.routeSelectSql(tableName)}
+             JOIN bgp_route_group_members member
+                ON member.instance_id = r.instance_id AND member.route_key = r.route_key
+             WHERE member.group_id = @groupId AND r.route_id > @afterRouteId ORDER BY r.route_id LIMIT @limit
+        `)
+        );
+        const limit = positiveInteger(options.batchSize, DEFAULT_ITERATION_BATCH_SIZE, MAX_ITERATION_BATCH_SIZE);
+        let afterRouteId = 0;
+        while (true) {
+            const rows = statement.all({ groupId: id, afterRouteId, limit });
+            if (rows.length === 0) return;
+            for (const row of rows) {
+                yield { ...this.mapRouteRow(row, options), instanceKey: group.instance_key };
+            }
+            afterRouteId = rows[rows.length - 1].route_id;
+        }
+    }
+
+    *iterateStagedGroupRows(tableName) {
+        if (!['bgp_route_group_candidates', 'bgp_route_group_old_snapshot'].includes(tableName))
+            throw new Error('Invalid route group staging table');
+        const statement = this.db.prepare(
+            `SELECT ordinal, route_key, route_json FROM ${tableName} WHERE ordinal > @afterOrdinal ORDER BY ordinal LIMIT @limit`
+        );
+        let afterOrdinal = -1;
+        while (true) {
+            const rows = statement.all({ afterOrdinal, limit: DEFAULT_ITERATION_BATCH_SIZE });
+            if (rows.length === 0) return;
+            yield* rows;
+            afterOrdinal = rows[rows.length - 1].ordinal;
+        }
+    }
+
+    getRouteGroupRoutes(groupId) {
+        return Array.from(this.iterateRouteGroupRoutes(groupId));
+    }
+
+    assertRouteOwnership(instance, routes) {
+        const definition = this.getRouteTableDefinition(instance);
+        const findKey = this.db.prepare(`
+            SELECT groups.group_id, groups.group_name FROM bgp_route_group_members member
+              JOIN bgp_route_groups groups ON groups.group_id = member.group_id
+             WHERE member.instance_id = @instanceId AND member.route_key = @routeKey LIMIT 1
+        `);
+        const findPrefix = this.db.prepare(`
+            SELECT groups.group_id, groups.group_name FROM bgp_route_group_members member
+              JOIN bgp_route_groups groups ON groups.group_id = member.group_id
+             WHERE member.instance_id = @instanceId AND member.normalized_rd = @rd
+               AND member.normalized_prefix = @prefix AND member.prefix_length = @prefixLength LIMIT 1
+        `);
+        for (const route of routes) {
+            const params = { instanceId: instance.instance_id, routeKey: route.routeKey };
+            let collision = findKey.get(params);
+            if (!collision) {
+                try {
+                    if ([BgpConst.BGP_SAFI_TYPE.SAFI_QP, BgpConst.BGP_SAFI_TYPE.SAFI_MVPN].includes(definition.safi)) {
+                        const normalized = normalizeManagedRoute(
+                            { route: { ...route, ip: route.prefix, mask: route.prefixLength }, attr: route.attr },
+                            definition
+                        );
+                        collision = findKey.get({
+                            instanceId: instance.instance_id,
+                            routeKey: managedRouteNlriIdentity(normalized, definition)
+                        });
+                    } else {
+                        collision = findPrefix.get({
+                            instanceId: instance.instance_id,
+                            ...canonicalRoutePrefix(route.prefix, route.prefixLength, instance.afi),
+                            rd: canonicalRouteRd(route.rd)
+                        });
+                    }
+                } catch (_error) {
+                    // Existing non-prefix families keep their legacy validation behavior.
+                }
+            }
+            if (collision)
+                throw new Error(
+                    `BGP route ${route.prefix === null ? route.routeKey : `${route.prefix}/${route.prefixLength}`} conflicts with route group ${collision.group_name} (${collision.group_id})`
+                );
+        }
+    }
+
+    syncRouteGroupMembership(instance) {
+        const { tableName } = this.getRouteTableDefinition(instance);
+        this.getDynamicStatement(`${tableName}:sync-route-group-members`, () =>
+            this.db.prepare(`
+            DELETE FROM bgp_route_group_members
+             WHERE instance_id = @instanceId AND NOT EXISTS (
+                 SELECT 1 FROM ${tableName} route
+                  WHERE route.instance_id = bgp_route_group_members.instance_id
+                    AND route.route_key = bgp_route_group_members.route_key
+             )
+        `)
+        ).run({ instanceId: instance.instance_id });
+        this.db
+            .prepare(
+                `
+            UPDATE bgp_route_groups SET route_count = (
+                SELECT COUNT(*) FROM bgp_route_group_members member WHERE member.group_id = bgp_route_groups.group_id
+            ) WHERE instance_id = ?
+        `
+            )
+            .run(instance.instance_id);
+        this.db
+            .prepare('DELETE FROM bgp_route_groups WHERE instance_id = ? AND route_count = 0')
+            .run(instance.instance_id);
+    }
+
+    replaceRouteGroup(groupId, options = {}) {
+        this.assertWritable();
+        const id = normalizeRouteGroupId(groupId);
+        const instanceKey = normalizeInstanceKey(options.instanceKey);
+        const definition = parseInstanceFamily(instanceKey);
+        if (Number(options.addressFamily) !== definition.addressFamily) {
+            throw new Error('BGP route group addressFamily does not match its instance');
+        }
+        if (!options.routes || typeof options.routes[Symbol.iterator] !== 'function') {
+            throw new Error('BGP route group routes must be iterable');
+        }
+        this.db.exec(`
+            CREATE TEMP TABLE IF NOT EXISTS bgp_route_group_candidates (
+                route_key TEXT PRIMARY KEY, ordinal INTEGER NOT NULL UNIQUE, route_json TEXT NOT NULL,
+                normalized_prefix TEXT NOT NULL, prefix_length INTEGER NOT NULL, normalized_rd TEXT NOT NULL,
+                nlri_key TEXT NOT NULL
+            ) WITHOUT ROWID;
+            CREATE INDEX IF NOT EXISTS idx_bgp_route_group_candidates_nlri
+                ON bgp_route_group_candidates(nlri_key);
+            CREATE TEMP TABLE IF NOT EXISTS bgp_route_group_old_snapshot (
+                route_key TEXT PRIMARY KEY, ordinal INTEGER NOT NULL UNIQUE, route_json TEXT NOT NULL
+            ) WITHOUT ROWID;
+        `);
+        const now = Date.now();
+        const transaction = this.db.transaction(() => {
+            this.db.prepare('DELETE FROM bgp_route_group_candidates').run();
+            this.db.prepare('DELETE FROM bgp_route_group_old_snapshot').run();
+            const stageCandidate = this.db.prepare(`
+                INSERT INTO bgp_route_group_candidates(route_key, ordinal, route_json, normalized_prefix, prefix_length, normalized_rd, nlri_key)
+                VALUES (@routeKey, @ordinal, @routeJson, @prefix, @prefixLength, @rd, @nlriKey)
+            `);
+            let routeCount = 0;
+            for (const input of options.routes) {
+                const route = normalizeManagedRoute(input, definition);
+                try {
+                    stageCandidate.run({
+                        routeKey: route.routeKey,
+                        ordinal: routeCount,
+                        routeJson: JSON.stringify(route),
+                        ...managedRouteMembership(route, definition),
+                        nlriKey: managedRouteNlriIdentity(route, definition)
+                    });
+                } catch (error) {
+                    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY')
+                        throw new Error(`BGP route group has duplicate route key ${route.routeKey}`);
+                    throw error;
+                }
+                routeCount += 1;
+            }
+            // Candidate generation and validation finish before changing any real route or ownership.
+            const instance = this.ensureInstance(instanceKey, now);
+            const { tableName } = definition;
+            const existing = this.db.prepare(`
+                SELECT r.*, member.group_id, groups.group_name
+                  FROM ${tableName} r
+                  LEFT JOIN bgp_route_group_members member ON member.instance_id = r.instance_id AND member.route_key = r.route_key
+                  LEFT JOIN bgp_route_groups groups ON groups.group_id = member.group_id
+                 WHERE r.instance_id = @instanceId AND (member.group_id IS NULL OR member.group_id != @groupId)
+            `);
+            const collisionKey = this.db.prepare(
+                'SELECT normalized_prefix, prefix_length FROM bgp_route_group_candidates WHERE route_key = ? LIMIT 1'
+            );
+            const collisionNlri = this.db.prepare(`
+                SELECT normalized_prefix, prefix_length FROM bgp_route_group_candidates
+                 WHERE nlri_key = ? LIMIT 1
+            `);
+            for (const row of existing.iterate({ instanceId: instance.instance_id, groupId: id })) {
+                let collision = collisionKey.get(row.route_key);
+                if (!collision) {
+                    try {
+                        const route = {
+                            prefix: row.prefix,
+                            prefixLength: row.prefix_length,
+                            rd: row.rd,
+                            routeType: row.route_type,
+                            sourceAs: row.source_as,
+                            sourceIp: row.source_ip,
+                            groupIp: row.group_ip,
+                            originatingRouterIp: row.originating_router_ip,
+                            dqpn: row.dqpn,
+                            leafRouteKey: BgpRoute.parseMvpnLeafRouteKey(row.route_key)
+                        };
+                        collision = collisionNlri.get(managedRouteNlriIdentity(route, definition));
+                    } catch (_error) {
+                        // Non-prefix legacy NLRIs are protected by their exact key above.
+                    }
+                }
+                if (collision) {
+                    const owner = row.group_id
+                        ? `route group ${row.group_name} (${row.group_id})`
+                        : 'an existing legacy route';
+                    throw new Error(
+                        `BGP route ${collision.prefix_length < 0 ? collision.normalized_prefix : `${collision.normalized_prefix}/${collision.prefix_length}`} conflicts with ${owner}`
+                    );
+                }
+            }
+            const oldRoutes = [];
+            const withdrawnRoutes = [];
+            const stageOld = this.db.prepare(
+                'INSERT INTO bgp_route_group_old_snapshot(route_key, ordinal, route_json) VALUES (?, ?, ?)'
+            );
+            let oldOrdinal = 0;
+            for (const route of this.iterateRouteGroupRoutes(id, { includeAttr: options.includeOldRoutes !== false })) {
+                stageOld.run(route.routeKey, oldOrdinal, JSON.stringify(route));
+                oldOrdinal += 1;
+                if (options.includeOldRoutes !== false) oldRoutes.push(route);
+            }
+            let inserted = 0;
+            let updated = 0;
+            let unchanged = 0;
+            let deleted = 0;
+            const deltas = new Map();
+            const addDelta = (target, countDelta, changes) => {
+                const delta = deltas.get(target.instance_id) || { instance: target, countDelta: 0, changes: 0 };
+                delta.countDelta += countDelta;
+                delta.changes += changes;
+                deltas.set(target.instance_id, delta);
+            };
+            const candidateByKey = this.db.prepare(
+                'SELECT route_json FROM bgp_route_group_candidates WHERE route_key = ?'
+            );
+            for (const row of this.iterateStagedGroupRows('bgp_route_group_old_snapshot')) {
+                const oldRoute = JSON.parse(row.route_json);
+                const candidate = oldRoute.instanceKey === instanceKey ? candidateByKey.get(oldRoute.routeKey) : null;
+                const newRoute = candidate ? JSON.parse(candidate.route_json) : null;
+                if (
+                    !newRoute ||
+                    (oldRoute.nlriEncoding ?? null) !== newRoute.nlriEncoding ||
+                    (oldRoute.mpNextHop ?? null) !== newRoute.mpNextHop ||
+                    (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
+                        (oldRoute.label === null) !== (newRoute.label === null))
+                ) {
+                    const { routeAttr: _routeAttr, ...withdrawnRoute } = oldRoute;
+                    ATTRIBUTE_FIELDS.forEach(field => delete withdrawnRoute[field]);
+                    if (newRoute) withdrawnRoute.forceWithdraw = true;
+                    withdrawnRoutes.push(withdrawnRoute);
+                }
+                if (newRoute) continue;
+                const oldInstance = this.getInstance(oldRoute.instanceKey);
+                const oldStatements = this.getRouteStatements(oldInstance);
+                const params = { instanceId: oldInstance.instance_id, routeKey: oldRoute.routeKey };
+                oldStatements.rememberRouteAttribute.run(params);
+                const removed = oldStatements.deleteRoute.run(params).changes;
+                deleted += removed;
+                addDelta(oldInstance, -removed, removed);
+            }
+            this.db.prepare('DELETE FROM bgp_route_group_members WHERE group_id = ?').run(id);
+            this.db
+                .prepare(
+                    `
+                INSERT INTO bgp_route_groups(group_id, group_name, address_family, instance_id, route_count, generated_at_ms)
+                VALUES (@groupId, @groupName, @addressFamily, @instanceId, @routeCount, @generatedAt)
+                ON CONFLICT(group_id) DO UPDATE SET
+                    group_name = excluded.group_name, address_family = excluded.address_family,
+                    instance_id = excluded.instance_id, route_count = excluded.route_count,
+                    generated_at_ms = excluded.generated_at_ms
+            `
+                )
+                .run({
+                    groupId: id,
+                    groupName: String(options.groupName ?? id),
+                    addressFamily: definition.addressFamily,
+                    instanceId: instance.instance_id,
+                    routeCount,
+                    generatedAt: now
+                });
+            const memberStatement = this.db.prepare(`
+                INSERT INTO bgp_route_group_members(group_id, instance_id, route_key, normalized_prefix, prefix_length, normalized_rd)
+                VALUES (?, ?, ?, ?, ?, ?)
+            `);
+            const routeStatements = this.getRouteStatements(instance);
+            const attrCache = new Map();
+            for (const row of this.iterateStagedGroupRows('bgp_route_group_candidates')) {
+                const route = JSON.parse(row.route_json);
+                if (attrCache.size >= DEFAULT_ITERATION_BATCH_SIZE) attrCache.clear();
+                const attrId = this.resolveAttribute(route.attr, attrCache);
+                const params = this.buildRouteParams(instance.instance_id, route, attrId, now);
+                if (routeStatements.insertRoute.run(params).changes > 0) inserted += 1;
+                else {
+                    if (!routeStatements.hasRoute.get({ instanceId: instance.instance_id, routeKey: route.routeKey })) {
+                        throw new Error(`BGP route group insertion failed for ${route.routeKey}`);
+                    }
+                    routeStatements.rememberRouteAttribute.run({
+                        instanceId: instance.instance_id,
+                        routeKey: route.routeKey
+                    });
+                    if (routeStatements.updateRoute.run(params).changes > 0) updated += 1;
+                    else unchanged += 1;
+                }
+                const membership = managedRouteMembership(route, definition);
+                memberStatement.run(
+                    id,
+                    instance.instance_id,
+                    route.routeKey,
+                    membership.prefix,
+                    membership.prefixLength,
+                    membership.rd
+                );
+            }
+            addDelta(instance, inserted, inserted + updated);
+            for (const delta of deltas.values()) {
+                this.statements.updateInstance.run({
+                    instanceId: delta.instance.instance_id,
+                    countDelta: delta.countDelta,
+                    revisionDelta: delta.changes > 0 ? 1 : 0,
+                    now
+                });
+                this.syncRouteGroupMembership(delta.instance);
+            }
+            this.cleanupOrphanCandidates();
+            this.db.prepare('DELETE FROM bgp_route_group_candidates').run();
+            this.db.prepare('DELETE FROM bgp_route_group_old_snapshot').run();
+            return {
+                inserted,
+                updated,
+                unchanged,
+                changed: inserted + updated + deleted,
+                deleted,
+                oldRoutes,
+                withdrawnRoutes
+            };
+        });
+        try {
+            return transaction.immediate();
+        } catch (error) {
+            this.instances.clear();
+            throw error;
+        }
+    }
+
+    withdrawRouteGroup(groupId) {
+        this.assertWritable();
+        const id = normalizeRouteGroupId(groupId);
+        return this.db
+            .transaction(() => {
+                const routes = this.getRouteGroupRoutes(id);
+                let deleted = 0;
+                const instances = new Map();
+                for (const route of routes) {
+                    const instance = this.getInstance(route.instanceKey);
+                    const statements = this.getRouteStatements(instance);
+                    const params = { instanceId: instance.instance_id, routeKey: route.routeKey };
+                    statements.rememberRouteAttribute.run(params);
+                    const removed = statements.deleteRoute.run(params).changes;
+                    deleted += removed;
+                    const delta = instances.get(instance.instance_id) || { instance, deleted: 0 };
+                    delta.deleted += removed;
+                    instances.set(instance.instance_id, delta);
+                }
+                this.db.prepare('DELETE FROM bgp_route_groups WHERE group_id = ?').run(id);
+                for (const delta of instances.values()) {
+                    this.statements.updateInstance.run({
+                        instanceId: delta.instance.instance_id,
+                        countDelta: -delta.deleted,
+                        revisionDelta: delta.deleted > 0 ? 1 : 0,
+                        now: Date.now()
+                    });
+                }
+                this.cleanupOrphanCandidates();
+                return { deleted, routes };
+            })
+            .immediate();
     }
 
     applyBatch(batch = {}) {
@@ -829,6 +1506,13 @@ class BgpRouteSqliteStore {
             const instance = this.ensureInstance(instanceKey, now);
             const instanceId = instance.instance_id;
             const routeStatements = this.getRouteStatements(instance);
+            const normalizedUpserts = upserts.map(input => {
+                const wrapperAttr = input && input.route && typeof input.route === 'object' ? input.attr : undefined;
+                return normalizeRouteInput(input, {
+                    attr: wrapperAttr === undefined ? (batch.attr ?? batch.routeAttr) : wrapperAttr
+                });
+            });
+            this.assertRouteOwnership(instance, normalizedUpserts);
             const attrCache = new Map();
             let inserted = 0;
             let updated = 0;
@@ -844,11 +1528,7 @@ class BgpRouteSqliteStore {
                 routeStatements.rememberRouteAttribute.run({ instanceId, routeKey });
                 deleted += routeStatements.deleteRoute.run({ instanceId, routeKey }).changes;
             });
-            upserts.forEach(input => {
-                const wrapperAttr = input && input.route && typeof input.route === 'object' ? input.attr : undefined;
-                const route = normalizeRouteInput(input, {
-                    attr: wrapperAttr === undefined ? (batch.attr ?? batch.routeAttr) : wrapperAttr
-                });
+            normalizedUpserts.forEach(route => {
                 const attrId = this.resolveAttribute(route.attr, attrCache);
                 const params = this.buildRouteParams(instanceId, route, attrId, now);
                 const insertResult = routeStatements.insertRoute.run(params);
@@ -875,6 +1555,7 @@ class BgpRouteSqliteStore {
                 revisionDelta: changed > 0 ? 1 : 0,
                 now
             });
+            this.syncRouteGroupMembership(instance);
             this.cleanupOrphanCandidates();
             const stats = this.statements.findInstance.get({ instanceKey });
             return {
@@ -935,6 +1616,7 @@ class BgpRouteSqliteStore {
             if (!instance) {
                 return false;
             }
+            this.assertRouteOwnership(instance, [{ routeKey: String(routeKey) }]);
             const routeStatements = this.getRouteStatements(instance);
             routeStatements.rememberRouteAttribute.run({
                 instanceId: instance.instance_id,
@@ -998,6 +1680,7 @@ class BgpRouteSqliteStore {
         return this.db.transaction(() => {
             rememberAttributes.run(params);
             const deleted = statement.run(params).changes;
+            this.syncRouteGroupMembership(instance);
             this.statements.updateInstance.run({
                 instanceId: instance.instance_id,
                 countDelta: -deleted,
@@ -1119,14 +1802,31 @@ class BgpRouteSqliteStore {
             ['groupIp', row.group_ip],
             ['sourceAs', row.source_as],
             ['dqpn', row.dqpn],
-            ['label', row.label]
+            ['label', row.label],
+            ['nlriEncoding', row.nlri_encoding],
+            ['mpNextHop', row.mp_next_hop]
         ];
         fields.forEach(([name, value]) => {
             if (value !== null && value !== undefined) {
                 route[name] = value;
             }
         });
-        if (row.route_type === null && row.dqpn === null && row.label === null && row.rd !== null) {
+        if (row.mp_next_hop === null && attr.attributePolicy === 'configured') route.mpNextHop = null;
+        if (row.route_safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP && row.dqpn === null) route.dqpn = null;
+        const leafRouteKey = BgpRoute.parseMvpnLeafRouteKey(row.route_key);
+        if (leafRouteKey) route.leafRouteKey = leafRouteKey;
+        if (
+            row.route_safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
+            row.label === null &&
+            attr.attributePolicy === 'configured'
+        )
+            route.label = null;
+        if (
+            row.route_type === null &&
+            row.dqpn === null &&
+            row.route_safi !== BgpConst.BGP_SAFI_TYPE.SAFI_QP &&
+            (row.route_safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST || row.label !== null || row.rd !== null)
+        ) {
             route.pathId = row.path_id;
         }
         if (options.includeAttr === false) {

@@ -1,6 +1,12 @@
 const { fork } = require('node:child_process');
 const { EventEmitter } = require('node:events');
 const logger = require('../../log/logger');
+const {
+    PROTOCOL_PROCESS_IPC_CODEC,
+    PROTOCOL_PROCESS_IPC_CODEC_ENV,
+    encodeProtocolProcessMessage,
+    decodeProtocolProcessMessage
+} = require('./protocolProcessSerialization');
 
 const DEFAULT_FORCE_KILL_TIMEOUT_MS = 3000;
 const TERMINATION_TIMEOUT_MULTIPLIER = 2;
@@ -30,6 +36,7 @@ class ProtocolProcessHost extends EventEmitter {
         this.forceKillTimeoutMs = Math.max(250, Number(options.forceKillTimeoutMs) || DEFAULT_FORCE_KILL_TIMEOUT_MS);
         this.runtime = null;
         this.runtimeKind = '';
+        this.jsonIpc = false;
         this.lastPid = null;
         this.exitCode = null;
         this.exitSignal = null;
@@ -53,6 +60,9 @@ class ProtocolProcessHost extends EventEmitter {
             ...process.env,
             NETNEXUS_PROTOCOL_SERVICE: this.serviceName
         };
+        // A nested host chooses its own transport rather than inheriting the
+        // outer fork's codec into a utility process or a plain Node fork.
+        delete environment[PROTOCOL_PROCESS_IPC_CODEC_ENV];
 
         if (utilityProcess && typeof utilityProcess.fork === 'function') {
             this.runtimeKind = 'utility-process';
@@ -66,12 +76,14 @@ class ProtocolProcessHost extends EventEmitter {
             this.runtimeKind = 'child-process';
             if (process.versions.electron) {
                 environment.ELECTRON_RUN_AS_NODE = '1';
+                environment[PROTOCOL_PROCESS_IPC_CODEC_ENV] = PROTOCOL_PROCESS_IPC_CODEC;
+                this.jsonIpc = true;
             }
             this.runtime = fork(this.modulePath, [], {
                 cwd: options.cwd || process.cwd(),
                 env: environment,
                 execArgv: Array.isArray(options.execArgv) ? options.execArgv : undefined,
-                serialization: 'advanced',
+                serialization: this.jsonIpc ? 'json' : 'advanced',
                 stdio: ['ignore', 'pipe', 'pipe', 'ipc']
             });
         }
@@ -105,7 +117,20 @@ class ProtocolProcessHost extends EventEmitter {
     }
 
     forwardRuntimeEvents(runtime) {
-        runtime.on('message', message => this.emit('message', message));
+        runtime.on('message', message => {
+            if (!this.jsonIpc) {
+                this.emit('message', message);
+                return;
+            }
+            let decoded;
+            try {
+                decoded = decodeProtocolProcessMessage(message);
+            } catch (error) {
+                this.emit('error', error);
+                return;
+            }
+            this.emit('message', decoded);
+        });
         runtime.on('spawn', () => {
             this.lastPid = runtime.pid || this.lastPid;
             this.emit('spawn');
@@ -144,7 +169,7 @@ class ProtocolProcessHost extends EventEmitter {
             return;
         }
 
-        this.runtime.send(message, error => {
+        this.runtime.send(this.jsonIpc ? encodeProtocolProcessMessage(message) : message, error => {
             if (error && !this.terminating) {
                 this.emit('error', error);
             }

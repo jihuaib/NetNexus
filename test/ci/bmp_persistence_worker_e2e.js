@@ -41,6 +41,11 @@ function createRequester(worker) {
         pending.forEach(callback => callback.reject(error));
         pending.clear();
     });
+    worker.on('exit', (code, signal) => {
+        const error = new Error(`BMP protocol process exited with code ${code}${signal ? ` (${signal})` : ''}`);
+        pending.forEach(callback => callback.reject(error));
+        pending.clear();
+    });
     return (op, data = null) => {
         sequence += 1;
         const messageId = `bmp-persistence-e2e-${sequence}`;
@@ -80,12 +85,13 @@ function sendScenario(port, messages, options = {}) {
     });
 }
 
-async function waitForRoutes(request, minimum = 1, predicate = () => true) {
+async function waitForRoutes(request, minimum = 1, predicate = () => true, query = {}) {
     const deadline = Date.now() + 10000;
     while (Date.now() < deadline) {
         const response = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
             routeState: 'all',
-            pageSize: 5000
+            pageSize: 5000,
+            ...query
         });
         if (response.data.total >= minimum && predicate(response.data.list)) {
             return response;
@@ -103,23 +109,26 @@ function withTimeout(promise, timeoutMs, message) {
     return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeout));
 }
 
-async function main() {
+async function main(testOptions = {}) {
+    const rounds = Math.max(1, Number(testOptions.rounds) || 1);
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-worker-e2e-'));
     const dbPath = path.join(tempDir, 'bmp.sqlite3');
     const port = await getFreePort();
     const worker = new ProtocolProcessHost(
         path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js'),
-        { serviceName: PROTOCOL_PROCESS_SERVICES.BMP }
+        { serviceName: PROTOCOL_PROCESS_SERVICES.BMP, utilityProcess: testOptions.utilityProcess }
     );
     assert.notEqual(worker.pid, process.pid, 'BMP must run in an independent process');
-    if (process.env.NETNEXUS_EXPECT_UTILITY_PROCESS === '1') {
+    if (testOptions.expectedRuntimeKind) {
+        assert.equal(worker.runtimeKind, testOptions.expectedRuntimeKind);
+    } else if (process.env.NETNEXUS_EXPECT_UTILITY_PROCESS === '1') {
         assert.equal(worker.runtimeKind, 'utility-process');
     }
     const request = createRequester(worker);
     let offlineClient;
     let bmpSocket;
     try {
-        await request(BmpConst.BMP_REQ_TYPES.START_BMP, {
+        const startConfiguration = {
             port,
             bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20,
             pathMarkingTlvType: BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.PATH_MARKING,
@@ -129,7 +138,8 @@ async function main() {
             persistenceFlushMs: 5,
             persistenceHighWatermarkBytes: 4 * 1024 * 1024,
             persistenceLowWatermarkBytes: 2 * 1024 * 1024
-        });
+        };
+        await request(BmpConst.BMP_REQ_TYPES.START_BMP, startConfiguration);
 
         const options = parseArgs([
             '--host',
@@ -249,6 +259,18 @@ async function main() {
         });
         assert.ok(instanceRoutes.data.total > 0);
 
+        let minimumActiveRoutes = 0;
+        let previousConnectionId = client.persistentConnectionId || client.connectionId;
+        if (rounds > 1) {
+            assert.ok(previousConnectionId, 'restart regression must retain the first connection identity');
+            const active = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
+                routeState: 'active',
+                pageSize: 5000
+            });
+            minimumActiveRoutes = active.data.total;
+            assert.ok(minimumActiveRoutes > 0);
+        }
+
         const bmpSocketClosed = new Promise(resolve => bmpSocket.once('close', resolve));
         await withTimeout(
             request(BmpConst.BMP_REQ_TYPES.STOP_BMP),
@@ -259,16 +281,68 @@ async function main() {
         assert.equal(bmpSocket.destroyed, true);
         bmpSocket = null;
 
-        await worker.terminate();
+        for (let round = 1; round < rounds; round += 1) {
+            await request(BmpConst.BMP_REQ_TYPES.START_BMP, startConfiguration);
+            bmpSocket = await sendScenario(port, buildScenario(options), { keepOpen: true });
+            const refreshed = await waitForRoutes(
+                request,
+                minimumActiveRoutes,
+                routes => routes.every(route => route.persistentConnectionId !== previousConnectionId),
+                { routeState: 'active' }
+            );
+            assert.equal(
+                refreshed.data.list.every(route => route.routeState === 'active'),
+                true,
+                'a restart must wait for newly refreshed routes, not satisfy its check from the previous stale RIB'
+            );
+            const refreshedClients = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST);
+            assert.equal(refreshedClients.data.length, 1);
+            const refreshedClient = refreshedClients.data[0];
+            const nextConnectionId = refreshedClient.persistentConnectionId || refreshedClient.connectionId;
+            assert.equal(refreshedClient.persistentSourceId, client.persistentSourceId);
+            assert.equal(refreshedClient.isOnline, true);
+            assert.ok(nextConnectionId);
+            assert.notEqual(nextConnectionId, previousConnectionId);
+            previousConnectionId = nextConnectionId;
+            const ready = await request(BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED, {
+                enabled: true,
+                filters: { routeState: 'all' }
+            });
+            assert.equal(ready.data.state, 'ready');
+            const rescanned = await request(BmpConst.BMP_REQ_TYPES.GET_ROUTE_ASSURANCE, {
+                routeState: 'all',
+                page: 1,
+                pageSize: 10
+            });
+            assert.ok(rescanned.data.summary.scannedPathCount > 0);
+            await request(BmpConst.BMP_REQ_TYPES.SET_ROUTE_ASSURANCE_ENABLED, { enabled: false });
+            const roundSocketClosed = new Promise(resolve => bmpSocket.once('close', resolve));
+            await withTimeout(
+                request(BmpConst.BMP_REQ_TYPES.STOP_BMP),
+                5000,
+                `timed out stopping BMP round ${round + 1}`
+            );
+            await withTimeout(roundSocketClosed, 2000, `BMP round ${round + 1} did not close its active connection`);
+            assert.equal(bmpSocket.destroyed, true);
+            bmpSocket = null;
+        }
 
-        offlineClient = new BmpPersistenceClient({ dbPath, readOnly: true });
+        await worker.terminate();
+        if (testOptions.assertCleanExit) {
+            assert.equal(worker.exitSignal, null, 'Node-fork BMP must not exit through SIGTRAP or another signal');
+            assert.equal(worker.exitCode, 0, 'Node-fork BMP must exit cleanly after all SQLite workers close');
+        }
+
+        offlineClient = new BmpPersistenceClient({ dbPath, readOnly: true, partitionByClient: true });
         await offlineClient.open();
         const offlineRoutes = await offlineClient.queryRoutes({ routeState: 'all', pageSize: 5000 });
         assert.equal(offlineRoutes.total, persistedTotal);
         await offlineClient.close();
         offlineClient = null;
 
-        console.log(`BMP worker persistence E2E passed: routes=${persistedTotal}`);
+        console.log(
+            `BMP worker persistence E2E passed: routes=${persistedTotal}${rounds > 1 ? `, rounds=${rounds}, runtime=${worker.runtimeKind}` : ''}`
+        );
     } finally {
         bmpSocket?.destroy();
         await offlineClient?.close().catch(() => {});

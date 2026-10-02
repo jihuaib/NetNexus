@@ -10,8 +10,30 @@ const {
 // Per-owner cache of the immutable part of a scope descriptor (key, identity,
 // peer columns); only epoch/state/reason vary per mutation.
 const SCOPE_DESCRIPTOR_CACHE = new WeakMap();
-// Per-attribute-object cache of the canonical JSON + hash. Routes announced in
-// one UPDATE share the attribute object, so one hash serves the whole batch.
+// Keep transport DTOs outside Session snapshots. A queued mutation retains
+// its frozen descriptor even when the live connection metadata later changes.
+const SOURCE_DTO_CACHE = new WeakMap();
+const CONNECTION_DTO_CACHE = new WeakMap();
+const SOURCE_FIELDS = ['remoteIp', 'sysName', 'sysDesc'];
+const SOURCE_METADATA_FIELDS = [
+    'bmpVersion',
+    'bmpV4TlvDraft',
+    'transport',
+    'authentication',
+    'authProfileId',
+    'authProfileName',
+    'authPeer',
+    'tcpAoProfileId',
+    'tcpAoProfileName',
+    'tcpAoPeer',
+    'tcpMd5ProfileId',
+    'tcpMd5ProfileName',
+    'tcpMd5Peer'
+];
+const SOURCE_METADATA_DEFAULTS = { transport: 'tcp', authentication: 'none' };
+// Per-immutable-attribute-object cache of the canonical JSON + hash. Parser
+// routes in one UPDATE/family share that object; mutable public attributes
+// continue through their normal fresh snapshot instead of a stale cache key.
 const ATTR_OBJECT_CACHE = new WeakMap();
 const ATTR_ID_CACHE = new Map();
 const ATTR_ID_CACHE_LIMIT = 50_000;
@@ -114,7 +136,7 @@ function buildRoutePayload(route) {
 }
 
 function resolveRouteAttrIdentity(route, owner) {
-    const attr = route?.getRouteAttr?.() || owner?.getRouteAttr?.(route) || null;
+    const attr = route?.getImmutableRouteAttr?.() || route?.getRouteAttr?.() || owner?.getRouteAttr?.(route) || null;
     if (!attr) {
         return { attrId: null, attrJson: null };
     }
@@ -188,6 +210,16 @@ function makeConnectionId() {
     return crypto.randomBytes(16).toString('hex');
 }
 
+// Allocate these in the coordinator before dispatching a connection to its
+// parser. Worker-local counters cannot order reconnects across parser slots.
+function allocatePersistenceConnection() {
+    return {
+        persistenceConnectionId: makeConnectionId(),
+        persistenceOpenedAtMs: Date.now(),
+        persistenceConnectionGeneration: nextConnectionGeneration()
+    };
+}
+
 function ensurePersistenceContext(bmpSession) {
     if (!bmpSession.persistenceConnectionId) {
         bmpSession.persistenceConnectionId = makeConnectionId();
@@ -219,60 +251,117 @@ function nextSequence(bmpSession) {
 function buildSource(bmpSession) {
     ensurePersistenceContext(bmpSession);
     const key = bmpSession.persistenceSourceKey;
-    // The key/identity JSON never changes for a session; build it once.
-    let sourceDescriptor = bmpSession.persistenceSourceDescriptor;
-    if (!sourceDescriptor || sourceDescriptor.id !== key.keyHex) {
-        sourceDescriptor = {
-            id: key.keyHex,
-            keyJson: stringify({
-                schemaVersion: key.schemaVersion,
-                algorithm: key.algorithm,
-                keyHex: key.keyHex
-            }),
-            identityJson: canonicalStringify(key.canonicalIdentity)
-        };
-        bmpSession.persistenceSourceDescriptor = sourceDescriptor;
-    }
-    return {
-        id: sourceDescriptor.id,
-        keyJson: sourceDescriptor.keyJson,
-        identityJson: sourceDescriptor.identityJson,
-        remoteIp: bmpSession.remoteIp || null,
-        sysName: bmpSession.sysName || null,
-        sysDesc: bmpSession.sysDesc || null,
-        metadata: {
-            bmpVersion: bmpSession.bmpVersion || null,
-            bmpV4TlvDraft: bmpSession.getBmpV4TlvDraft?.() || null,
-            transport: bmpSession.transport || 'tcp',
-            authentication: bmpSession.authentication || 'none',
-            authProfileId: bmpSession.authProfileId || null,
-            authProfileName: bmpSession.authProfileName || null,
-            authPeer: bmpSession.authPeer || null,
-            tcpAoProfileId: bmpSession.tcpAoProfileId || null,
-            tcpAoProfileName: bmpSession.tcpAoProfileName || null,
-            tcpAoPeer: bmpSession.tcpAoPeer || null,
-            tcpMd5ProfileId: bmpSession.tcpMd5ProfileId || null,
-            tcpMd5ProfileName: bmpSession.tcpMd5ProfileName || null,
-            tcpMd5Peer: bmpSession.tcpMd5Peer || null
+    const draft = bmpSession.getBmpV4TlvDraft?.() || null;
+    const cached = SOURCE_DTO_CACHE.get(bmpSession);
+    let reusable = cached?.source.id === key.keyHex;
+    if (reusable) {
+        for (const field of SOURCE_FIELDS) {
+            if (!sameDescriptorValue(bmpSession[field] || null, cached.source[field], cached.tokens[field])) {
+                reusable = false;
+                break;
+            }
         }
+    }
+    if (reusable) {
+        for (const field of SOURCE_METADATA_FIELDS) {
+            const value =
+                field === 'bmpV4TlvDraft' ? draft : bmpSession[field] || SOURCE_METADATA_DEFAULTS[field] || null;
+            if (!sameDescriptorValue(value, cached.source.metadata[field], cached.tokens[field])) {
+                reusable = false;
+                break;
+            }
+        }
+    }
+    if (reusable) return cached.source;
+
+    const tokens = {};
+    const source = {
+        id: key.keyHex,
+        keyJson:
+            cached?.source.id === key.keyHex
+                ? cached.source.keyJson
+                : stringify({
+                      schemaVersion: key.schemaVersion,
+                      algorithm: key.algorithm,
+                      keyHex: key.keyHex
+                  }),
+        identityJson:
+            cached?.source.id === key.keyHex ? cached.source.identityJson : canonicalStringify(key.canonicalIdentity)
     };
+    for (const field of SOURCE_FIELDS) {
+        source[field] = snapshotDescriptorValue(bmpSession[field] || null, tokens, field);
+    }
+    const metadata = {};
+    for (const field of SOURCE_METADATA_FIELDS) {
+        const value = field === 'bmpV4TlvDraft' ? draft : bmpSession[field] || SOURCE_METADATA_DEFAULTS[field] || null;
+        metadata[field] = snapshotDescriptorValue(value, tokens, field);
+    }
+    source.metadata = Object.freeze(metadata);
+    Object.freeze(source);
+    SOURCE_DTO_CACHE.set(bmpSession, { source, tokens });
+    return source;
+}
+
+function sameDescriptorValue(value, snapshot, token) {
+    // Runtime authentication metadata is scalar. Retain correct snapshots for
+    // public callers that supply and subsequently mutate structured metadata.
+    return value && typeof value === 'object' ? stringify(value) === token : value === snapshot;
+}
+
+function snapshotDescriptorValue(value, tokens, field) {
+    if (!value || typeof value !== 'object') return value;
+    const token = stringify(value);
+    tokens[field] = token;
+    const snapshot = JSON.parse(token);
+    const freeze = item => {
+        if (item && typeof item === 'object') {
+            for (const value of Object.values(item)) freeze(value);
+            Object.freeze(item);
+        }
+        return item;
+    };
+    return freeze(snapshot);
 }
 
 function buildConnection(bmpSession) {
     ensurePersistenceContext(bmpSession);
-    return {
+    const cached = CONNECTION_DTO_CACHE.get(bmpSession);
+    if (
+        cached &&
+        cached.id === bmpSession.persistenceConnectionId &&
+        cached.sourceId === bmpSession.persistenceSourceKey.keyHex &&
+        cached.localIp === (bmpSession.localIp || null) &&
+        cached.localPort === (bmpSession.localPort || null) &&
+        cached.remoteIp === (bmpSession.remoteIp || null) &&
+        cached.remotePort === (bmpSession.remotePort || null) &&
+        cached.openedAtMs === bmpSession.persistenceOpenedAtMs &&
+        cached.generation === bmpSession.persistenceConnectionGeneration
+    )
+        return cached;
+    const connection = Object.freeze({
         id: bmpSession.persistenceConnectionId,
+        sourceId: bmpSession.persistenceSourceKey.keyHex,
         localIp: bmpSession.localIp || null,
         localPort: bmpSession.localPort || null,
         remoteIp: bmpSession.remoteIp || null,
         remotePort: bmpSession.remotePort || null,
         openedAtMs: bmpSession.persistenceOpenedAtMs,
         generation: bmpSession.persistenceConnectionGeneration
-    };
+    });
+    CONNECTION_DTO_CACHE.set(bmpSession, connection);
+    return connection;
 }
 
-function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
-    const source = buildSource(bmpSession);
+function buildScope(
+    bmpSession,
+    owner,
+    afi,
+    safi,
+    ribType,
+    options = {},
+    source = buildSource(bmpSession),
+    stateOverride
+) {
     if (options.kind !== 'peer' && options.kind !== 'loc-rib') {
         throw new Error(`Unsupported BMP route scope kind: ${options.kind}`);
     }
@@ -289,13 +378,16 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
         descriptors = new Map();
         SCOPE_DESCRIPTOR_CACHE.set(owner, descriptors);
     }
-    let descriptor = descriptors.get(descriptorKey);
+    let cached = descriptors.get(descriptorKey);
+    let descriptor = cached?.descriptor;
     // Peer identity fields live on the owner and can in principle be
     // re-assigned; validate the cached descriptor against them cheaply.
     if (
         descriptor &&
         (descriptor.sourceId !== source.id ||
+            descriptor.kind !== options.kind ||
             descriptor.peerType !== peerType ||
+            descriptor.peerRd !== peerRd ||
             descriptor.peerRdIdentity !== peerRdIdentity ||
             descriptor.peerIp !== (peerIp || null) ||
             descriptor.peerAs !== peerAs)
@@ -314,7 +406,7 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
             safi,
             ribType: stage
         });
-        descriptor = {
+        descriptor = Object.freeze({
             sourceId: source.id,
             peerRdIdentity,
             id: key.keyHex,
@@ -335,11 +427,26 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
             afi: Number(afi),
             safi: Number(safi),
             ribType: String(stage)
-        };
-        descriptors.set(descriptorKey, descriptor);
+        });
+        cached = { descriptor, scope: null };
+        descriptors.set(descriptorKey, cached);
     }
-    return {
+    const vrfName = Array.isArray(owner.vrfTableNames) ? owner.vrfTableNames[0] || null : null;
+    const epoch = isInstance ? owner.getRibEpoch() : owner.getRibEpoch(afi, safi, ribType);
+    const state = stateOverride === undefined ? options.state || 'syncing' : stateOverride;
+    const reason = options.reason || null;
+    if (
+        cached.scope &&
+        cached.scope.vrfName === vrfName &&
+        cached.scope.epoch === epoch &&
+        cached.scope.state === state &&
+        cached.scope.reason === reason
+    ) {
+        return cached.scope;
+    }
+    const scope = Object.freeze({
         id: descriptor.id,
+        sourceId: descriptor.sourceId,
         keyJson: descriptor.keyJson,
         identityJson: descriptor.identityJson,
         kind: descriptor.kind,
@@ -351,11 +458,13 @@ function buildScope(bmpSession, owner, afi, safi, ribType, options = {}) {
         afi: descriptor.afi,
         safi: descriptor.safi,
         ribType: descriptor.ribType,
-        vrfName: Array.isArray(owner.vrfTableNames) ? owner.vrfTableNames[0] || null : null,
-        epoch: isInstance ? owner.getRibEpoch() : owner.getRibEpoch(afi, safi, ribType),
-        state: options.state || 'syncing',
-        reason: options.reason || null
-    };
+        vrfName,
+        epoch,
+        state,
+        reason
+    });
+    cached.scope = scope;
+    return scope;
 }
 
 // Plain IP prefixes carry an NLRI detail that only repeats the identity
@@ -533,9 +642,9 @@ function buildConnectionMutation(bmpSession, eventType, options = {}) {
     return buildBaseMutation(bmpSession, eventType, options);
 }
 
-function buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, options = {}) {
+function buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, options = {}, stateOverride) {
     const mutation = buildBaseMutation(bmpSession, eventType, options);
-    mutation.scope = buildScope(bmpSession, owner, afi, safi, ribType, options);
+    mutation.scope = buildScope(bmpSession, owner, afi, safi, ribType, options, mutation.source, stateOverride);
     return mutation;
 }
 
@@ -545,8 +654,16 @@ function buildRouteUpsertMutation(bmpSession, owner, route, afi, safi, ribType, 
     if (options.isNewRoute === false) {
         eventType = options.previousAttrHash === routeData.attrId ? 'refresh' : 'replace';
     }
-    const mutation = buildScopeMutation(bmpSession, owner, afi, safi, ribType, eventType, options);
-    mutation.scope.state = options.scopeState || 'syncing';
+    const mutation = buildScopeMutation(
+        bmpSession,
+        owner,
+        afi,
+        safi,
+        ribType,
+        eventType,
+        options,
+        options.scopeState || 'syncing'
+    );
     mutation.route = routeData;
     return mutation;
 }
@@ -567,6 +684,7 @@ function buildRoutePurgeMutation(bmpSession, owner, route, afi, safi, ribType, o
 }
 
 module.exports = {
+    allocatePersistenceConnection,
     rebuildCompactNlri,
     compactRoutePayload,
     ensurePersistenceContext,

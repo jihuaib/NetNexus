@@ -3,6 +3,7 @@ const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BgpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 const { FRR_BGP_ADDRESS_FAMILIES, FRR_BGP_LOCAL_AS, FrrBgpLab } = require('../../scripts/e2e-support/frr-bgp-lab');
 const BgpConst = require('../../electron/const/bgpConst');
+const attributeRegistry = require('../../shared/bgpAttributes.json');
 
 const LARGE_ROUTE_COUNT = Number(process.env.FRR_BGP_LARGE_ROUTES || 5000);
 const INCREMENTAL_ROUTE_COUNT = 5;
@@ -158,6 +159,21 @@ async function fetchAllPageRoutes(page, family) {
 }
 
 async function startBgp(page, controller, lab, family) {
+    if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+        // Display columns follow the route-workspace NLRI/attribute nodes, not
+        // the list's address-family switch. Save the Label workspace before
+        // starting BGP so its Label column is tested without regenerating routes.
+        const groupId = 'frr-label-renderer';
+        const saved = await page.evaluate(config => window.bgpApi.saveIpv4UNCRouteConfig(config), {
+            addressFamily: family.addressFamily,
+            routeWorkspace: {
+                version: 6,
+                activeGroupId: groupId,
+                groups: [{ id: groupId, name: 'FRR Label renderer', config: { addressFamily: family.addressFamily } }]
+            }
+        });
+        expect(saved.status, saved.msg).toBe('success');
+    }
     controller.setAdvertisedNextHop(lab.neighborAddress);
     const result = await page.evaluate(
         ({ localAs, addressFamilies }) =>
@@ -195,15 +211,56 @@ async function startBgp(page, controller, lab, family) {
     await controller.waitForPeerState(lab.netNexusPeerIp, 'Established', 60000, family.addressFamily);
 }
 
-function expectedRendererCells(family, route) {
-    const cells = [`${route.ip}/${route.mask}`];
-    if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-        cells.push(String(normalizeLabel(route.label) ?? '-'));
-    } else {
-        cells.push(String(route.rd || '0:0'), String(route.pathId ?? 0));
+function rendererAttributeColumns(family) {
+    // Assert the actual default workspace schema, including every displayed
+    // path attribute. RD/Path ID/RT are no longer unconditional list columns.
+    const types = ['origin', 'asPath', 'nextHop', 'med', 'localPref', 'communities', 'extendedCommunities'];
+    if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_UNC) {
+        types.splice(types.indexOf('nextHop'), 1);
+        types.unshift('mpNextHop');
+    } else if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+        types.unshift('label');
     }
-    cells.push(String(route.rt || ''), normalizeAsPath(route.asPath));
-    return cells;
+    return types.map(type => {
+        const definition = attributeRegistry.attributes.find(entry => entry.type === type);
+        if (!definition?.resultColumn) throw new Error(`Missing FRR renderer column schema for ${type}`);
+        return definition;
+    });
+}
+
+function typedRouteTargets(value) {
+    return String(value ?? '')
+        .trim()
+        .split(/\s+/)
+        .filter(Boolean)
+        .map(target => `rt:${target}`)
+        .join(' ');
+}
+
+function expectedRendererCells(family, route) {
+    return [
+        `${route.ip}/${route.mask}`,
+        ...rendererAttributeColumns(family).map(definition => {
+            let value = route[definition.resultColumn.key];
+            if ((definition.section || 'attributes') === 'attributes' && Array.isArray(route.pathAttributes)) {
+                const instance = route.pathAttributes.find(
+                    attribute =>
+                        attribute.type === definition.type ||
+                        (definition.type === 'extendedCommunities' && attribute.type === 'rt')
+                );
+                value = instance?.type === 'rt' ? typedRouteTargets(instance.value) : instance?.value;
+            }
+            if (definition.type === 'extendedCommunities' && (value === undefined || value?.length === 0) && route.rt) {
+                value = typedRouteTargets(route.rt);
+            }
+            if (value === null || value === undefined || value === '') return '—';
+            const option = definition.resultColumn.options?.find(entry => String(entry.value) === String(value));
+            const text = Array.isArray(value) ? value.join(' ') : value;
+            return String(option?.label ?? (text === '' ? '—' : text))
+                .trim()
+                .replace(/\s+/g, ' ');
+        })
+    ];
 }
 
 async function readRendererRows(table) {
@@ -230,6 +287,11 @@ async function assertRendererPage(page, family, routes) {
 
     await expect(page.getByText(`共 ${routes.length} 条，每页 ${PAGE_SIZE} 条`)).toBeVisible({ timeout: 30000 });
     const table = page.getByTestId(family.tableTestId);
+    await expect(table.locator('.nn-table-thead .nn-table-cell')).toHaveText([
+        '前缀',
+        ...rendererAttributeColumns(family).map(definition => definition.resultColumn.title),
+        '操作'
+    ]);
     const lastPage = Math.ceil(routes.length / PAGE_SIZE);
     const rows = table.locator('.nn-table-tbody > .nn-table-row');
     const pagination = lastPage > 1 ? table.getByRole('navigation', { name: '表格分页' }) : null;

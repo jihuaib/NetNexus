@@ -1,7 +1,112 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { MessageChannel } = require('node:worker_threads');
 const BmpApp = require('../../electron/app/bmpApp');
 const BmpConst = require('../../electron/const/bmpConst');
+const { getClientDatabasePath } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
+
+async function assertOfflineReaderIsolation(sourceId) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-offline-app-'));
+    const dbPath = path.join(tempDir, 'bmp.sqlite3');
+    const app = Object.create(BmpApp.prototype);
+    Object.assign(app, {
+        persistenceDbPath: dbPath,
+        worker: null,
+        bmpStarting: false,
+        persistenceDatabaseDeleting: false,
+        offlinePersistenceReader: null,
+        offlinePersistenceOpenPromise: null,
+        offlinePersistenceLock: Promise.resolve(),
+        offlinePersistenceClosePromises: new Set(),
+        logLevel: 'off'
+    });
+    const createdOptions = [];
+    const closedOptions = [];
+    app.createPersistenceClient = options => {
+        createdOptions.push(options);
+        return {
+            async open() {},
+            async close(closeOptions) {
+                closedOptions.push(closeOptions);
+            },
+            async queryRoutes(query) {
+                return { total: 1, list: [{ sourceId, routeState: 'stale' }], query };
+            },
+            async getStatus() {
+                return {
+                    enabled: true,
+                    ready: true,
+                    dbPath,
+                    storageMode: 'client-databases',
+                    clientDatabaseCount: 1,
+                    clientDatabases: [{ sourceId, dbPath: getClientDatabasePath(dbPath, sourceId) }]
+                };
+            }
+        };
+    };
+
+    try {
+        fs.writeFileSync(dbPath, 'legacy-database-must-not-be-read');
+        const legacyOnlyStatus = await app.queryPersistenceStatus();
+        assert.equal(legacyOnlyStatus.status, 'success');
+        assert.equal(legacyOnlyStatus.data.ready, false);
+        assert.equal(legacyOnlyStatus.data.storageMode, 'client-databases');
+        assert.equal(legacyOnlyStatus.data.clientDatabaseCount, 0);
+        assert.equal(legacyOnlyStatus.data.legacyDatabaseExists, true);
+        await assert.rejects(app.queryPersistedRoutes({ sourceId }), /持久化数据库不存在/);
+        assert.equal(createdOptions.length, 0, 'legacy-only storage must never open a persistence client');
+
+        const clientDbPath = getClientDatabasePath(dbPath, sourceId);
+        fs.mkdirSync(path.dirname(clientDbPath), { recursive: true });
+        fs.writeFileSync(clientDbPath, 'client-database-fixture');
+        const query = { sourceId, routeState: 'all', page: 1, pageSize: 10 };
+        const offlineRoutes = await app.queryPersistedRoutes(query);
+        assert.equal(offlineRoutes.status, 'success');
+        assert.equal(offlineRoutes.data.total, 1);
+        assert.deepEqual(offlineRoutes.data.query, query);
+        assert.equal(createdOptions.length, 1);
+        assert.equal(createdOptions[0].dbPath, dbPath, 'the base path remains the partition locator');
+        assert.equal(createdOptions[0].partitionByClient, true);
+        assert.equal(createdOptions[0].readOnly, true);
+        const offlineStatus = await app.queryPersistenceStatus();
+        assert.equal(offlineStatus.data.clientDatabaseCount, 1);
+        assert.equal(offlineStatus.data.legacyDatabaseExists, true);
+        assert.equal(createdOptions.length, 1, 'offline queries should reuse the existing partition reader');
+        await app.closeOfflinePersistenceReader();
+        assert.deepEqual(closedOptions, [{ suppressErrors: true }]);
+
+        const migrationOptions = [];
+        app.createPersistenceClient = options => {
+            migrationOptions.push(options);
+            const needsMigration = migrationOptions.length === 1;
+            return {
+                async open() {
+                    if (needsMigration) {
+                        const error = new Error('client schema needs migration');
+                        error.code = 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED';
+                        throw error;
+                    }
+                },
+                async close() {}
+            };
+        };
+        await app.openOfflinePersistenceReader();
+        assert.equal(migrationOptions.length, 3);
+        assert.equal(
+            migrationOptions.every(options => options.partitionByClient === true),
+            true
+        );
+        assert.equal(migrationOptions[0].readOnly, true);
+        assert.notEqual(migrationOptions[1].readOnly, true, 'only the partition schema initializer is writable');
+        assert.equal(migrationOptions[2].readOnly, true);
+        assert.equal(fs.readFileSync(dbPath, 'utf8'), 'legacy-database-must-not-be-read');
+    } finally {
+        await app.closeOfflinePersistenceReader();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+}
 
 async function main() {
     const sourceId = 'a'.repeat(64);
@@ -67,6 +172,8 @@ async function main() {
     const invalidClient = await app.handleGetClient(null, 'source:not-a-valid-source-id');
     assert.equal(invalidClient.status, 'error');
     assert.equal(clientSelectors.length, 2);
+
+    await assertOfflineReaderIsolation(sourceId);
 
     console.log('BMP client query/delete app tests passed');
 }

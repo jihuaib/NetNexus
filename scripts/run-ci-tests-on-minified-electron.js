@@ -18,24 +18,26 @@ function linkDirectory(source, target) {
     fs.symlinkSync(source, target, type);
 }
 
-function prepareWorkspace() {
+function prepareWorkspace(sourceRoot = projectRoot) {
     const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-ci-minified-'));
 
-    copyDirectory(path.join(projectRoot, 'electron'), path.join(tempRoot, 'electron'));
-    copyDirectory(path.join(projectRoot, 'test', 'ci'), path.join(tempRoot, 'test', 'ci'));
-    copyDirectory(path.join(projectRoot, '.github', 'workflows'), path.join(tempRoot, '.github', 'workflows'));
-    copyDirectory(path.join(projectRoot, 'docs'), path.join(tempRoot, 'docs'));
-    copyDirectory(path.join(projectRoot, 'resources', 'grpc'), path.join(tempRoot, 'resources', 'grpc'));
-    fs.copyFileSync(path.join(projectRoot, 'package.json'), path.join(tempRoot, 'package.json'));
-    fs.copyFileSync(path.join(projectRoot, 'package-lock.json'), path.join(tempRoot, 'package-lock.json'));
-    fs.copyFileSync(path.join(projectRoot, 'README.md'), path.join(tempRoot, 'README.md'));
-    fs.copyFileSync(path.join(projectRoot, 'vite.config.js'), path.join(tempRoot, 'vite.config.js'));
+    copyDirectory(path.join(sourceRoot, 'electron'), path.join(tempRoot, 'electron'));
+    copyDirectory(path.join(sourceRoot, 'shared'), path.join(tempRoot, 'shared'));
+    copyDirectory(path.join(sourceRoot, 'src'), path.join(tempRoot, 'src'));
+    copyDirectory(path.join(sourceRoot, 'test', 'ci'), path.join(tempRoot, 'test', 'ci'));
+    copyDirectory(path.join(sourceRoot, '.github', 'workflows'), path.join(tempRoot, '.github', 'workflows'));
+    copyDirectory(path.join(sourceRoot, 'docs'), path.join(tempRoot, 'docs'));
+    copyDirectory(path.join(sourceRoot, 'resources', 'grpc'), path.join(tempRoot, 'resources', 'grpc'));
+    fs.copyFileSync(path.join(sourceRoot, 'package.json'), path.join(tempRoot, 'package.json'));
+    fs.copyFileSync(path.join(sourceRoot, 'package-lock.json'), path.join(tempRoot, 'package-lock.json'));
+    fs.copyFileSync(path.join(sourceRoot, 'README.md'), path.join(tempRoot, 'README.md'));
+    fs.copyFileSync(path.join(sourceRoot, 'vite.config.js'), path.join(tempRoot, 'vite.config.js'));
 
-    linkDirectory(path.join(projectRoot, 'node_modules'), path.join(tempRoot, 'node_modules'));
+    linkDirectory(path.join(sourceRoot, 'node_modules'), path.join(tempRoot, 'node_modules'));
 
     const optionalLinks = ['scripts'];
     for (const dirName of optionalLinks) {
-        const source = path.join(projectRoot, dirName);
+        const source = path.join(sourceRoot, dirName);
         if (fs.existsSync(source)) {
             linkDirectory(source, path.join(tempRoot, dirName));
         }
@@ -80,7 +82,11 @@ async function main() {
     process.exit(result.status);
 }
 
-main().catch(error => {
-    console.error(error.stack || error.message);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch(error => {
+        console.error(error.stack || error.message);
+        process.exit(1);
+    });
+}
+
+module.exports = { prepareWorkspace };

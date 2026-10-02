@@ -60,6 +60,169 @@ async function testLongRunningProcess() {
     assert.equal(exitDetails.expected, true);
 }
 
+function createRouteGraph(binarySize) {
+    const allocation = Buffer.alloc(binarySize + 32, 0xa5);
+    const binary = allocation.subarray(16, 16 + binarySize);
+    for (let index = 0; index < binary.length; index += 1) binary[index] = (index * 31 + 255) & 0xff;
+    const backing = new ArrayBuffer(128);
+    new Uint8Array(backing).set(Array.from({ length: 128 }, (_, index) => (index * 17) & 0xff));
+    const attributes = Object.freeze({
+        origin: 'IGP',
+        asPath: '64512 64513',
+        med: 0,
+        localPref: 100,
+        communities: Object.freeze(['64512:100', '64512:200']),
+        nextHop: '192.0.2.1'
+    });
+    const source = Object.freeze({ sysName: 'large-route-graph', remoteIp: '192.0.2.10', localPort: 11019 });
+    const scope = Object.freeze({
+        sourceId: 'a'.repeat(64),
+        scopeId: 'b'.repeat(64),
+        afi: 1,
+        safi: 1,
+        ribType: 2,
+        state: 'ready'
+    });
+    const routes = Object.freeze(
+        Array.from({ length: 1000 }, (_, index) => {
+            const prefix = `10.${index >> 8}.${index & 255}.0`;
+            return Object.freeze({
+                persistentRouteId: String(index).padStart(64, '0'),
+                persistentSourceId: scope.sourceId,
+                persistentScopeId: scope.scopeId,
+                routeKey: `0|0:0|${prefix}|24`,
+                afi: 1,
+                safi: 1,
+                ip: prefix,
+                mask: 24,
+                pathId: 0,
+                rd: '0:0',
+                routeState: 'active',
+                nlriDetail: Object.freeze({ prefix, length: 24, pathId: 0, rd: '0:0' }),
+                attributes,
+                source,
+                scope,
+                labels: null,
+                parseStatus: 0,
+                pathStatusNames: Object.freeze([]),
+                lastSeenAt: '2026-10-02T00:00:00.000Z'
+            });
+        })
+    );
+    const graph = {
+        binary,
+        repeatedBinary: binary,
+        backing,
+        bytes: new Uint8Array(backing, 16, 64),
+        words: new Uint16Array(backing, 16, 24),
+        dataView: new DataView(backing, 24, 16),
+        routes,
+        repeatedRoute: routes[0],
+        attributes,
+        source,
+        scope,
+        byRoute: new Map([
+            [routes[0], attributes],
+            ['scope', scope]
+        ]),
+        members: new Set([scope, attributes]),
+        receivedAt: new Date('2026-10-02T00:00:00.000Z'),
+        optional: undefined,
+        nan: NaN,
+        negativeZero: -0
+    };
+    graph.self = graph;
+    Object.freeze(graph);
+    return { graph, allocation };
+}
+
+async function testForcedNodeForkLargeRouteGraphs() {
+    let exitCode = null;
+    let exitDetails = null;
+    const client = new ProtocolProcessWithPromise(fixturePath, {
+        serviceName: `${fixtureServiceName}.node-fork`,
+        utilityProcess: null,
+        defaultTimeoutMs: 10000,
+        onExit: (code, _client, details) => {
+            exitCode = code;
+            exitDetails = details;
+        }
+    }).createLongRunningProcess();
+    try {
+        assert.equal(
+            client.transport,
+            'child-process',
+            'large graph regression must explicitly bypass utility process'
+        );
+        if (process.versions.electron)
+            assert.equal(client.process.jsonIpc, true, 'Electron fallback must use the pure-JS graph codec over JSON');
+        for (const binarySize of [32 * 1024, 1024 * 1024]) {
+            const { graph, allocation } = createRouteGraph(binarySize);
+            // Snapshot bytes directly; no V8 serialization is used by this test.
+            const originalBinary = Buffer.from(graph.binary);
+            const originalBacking = Buffer.from(new Uint8Array(graph.backing));
+            const originalKeys = Object.keys(graph);
+            const echoed = (await client.sendRequest('echo', graph)).data;
+            assert.deepEqual(echoed, graph, 'a 1,000-route object graph must survive both directions of real fork IPC');
+            assert.ok(Buffer.isBuffer(echoed.binary));
+            assert.equal(echoed.binary.length, binarySize);
+            assert.deepEqual(echoed.binary, originalBinary);
+            assert.strictEqual(echoed.binary, echoed.repeatedBinary);
+            assert.strictEqual(echoed.self, echoed);
+            assert.strictEqual(echoed.repeatedRoute, echoed.routes[0]);
+            assert.equal(echoed.routes.length, 1000);
+            assert.ok(
+                echoed.routes.every(
+                    route =>
+                        route.attributes === echoed.attributes &&
+                        route.source === echoed.source &&
+                        route.scope === echoed.scope
+                )
+            );
+            assert.strictEqual(echoed.byRoute.get(echoed.routes[0]), echoed.attributes);
+            assert.ok(echoed.members.has(echoed.scope));
+            assert.ok(echoed.bytes instanceof Uint8Array);
+            assert.ok(echoed.words instanceof Uint16Array);
+            assert.ok(echoed.dataView instanceof DataView);
+            if (client.process.jsonIpc) {
+                // The new graph codec preserves backing-store identity and view
+                // offsets. Plain Node's unchanged advanced IPC only preserves
+                // view contents, and can use an IPC allocation as its backing.
+                assert.strictEqual(echoed.bytes.buffer, echoed.backing);
+                assert.strictEqual(echoed.words.buffer, echoed.backing);
+                assert.strictEqual(echoed.dataView.buffer, echoed.backing);
+                assert.equal(echoed.bytes.byteOffset, 16);
+                assert.equal(echoed.words.byteOffset, 16);
+                assert.equal(echoed.dataView.byteOffset, 24);
+            }
+            assert.equal(echoed.dataView.byteLength, 16);
+            assert.deepEqual(Buffer.from(new Uint8Array(echoed.backing)), originalBacking);
+            assert.deepEqual(graph.binary, originalBinary, 'encoding must not modify user Buffer bytes');
+            assert.deepEqual(
+                Buffer.from(new Uint8Array(graph.backing)),
+                originalBacking,
+                'encoding must not modify user view bytes'
+            );
+            assert.deepEqual(Object.keys(graph), originalKeys, 'encoding must not attach metadata to user objects');
+            assert.strictEqual(graph.self, graph);
+            assert.ok(allocation.subarray(0, 16).every(byte => byte === 0xa5));
+            assert.ok(allocation.subarray(16 + binarySize).every(byte => byte === 0xa5));
+        }
+        await client.terminate();
+        assert.equal(exitCode, 0);
+        assert.equal(
+            exitDetails.signal,
+            null,
+            'large JSON graph traffic must not trigger a delayed SIGTRAP on process cleanup'
+        );
+        assert.equal(client.process.exitSignal, null);
+        assert.equal(client.process.exitCode, 0);
+        assert.equal(exitDetails.expected, true);
+    } finally {
+        await client.terminate();
+    }
+}
+
 async function testRequestProcessClient() {
     const client = new RequestProcessClient(fixturePath, {
         serviceName: fixtureServiceName,
@@ -206,6 +369,7 @@ async function testConcurrentRequestClientTerminateWaitsForExit() {
 
 async function main() {
     await testLongRunningProcess();
+    await testForcedNodeForkLargeRouteGraphs();
     await testRequestProcessClient();
     await testUnexpectedExitRejectsPendingRequest();
     await testRequestClientDoesNotRestartAfterUnexpectedExit();

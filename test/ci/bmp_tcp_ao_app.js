@@ -144,6 +144,7 @@ function createFakeWorker(options = {}) {
 function baseConfig(overrides = {}) {
     return {
         port: 11019,
+        threadCount: 4,
         bmpV4TlvDraft: 20,
         pathMarkingTlvType: 8,
         persistenceEnabled: true,
@@ -309,6 +310,7 @@ async function testBmpConfigWhitelist() {
         ]
     });
     const maliciousConfig = baseConfig({
+        threadCount: 8,
         authType: BMP_AUTH_TYPES.TCP_AO,
         tcpAoProfileIds: ['edge-a', 'edge-b'],
         key: 'renderer-injected-secret',
@@ -337,10 +339,19 @@ async function testBmpConfigWhitelist() {
         Object.keys(stored)
             .filter(key => key !== 'tcpMd5ProfileIds')
             .sort(),
-        ['authType', 'bmpV4TlvDraft', 'pathMarkingTlvType', 'persistenceEnabled', 'port', 'tcpAoProfileIds'].sort(),
+        [
+            'authType',
+            'bmpV4TlvDraft',
+            'pathMarkingTlvType',
+            'persistenceEnabled',
+            'port',
+            'tcpAoProfileIds',
+            'threadCount'
+        ].sort(),
         'BMP persistence must be an explicit allowlist'
     );
     assert.equal(Number(stored.port), 11019);
+    assert.equal(stored.threadCount, 8);
     assert.equal(stored.persistenceEnabled, true);
     assert.deepEqual(stored.tcpAoProfileIds, ['edge-a', 'edge-b']);
     assertNoRendererSecrets(stored);
@@ -348,6 +359,7 @@ async function testBmpConfigWhitelist() {
     store.set('bmp-config', maliciousConfig);
     const loaded = await app.handleLoadBmpConfig();
     assert.equal(loaded.status, 'success', loaded.msg);
+    assert.equal(loaded.data.threadCount, 8);
     assertNoRendererSecrets(loaded.data);
     assert.deepEqual(loaded.data.tcpAoProfileIds, ['edge-a', 'edge-b']);
 }
@@ -382,6 +394,7 @@ async function testRuntimeProfilesComeOnlyFromSettings() {
     const response = await app.handleStartBmp(
         { sender },
         baseConfig({
+            threadCount: 3,
             authType: BMP_AUTH_TYPES.TCP_AO,
             tcpAoProfileIds: ['edge-a', 'edge-b'],
             key: 'renderer-injected-secret',
@@ -397,6 +410,7 @@ async function testRuntimeProfilesComeOnlyFromSettings() {
     const startCall = fake.calls.find(call => call.operation === BmpConst.BMP_REQ_TYPES.START_BMP);
     assert(startCall, 'BMP START request was not sent');
     const payload = startCall.payload;
+    assert.equal(payload.threadCount, 3);
     assert.deepEqual(
         payload.tcpAoProfiles.map(profile => profile.id),
         ['edge-a', 'edge-b']

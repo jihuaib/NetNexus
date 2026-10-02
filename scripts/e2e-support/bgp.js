@@ -10,6 +10,10 @@ bgpBrowserMockScript = bgpBrowserMockScript
     .replace(
         "getRoutes: (addressFamily, page, pageSize) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize)",
         "getRoutes: (addressFamily, page, pageSize, options = {}) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize, options)"
+    )
+    .replace(
+        "getInstanceInfo: () => window.__bgpE2eCall('getInstanceInfo')",
+        "getRouteGroupStates: () => window.__bgpE2eCall('getRouteGroupStates'),\n        withdrawRouteGroup: config => window.__bgpE2eCall('withdrawRouteGroup', config),\n        getInstanceInfo: () => window.__bgpE2eCall('getInstanceInfo')"
     );
 
 const bgpPageApiScript =
@@ -17,14 +21,24 @@ const bgpPageApiScript =
 
 function createBgpPageState() {
     return {
-        routes: new Map()
+        routes: new Map(),
+        configs: new Map()
     };
 }
 
 function handlePageCall(controller, method, args) {
     const bgp = controller.state.bgp;
-    if (method.startsWith('bgp.load')) return successResponse(null, '配置不存在');
-    if (method.startsWith('bgp.save')) return successResponse(null, '配置保存成功');
+    if (method.startsWith('bgp.load')) {
+        const config = bgp.configs.get(method.slice('bgp.load'.length));
+        return successResponse(
+            config ? JSON.parse(JSON.stringify(config)) : null,
+            config ? '配置加载成功' : '配置不存在'
+        );
+    }
+    if (method.startsWith('bgp.save')) {
+        bgp.configs.set(method.slice('bgp.save'.length), JSON.parse(JSON.stringify(args[0])));
+        return successResponse(null, '配置保存成功');
+    }
     if (method === 'bgp.generateRoutes') {
         const config = args[0] || {};
         const routes = [];
@@ -197,6 +211,7 @@ const BgpE2eController = (() => {
             this.listenHost = options.listenHost || '127.0.0.1';
             this.ipv6ListenHost = options.ipv6ListenHost || '::1';
             this.advertisedNextHop = options.advertisedNextHop || null;
+            this.routeDatabasePath = options.routeDatabasePath || ':memory:';
             this.server = null;
             this.ipv6Server = null;
             this.mockClient = null;
@@ -248,6 +263,10 @@ const BgpE2eController = (() => {
             worker.ipv6PeerConfigData = null;
             worker.bgpSessionMap = new Map();
             worker.bgpInstanceMap = new Map();
+            worker.routeStore = null;
+            worker.routeGroupMutation = Promise.resolve();
+            worker.pendingRouteGroupMutations = 0;
+            worker.bulkRouteMutation = null;
             worker.messageHandler = new CaptureMessageHandler(event => this.emitEvent(event));
             worker.startTcpServer = messageId => this.startTcpServer(messageId);
 
@@ -512,6 +531,10 @@ const BgpE2eController = (() => {
                     });
                 case 'getInstanceInfo':
                     return this.invokeWorker('getInstanceInfo', null);
+                case 'getRouteGroupStates':
+                    return this.invokeWorker('getRouteGroupStates', null);
+                case 'withdrawRouteGroup':
+                    return this.invokeWorker('withdrawRouteGroup', args[0]);
                 case 'getDefaultMrtFiles':
                     return successResponse([]);
                 case 'importRouteViewsData':
@@ -557,7 +580,7 @@ const BgpE2eController = (() => {
                 this.setBgpPort(await BgpE2eController.getFreePort());
             }
 
-            this.savedBgpConfig = this.normalizeBgpConfig(config);
+            this.savedBgpConfig = this.normalizeBgpConfig({ ...config, routeDatabasePath: this.routeDatabasePath });
             this.record('starting BGP worker TCP server', {
                 port: this.bgpPort,
                 config: this.savedBgpConfig
@@ -758,8 +781,8 @@ const BgpE2eController = (() => {
         }
 
         async generateIpv4Routes(config) {
-            this.savedIpv4RouteConfig = this.normalizeIpv4RouteConfig(config);
-            return this.invokeWorker('generateRoutes', this.savedIpv4RouteConfig);
+            this.lastGeneratedIpv4RouteConfig = this.normalizeIpv4RouteConfig(config);
+            return this.invokeWorker('generateRoutes', this.lastGeneratedIpv4RouteConfig);
         }
 
         async invokeWorker(methodName, data) {

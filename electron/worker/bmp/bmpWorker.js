@@ -22,6 +22,10 @@ const {
     parseRouteLensQuery
 } = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
+const BmpIngestClientPool = require('./bmpIngestClientPool');
+const { applyIngestSnapshot, cloneIngestValue } = require('./bmpIngestSnapshot');
+const { allocatePersistenceConnection } = require('./bmpPersistenceMutation');
+const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
 
 const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
 const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
@@ -36,11 +40,14 @@ class BmpWorker {
         this.tcpAoRuntimeFailure = null;
         this.tcpMd5RuntimeFailure = null;
         this.bmpStopping = false;
+        this.bmpRuntimeStarted = false;
+        this.ingestRuntimeFailure = null;
         this.bmpShutdownPromise = null;
         this.socket = null;
 
         this.bmpConfigData = null; // bmp配置数据
         this.bmpSessionMap = new Map(); // bmp会话map
+        this.ingestPool = null;
         this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
         this.routeAssuranceFilters = {};
         this.routeAssuranceRebuildTimer = null;
@@ -148,6 +155,13 @@ class BmpWorker {
             socket.destroy();
             return null;
         }
+        if (this.bmpStopping || (this.ingestPool && !this.ingestPool.hasCapacity())) {
+            logger.warn(
+                `BMP client connection rejected: all ${this.bmpConfigData?.threadCount} parser slots are occupied`
+            );
+            socket.destroy();
+            return null;
+        }
         const sessionKey = BmpSession.makeKey(localAddress, localPort, clientAddress, clientPort);
         this.removeBmpSessionByKey(sessionKey);
 
@@ -159,6 +173,9 @@ class BmpWorker {
         bmpSession.localPort = localPort;
         bmpSession.remoteIp = clientAddress;
         bmpSession.remotePort = clientPort;
+        if (this.ingestPool) {
+            Object.assign(bmpSession, allocatePersistenceConnection());
+        }
 
         if (this.bmpSocketsPaused || this.persistence?.paused) {
             socket.pause();
@@ -171,6 +188,11 @@ class BmpWorker {
         const bmpSession = this.bmpSessionMap.get(sessionKey);
         if (!bmpSession || (expectedSession && bmpSession !== expectedSession)) {
             return null;
+        }
+
+        if (bmpSession.ingestRecord) {
+            bmpSession.closeSession();
+            return bmpSession;
         }
 
         this.bmpSessionMap.delete(sessionKey);
@@ -406,7 +428,12 @@ class BmpWorker {
         }
         this.bmpSocketsPaused = false;
         this.bmpSessionMap.forEach(session => {
-            if (session.socket && !session.socket.destroyed) {
+            if (
+                session.socket &&
+                !session.socket.destroyed &&
+                !session.ingestRecord?.paused &&
+                !session.ingestRecord?.closing
+            ) {
                 session.socket.resume();
             }
         });
@@ -457,7 +484,10 @@ class BmpWorker {
     // has been committed so far; the page refreshes again on the next route
     // update event.
     async fencePersistenceRead(timeoutMs = this.getPersistenceReadFenceTimeoutMs()) {
-        const fence = this.persistence.fence();
+        if (timeoutMs === 0) return undefined;
+        const fence = this.ingestPool
+            ? this.ingestPool.fence().then(() => this.persistence.fence())
+            : this.persistence.fence();
         if (!(timeoutMs > 0) || !Number.isFinite(timeoutMs)) {
             return timeoutMs === 0 ? undefined : fence;
         }
@@ -507,6 +537,12 @@ class BmpWorker {
     }
 
     handleCommittedPersistenceResult(result) {
+        if (this.routeAssuranceService?.enabled && result?.requiresProjectionRebuild) {
+            // A retry can replay a commit from another client database without
+            // its original deltas. Rebuild rather than accepting a partial matrix.
+            this.invalidateRouteAssurance('client-database-batch-replayed');
+            return;
+        }
         const deltas = Array.isArray(result?.deltas) ? result.deltas : [];
         if (!this.routeAssuranceService?.enabled || deltas.length === 0) {
             return;
@@ -557,7 +593,8 @@ class BmpWorker {
 
         const clients = [
             ['writer', this.persistence],
-            ['reader', this.persistenceReader]
+            ['reader', this.persistenceReader],
+            ['parser', this.ingestPool]
         ];
         await Promise.all(
             clients.map(async ([role, client]) => {
@@ -574,7 +611,11 @@ class BmpWorker {
     }
 
     createPersistenceClient(options) {
-        return new BmpPersistenceClient(options);
+        return new BmpPersistenceClient({
+            ...options,
+            partitionByClient: true,
+            writerWorkerCount: this.bmpConfigData?.threadCount
+        });
     }
 
     async initializePersistence() {
@@ -931,6 +972,85 @@ class BmpWorker {
         });
     }
 
+    handleIngestResult(record, result) {
+        applyIngestSnapshot(record.session, result.snapshot);
+        const restored = new Map();
+        for (const received of result.actions || []) {
+            // Route mutations contain only scalar/JSON DTO fields. The parser's
+            // postMessage already isolated their graph, including shared source,
+            // connection and scope descriptors. Re-cloning millions of these
+            // objects here only creates garbage and destroys that fast path.
+            // Events/statistics still need Buffer and other native restoration.
+            const action =
+                received.op === 'mutation' && received.mutation?.route
+                    ? received
+                    : cloneIngestValue(received, restored);
+            switch (action.op) {
+                case 'mutation':
+                    if (!this.enqueuePersistenceMutation(action.mutation)) {
+                        throw (
+                            this.persistenceFailure || new Error('BMP ingestion cannot enqueue a persistence mutation')
+                        );
+                    }
+                    break;
+                case 'event':
+                    this.messageHandler.sendEvent(action.eventName, action.data);
+                    break;
+                case 'route-update':
+                    this.enqueueRouteUpdateEvent(action.update);
+                    break;
+                case 'instance-route-update':
+                    this.enqueueInstanceRouteUpdateEvent(action.update);
+                    break;
+                case 'sweep':
+                    this.requestPersistenceSweep(action.sourceId);
+                    break;
+                case 'assurance-invalidated':
+                    this.invalidateRouteAssurance(action.reason);
+                    break;
+                case 'notification-purge':
+                    this.requestNotificationPeerRoutePurge(action.query);
+                    break;
+                case 'session-close':
+                    record.session.closeSession();
+                    break;
+                default:
+                    throw new Error(`Unknown BMP ingest action: ${action.op}`);
+            }
+        }
+    }
+
+    handleIngestClosed(record) {
+        const session = record.session;
+        const key = BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort);
+        if (this.bmpSessionMap.get(key) === session) {
+            this.bmpSessionMap.delete(key);
+        }
+        if (!this.bmpStopping) {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: session.getClientInfo() });
+        }
+    }
+
+    handleIngestFailure(error) {
+        if (this.bmpStopping || this.ingestRuntimeFailure) return;
+        this.handlePersistenceFailure(error);
+        // Startup reports its own error and cleans up without publishing a
+        // runtime failure for a service that never became ready.
+        if (!this.bmpRuntimeStarted) return;
+        this.ingestRuntimeFailure = {
+            code: 'BMP_INGEST_WORKER_EXIT',
+            reason: 'BMP客户端处理线程异常，服务已安全停止，请重新启动'
+        };
+        try {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.ingestRuntimeFailure);
+        } catch (eventError) {
+            logger.warn(`BMP解析线程运行时故障事件发送失败: ${eventError.message}`);
+        }
+        this.shutdownBmpRuntime()
+            .catch(shutdownError => logger.error(`BMP解析线程故障后停止失败: ${shutdownError.message}`))
+            .finally(() => this.scheduleFatalExit());
+    }
+
     attachClientSocket(socket, transportLabel, endpoint = {}, initialData = null) {
         const clientAddress = endpoint.remoteAddress ?? socket.remoteAddress;
         const clientPort = endpoint.remotePort ?? socket.remotePort;
@@ -953,6 +1073,40 @@ class BmpWorker {
         bmpSession.tcpMd5ProfileId = endpoint.tcpMd5ProfileId || null;
         bmpSession.tcpMd5ProfileName = endpoint.tcpMd5ProfileName || null;
         bmpSession.tcpMd5Peer = endpoint.tcpMd5Peer || null;
+
+        if (this.ingestPool) {
+            const metadata = {};
+            for (const key of [
+                'localIp',
+                'localPort',
+                'remoteIp',
+                'remotePort',
+                'transport',
+                'authentication',
+                'authProfileId',
+                'authProfileName',
+                'authPeer',
+                'tcpAoProfileId',
+                'tcpAoProfileName',
+                'tcpAoPeer',
+                'tcpMd5ProfileId',
+                'tcpMd5ProfileName',
+                'tcpMd5Peer'
+            ])
+                metadata[key] = bmpSession[key];
+            const record = this.ingestPool.attach(bmpSession, { sessionKey, metadata });
+            if (!record) {
+                this.bmpSessionMap.delete(sessionKey);
+                socket.destroy();
+                return null;
+            }
+            bmpSession.ingestRecord = record;
+            const pool = this.ingestPool;
+            bmpSession.recvMsg = data => pool.send(record, data);
+            bmpSession.closeSession = () => {
+                pool.closeSession(record).catch(error => this.handlePersistenceFailure(error));
+            };
+        }
 
         socket.on('data', data => {
             if (this.bmpSessionMap.get(sessionKey) !== bmpSession) {
@@ -1168,6 +1322,11 @@ class BmpWorker {
             else if (tcpMd5Enabled) await this.startTcpMd5Server();
             else await this.startPlainTcpServers();
 
+            if (this.persistenceFailure || this.ingestPool?.failure) {
+                throw this.persistenceFailure || this.ingestPool.failure;
+            }
+            this.bmpRuntimeStarted = true;
+
             const suffix = tcpAoEnabled ? '（TCP-AO认证）' : tcpMd5Enabled ? '（TCP MD5认证）' : '';
             logger.info(`bmp协议启动成功${suffix}`);
             this.messageHandler.sendSuccessResponse(messageId, null, `bmp协议启动成功${suffix}`);
@@ -1218,7 +1377,16 @@ class BmpWorker {
         }
         this.tcpAoRuntimeFailure = null;
         this.tcpMd5RuntimeFailure = null;
+        this.ingestRuntimeFailure = null;
+        this.bmpRuntimeStarted = false;
         this.bmpConfigData = bmpConfigData;
+        try {
+            this.bmpConfigData.threadCount = normalizeBmpThreadCount(this.bmpConfigData.threadCount);
+        } catch (error) {
+            this.bmpConfigData = null;
+            this.messageHandler.sendErrorResponse(messageId, error.message);
+            return;
+        }
         const authType = String(this.bmpConfigData?.authType || BMP_AUTH_TYPES.NONE)
             .trim()
             .toLowerCase();
@@ -1270,8 +1438,20 @@ class BmpWorker {
 
         try {
             await this.initializePersistence();
+            this.ingestPool = new BmpIngestClientPool({
+                threadCount: this.bmpConfigData.threadCount,
+                config: this.bmpConfigData,
+                onResult: (record, result) => this.handleIngestResult(record, result),
+                onClosed: record => this.handleIngestClosed(record),
+                onError: error => this.handleIngestFailure(error)
+            });
+            await this.ingestPool.open();
         } catch (error) {
             logger.error(`Failed to initialize BMP persistence: ${error.message}`);
+            if (this.ingestPool) {
+                await this.ingestPool.close().catch(() => {});
+                this.ingestPool = null;
+            }
             if (this.persistenceReader) {
                 await this.persistenceReader.close().catch(() => {});
                 this.persistenceReader = null;
@@ -1292,6 +1472,7 @@ class BmpWorker {
     shutdownBmpRuntime(options = {}) {
         if (this.bmpShutdownPromise) return this.bmpShutdownPromise;
         this.bmpStopping = true;
+        this.bmpRuntimeStarted = false;
         const emitTermination = options.emitTermination !== false;
         this.bmpShutdownPromise = (async () => {
             logger.info('Stopping BMP server...');
@@ -1311,6 +1492,16 @@ class BmpWorker {
                 this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
             }
             this.bmpSessionMap.forEach(session => session.closeSession());
+            let ingestError = null;
+            if (this.ingestPool) {
+                try {
+                    await this.ingestPool.close();
+                } catch (error) {
+                    ingestError = error;
+                    logger.error(`BMP ingest drain failed: ${error.message}`);
+                }
+                this.ingestPool = null;
+            }
             this.bmpSessionMap.clear();
             await tcpServersClosed;
             this.routeAssuranceService?.setEnabled?.(false);
@@ -1345,7 +1536,7 @@ class BmpWorker {
                 this.bmpConfigData = null;
                 this.bmpSocketsPaused = false;
             }
-            return { error: persistenceError || listenerError };
+            return { error: ingestError || persistenceError || listenerError };
         })().finally(() => {
             this.bmpStopping = false;
             this.bmpShutdownPromise = null;
@@ -1388,7 +1579,16 @@ class BmpWorker {
             }
             this.messageHandler.sendSuccessResponse(
                 messageId,
-                { ...status, enabled: true, running: true, watermark: this.persistence.getWatermark() },
+                {
+                    ...status,
+                    ready:
+                        !this.persistenceFailure && !this.persistence.failure && this.persistence.workerAlive !== false,
+                    writerWorkerCount: this.persistence.workerCount || 1,
+                    ...this.ingestPool?.getStatus(),
+                    enabled: true,
+                    running: true,
+                    watermark: this.persistence.getWatermark()
+                },
                 '获取BMP持久化状态成功'
             );
         } catch (error) {
@@ -1564,6 +1764,7 @@ class BmpWorker {
         this.clientDeleteRemoteIpGates.set(remoteIp, (this.clientDeleteRemoteIpGates.get(remoteIp) || 0) + 1);
         try {
             const persistence = this.persistence;
+            await this.ingestPool?.fence();
             await persistence.fence();
             if (this.persistence !== persistence) {
                 throw new Error('BMP服务状态已变化，请重试');
@@ -1972,6 +2173,7 @@ class BmpWorker {
             persistedScope?.persistentScopeId ||
             persistedScope?.scopeId;
         const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
+        const sourceId = bmpSession?.getPersistentSourceId?.() || this.getPersistentSourceId(client);
         if (persistedScopeId) {
             let bgpSession = null;
             if (bmpSession) {
@@ -1984,7 +2186,7 @@ class BmpWorker {
                 );
                 bgpSession = bmpSession.bgpSessionMap.get(bgpSessionKey) || null;
             }
-            return { bmpSession, bgpSession, scopeId: persistedScopeId, afi, safi, ribType };
+            return { bmpSession, bgpSession, sourceId, scopeId: persistedScopeId, afi, safi, ribType };
         }
         if (!bmpSession) {
             return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
@@ -2020,13 +2222,14 @@ class BmpWorker {
         }
 
         const scopeId = bmpSession.getPersistenceScopeId(bgpSession, afi, safi, ribType, 'peer');
-        return { bmpSession, bgpSession, scopeId, afi, safi, ribType };
+        return { bmpSession, bgpSession, sourceId, scopeId, afi, safi, ribType };
     }
 
     getBgpInstanceRouteScope(client, instance) {
         const { afi, safi } = getAfiAndSafi(instance.addrFamilyType);
         const persistedScopeId = instance?.persistentScopeId || instance?.scopeId;
         const { bmpSessionKey, bmpSession } = this.getBmpSessionByClient(client);
+        const sourceId = bmpSession?.getPersistentSourceId?.() || this.getPersistentSourceId(client);
         if (persistedScopeId) {
             let bgpInstance = null;
             if (bmpSession) {
@@ -2039,7 +2242,7 @@ class BmpWorker {
                 );
                 bgpInstance = bmpSession.bgpInstanceMap.get(bgpInstKey) || null;
             }
-            return { bmpSession, bgpInstance, scopeId: persistedScopeId, afi, safi, ribType: 'loc-rib' };
+            return { bmpSession, bgpInstance, sourceId, scopeId: persistedScopeId, afi, safi, ribType: 'loc-rib' };
         }
         if (!bmpSession) {
             return { error: 'BMP会话不存在', log: `BMP会话 ${bmpSessionKey} 不存在` };
@@ -2058,7 +2261,7 @@ class BmpWorker {
         }
 
         const scopeId = bmpSession.getPersistenceScopeId(bgpInstance, afi, safi, 'loc-rib', 'loc-rib');
-        return { bmpSession, bgpInstance, scopeId, afi, safi, ribType: 'loc-rib' };
+        return { bmpSession, bgpInstance, sourceId, scopeId, afi, safi, ribType: 'loc-rib' };
     }
 
     sendRouteLookupError(messageId, lookup) {
@@ -2105,6 +2308,7 @@ class BmpWorker {
             'queryRouteScope',
             {
                 routeQuery: {
+                    sourceId: lookup.sourceId || undefined,
                     scopeId: lookup.scopeId,
                     page: options.page,
                     pageSize: options.pageSize,
@@ -2112,7 +2316,7 @@ class BmpWorker {
                     prefixFilter: options.prefixFilter,
                     orderBy: 'firstSeen'
                 },
-                summaryQuery: { scopeId: lookup.scopeId }
+                summaryQuery: { sourceId: lookup.sourceId || undefined, scopeId: lookup.scopeId }
             },
             { fence: false }
         );
@@ -2134,6 +2338,7 @@ class BmpWorker {
         const result = await this.readPersistence(
             'queryRoutes',
             {
+                sourceId: lookup.sourceId || undefined,
                 scopeId: lookup.scopeId,
                 legacyRouteKey: routeKey,
                 routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,

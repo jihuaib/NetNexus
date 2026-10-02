@@ -411,7 +411,9 @@ function assertMultiplePacketPacking(buffers, counts, fullCount, label) {
 
     const withdrawnBuffers = [];
     peer.session.sendRoute = buffer => withdrawnBuffers.push(Buffer.from(buffer));
-    peer.withdrawRoute(Array.from(instance.routeMap.values()));
+    const withdrawnRoutes = Array.from(instance.routeMap.values());
+    instance.routeMap.clear();
+    peer.withdrawRoute(withdrawnRoutes);
     assertPacketLengths(withdrawnBuffers);
     assert.strictEqual(withdrawnBuffers.length, 1, 'small IPv4 label withdraw set should fit in one UPDATE');
 

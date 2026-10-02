@@ -1171,6 +1171,21 @@ export const createBmpConfigValidationRules = () => {
                 message: '请输入1024-65535之间的数字'
             }
         ],
+        threadCount: [
+            {
+                required: true,
+                message: '请输入处理线程数'
+            },
+            {
+                validator: value => {
+                    const isNumericValue =
+                        typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value.trim()));
+                    const count = isNumericValue ? Number(value) : Number.NaN;
+                    return Number.isInteger(count) && count >= 1 && count <= 16;
+                },
+                message: '请输入1-16之间的整数'
+            }
+        ],
         pathMarkingTlvType: [
             {
                 required: true,

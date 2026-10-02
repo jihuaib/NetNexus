@@ -1,219 +1,68 @@
 <template>
     <div class="nn-container bgp-route-page" data-testid="bgp-route-ipv4-page">
         <nn-card :title="routeCardTitle" class="bgp-route-card">
-            <nn-form :model="ipv4Data" :label-col="labelCol" :wrapper-col="wrapperCol" class="bgp-route-form">
-                <div class="config-section">
-                    <div class="section-title">基础配置</div>
-                    <nn-row :gutter="[16, 0]">
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="地址族" name="addressFamily">
-                                <nn-select
-                                    v-model:value="ipv4Data.addressFamily"
-                                    style="width: 100%"
-                                    :options="addressFamilyOptions"
-                                />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="Prefix" name="prefix">
-                                <nn-tooltip :title="validationErrors.prefix" :open="!!validationErrors.prefix">
-                                    <nn-input
-                                        v-model:value="ipv4Data.prefix"
-                                        data-testid="bgp-ipv4-route-prefix-input"
-                                        :status="validationErrors.prefix ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="Mask" name="mask">
-                                <nn-tooltip :title="validationErrors.mask" :open="!!validationErrors.mask">
-                                    <nn-input
-                                        v-model:value="ipv4Data.mask"
-                                        data-testid="bgp-ipv4-route-mask-input"
-                                        :status="validationErrors.mask ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="Count" name="count">
-                                <nn-tooltip :title="validationErrors.count" :open="!!validationErrors.count">
-                                    <nn-input
-                                        v-model:value="ipv4Data.count"
-                                        data-testid="bgp-ipv4-route-count-input"
-                                        :status="validationErrors.count ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="RT" name="rt">
-                                <nn-tooltip :title="validationErrors.rt" :open="!!validationErrors.rt">
-                                    <nn-input
-                                        v-model:value="ipv4Data.rt"
-                                        :status="validationErrors.rt ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                </div>
-
-                <div v-if="false" class="config-section">
-                    <div class="section-title">ADD-PATH</div>
-                    <nn-row :gutter="[16, 0]">
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="生成" name="addPathEnabled">
-                                <nn-switch v-model:checked="ipv4Data.addPathEnabled" />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="Path Count" name="addPathCount">
-                                <nn-tooltip
-                                    :title="validationErrors.addPathCount"
-                                    :open="!!validationErrors.addPathCount"
-                                >
-                                    <nn-input
-                                        v-model:value="ipv4Data.addPathCount"
-                                        :disabled="!ipv4Data.addPathEnabled"
-                                        :status="validationErrors.addPathCount ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                </div>
-
-                <div v-if="false" class="config-section">
-                    <div class="section-title">MPLS Label</div>
-                    <nn-row :gutter="[16, 0]">
-                        <nn-col :xs="24" :md="8">
-                            <nn-form-item label="标签模式" name="labelMode">
-                                <nn-tooltip :title="validationErrors.labelMode" :open="!!validationErrors.labelMode">
-                                    <nn-radio-group v-model:value="ipv4Data.labelMode" button-style="solid">
-                                        <nn-radio-button :value="BGP_LABEL_MODE.FIXED">固定</nn-radio-button>
-                                        <nn-radio-button :value="BGP_LABEL_MODE.INCREMENT">递增</nn-radio-button>
-                                    </nn-radio-group>
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="8">
-                            <nn-form-item label="Label" name="labelStart">
-                                <nn-tooltip :title="validationErrors.labelStart" :open="!!validationErrors.labelStart">
-                                    <nn-input
-                                        v-model:value="ipv4Data.labelStart"
-                                        :status="validationErrors.labelStart ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col v-if="ipv4Data.labelMode === BGP_LABEL_MODE.INCREMENT" :xs="24" :md="8">
-                            <nn-form-item label="Step" name="labelStep">
-                                <nn-tooltip :title="validationErrors.labelStep" :open="!!validationErrors.labelStep">
-                                    <nn-input
-                                        v-model:value="ipv4Data.labelStep"
-                                        :status="validationErrors.labelStep ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                </div>
-
-                <div v-if="false" class="config-section">
-                    <div class="section-title">SRv6</div>
-                    <nn-row :gutter="[16, 0]">
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="发送SID" name="srv6Enabled">
-                                <nn-switch v-model:checked="ipv4Data.srv6Enabled" />
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="SID模式" name="srv6SidMode">
-                                <nn-tooltip
-                                    :title="validationErrors.srv6SidMode"
-                                    :open="!!validationErrors.srv6SidMode"
-                                >
-                                    <nn-radio-group
-                                        v-model:value="ipv4Data.srv6SidMode"
-                                        class="inline-radio-group"
-                                        :disabled="!ipv4Data.srv6Enabled"
-                                    >
-                                        <nn-radio :value="BGP_SRV6_SID_MODE.FIXED">固定</nn-radio>
-                                        <nn-radio :value="BGP_SRV6_SID_MODE.INCREMENT">递增</nn-radio>
-                                    </nn-radio-group>
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="8">
-                            <nn-form-item label="SID" name="srv6Sid">
-                                <nn-tooltip :title="validationErrors.srv6Sid" :open="!!validationErrors.srv6Sid">
-                                    <nn-input
-                                        v-model:value="ipv4Data.srv6Sid"
-                                        :disabled="!ipv4Data.srv6Enabled"
-                                        :status="validationErrors.srv6Sid ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="SID Step" name="srv6SidStep">
-                                <nn-tooltip
-                                    :title="validationErrors.srv6SidStep"
-                                    :open="!!validationErrors.srv6SidStep"
-                                >
-                                    <nn-input
-                                        v-model:value="ipv4Data.srv6SidStep"
-                                        :disabled="
-                                            !ipv4Data.srv6Enabled ||
-                                            ipv4Data.srv6SidMode !== BGP_SRV6_SID_MODE.INCREMENT
-                                        "
-                                        :status="validationErrors.srv6SidStep ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                        <nn-col :xs="24" :md="6">
-                            <nn-form-item label="Endpoint" name="srv6EndpointBehavior">
-                                <nn-tooltip
-                                    :title="validationErrors.srv6EndpointBehavior"
-                                    :open="!!validationErrors.srv6EndpointBehavior"
-                                >
-                                    <nn-select
-                                        v-model:value="ipv4Data.srv6EndpointBehavior"
-                                        :options="srv6EndpointBehaviorOptions"
-                                        :disabled="!ipv4Data.srv6Enabled"
-                                        :status="validationErrors.srv6EndpointBehavior ? 'error' : ''"
-                                    />
-                                </nn-tooltip>
-                            </nn-form-item>
-                        </nn-col>
-                    </nn-row>
-                </div>
-
-                <div class="action-row">
-                    <div class="route-secondary-actions">
-                        <nn-button class="custom-attr-button" type="link" @click="showCustomRouteAttr">
-                            <template #icon><SettingOutlined /></template>
-                            配置自定义路由属性
-                        </nn-button>
-                        <nn-button class="advanced-config-button" type="link" @click="advancedConfigVisible = true">
-                            <template #icon><SettingOutlined /></template>
-                            高级配置
-                        </nn-button>
-                    </div>
+            <template #extra>
+                <nn-space class="workspace-header-actions">
+                    <span class="workspace-save-state" :class="{ 'is-dirty': workspaceDirty }">
+                        <span class="save-state-dot"></span>
+                        {{ workspaceDirty ? '未保存' : '已保存' }}
+                    </span>
+                    <nn-button
+                        size="small"
+                        data-testid="bgp-ipv4-save-workspace-button"
+                        :loading="workspaceSaving"
+                        :disabled="workspaceLoading || routesGenerating || groupOperationLoading || exportLoading"
+                        @click="saveWorkspace"
+                    >
+                        保存配置
+                    </nn-button>
                     <nn-button
                         class="generate-route-button"
                         data-testid="bgp-generate-ipv4-routes-button"
                         type="primary"
+                        size="small"
                         :loading="routesGenerating"
+                        :disabled="workspaceLoading || workspaceSaving || groupOperationLoading || exportLoading"
                         @click="generateRoutes"
                     >
-                        生成IPv4路由
+                        {{ activeGroupState ? '重新生成本组路由' : '生成本组路由' }}
                     </nn-button>
+                </nn-space>
+            </template>
+
+            <div class="group-runtime-toolbar">
+                <div class="group-runtime-description" role="status" aria-live="polite">
+                    <strong data-testid="bgp-ipv4-group-generation-state">
+                        {{
+                            activeGroupState
+                                ? `本组已生成 ${activeGroupState.routeCount} 条路由`
+                                : groupStatesKnown
+                                  ? '本组未生成路由'
+                                  : '本组生成状态待刷新'
+                        }}
+                    </strong>
+                    <span v-if="groupStatesError" data-testid="bgp-ipv4-group-state-error">{{ groupStatesError }}</span>
+                    <span v-else>右键路由组可复制、撤销或移除；重新生成会替换本组路由。</span>
                 </div>
-            </nn-form>
+            </div>
+
+            <BgpRouteTreeEditor
+                ref="treeEditorRef"
+                v-model:groups="routeGroups"
+                :active-group-id="activeGroupId"
+                :disabled="workspaceBusy"
+                :remove-group-disabled="!groupStatesKnown || groupStatesLoading"
+                :generation-states="groupStates"
+                :export-enabled="true"
+                :errors="validationErrors"
+                @update:active-group-id="selectRouteGroup"
+                @add-group="addRouteGroup"
+                @copy-group="copyRouteGroup"
+                @remove-group="removeRouteGroup"
+                @withdraw-group="withdrawRouteGroup"
+                @export-group="exportRouteGroup"
+                @refresh-group-state="refreshGroupStates"
+            />
         </nn-card>
 
         <nn-card :title="`已生成${displayRouteTitle}路由列表`" class="bgp-route-list-card">
@@ -221,6 +70,16 @@
                 <nn-space class="route-list-actions">
                     <nn-button v-if="!isDisplayLabelRoute" size="small" @click="showRouteViewsImport">
                         从 RouteViews 导入
+                    </nn-button>
+                    <nn-button
+                        size="small"
+                        data-testid="bgp-ipv4-export-mrt-button"
+                        title="导出当前地址族的全部已生成路由"
+                        :loading="exportLoading"
+                        :disabled="workspaceBusy"
+                        @click="exportRoutes()"
+                    >
+                        导出 MRT
                     </nn-button>
                     <nn-button
                         class="route-delete-all-button"
@@ -256,7 +115,7 @@
                 :loading="routeListLoading"
                 size="small"
                 :row-key="record => `${record.rd || '0:0'}-${record.pathId ?? 0}-${record.ip}-${record.mask}`"
-                :scroll="{ y: '100%' }"
+                :scroll="{ x: 'max-content', y: '100%' }"
                 class="bgp-route-table"
                 @change="handleTableChange"
             >
@@ -280,29 +139,6 @@
             </nn-table>
         </nn-card>
 
-        <nn-textarea-drawer
-            v-model:open="customRouteAttrVisible"
-            v-model:input-value="ipv4Data.customAttr"
-            title="报文输入"
-            input-label="报文内容"
-            placeholder="请输入16进制数字, 用空格分隔, 例如: 11 22 33 44 55 66 77"
-            :validator="validatePacketData"
-            @submit="handleCustomRouteAttrSubmit"
-        />
-
-        <BgpIpv4AdvancedRouteModal
-            v-model:open="advancedConfigVisible"
-            :config="ipv4Data"
-            :is-label-route="isLabelRoute"
-            :endpoint-options="srv6EndpointBehaviorOptions"
-            :validation-errors="validationErrors"
-            title="IPv4 路由高级配置"
-            show-add-path
-            show-srv6
-            show-label
-            @apply="config => Object.assign(ipv4Data, config)"
-        />
-
         <RouteViewsImportModal
             v-model:open="routeViewsImportVisible"
             :address-family="BGP_ADDR_FAMILY.IPV4_UNC"
@@ -317,83 +153,85 @@
     import { onMounted, ref, computed, nextTick, watch } from 'vue';
     import RouteViewsImportModal from '../../components/RouteViewsImportModal.vue';
     import BgpRouteDetailDrawer from '../../components/BgpRouteDetailDrawer.vue';
-    import BgpIpv4AdvancedRouteModal from '../../components/BgpIpv4AdvancedRouteModal.vue';
+    import BgpRouteTreeEditor from '../../components/BgpRouteTreeEditor.vue';
+    import { getAttributeResultColumns, compileRouteRulePayload } from './bgpAttributeRules';
+    import { getVisibleRouteSections } from './ipv4RouteSchema';
+    import {
+        createIpv4RouteGroup,
+        restoreIpv4RouteWorkspace,
+        serializeIpv4RouteWorkspace,
+        findIpv4RouteGroupOverlap
+    } from './ipv4RouteWorkspace';
     import { dialog } from '../../utils/dialog';
     import { notify } from '../../utils/notify';
-    import { DeleteOutlined, FileSearchOutlined, SettingOutlined } from 'netnexus-ui/icons';
+    import { DeleteOutlined, FileSearchOutlined } from 'netnexus-ui/icons';
     import { useBgpRouteRuntime } from './useBgpRouteRuntime';
 
-    import {
-        BGP_ADDR_FAMILY,
-        BGP_EVENT_PAGE_ID,
-        BGP_LABEL_MODE,
-        BGP_SRV6_ENDPOINT_BEHAVIOR,
-        BGP_SRV6_SID_MODE,
-        DEFAULT_VALUES
-    } from '../../const/bgpConst';
-    import {
-        FormValidator,
-        createBgpIpv4RouteConfigValidationRules,
-        validatePacketData
-    } from '../../utils/validationCommon';
+    import { BGP_ADDR_FAMILY, BGP_EVENT_PAGE_ID } from '../../const/bgpConst';
+    import { FormValidator, createBgpIpv4RouteConfigValidationRules } from '../../utils/validationCommon';
 
     defineOptions({
         name: 'RouteIpv4'
     });
 
-    const labelCol = { style: { width: '100px' } };
-    const wrapperCol = { span: 40 };
-    const addressFamilyOptions = [
-        { label: 'IPv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC },
-        { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST }
-    ];
-    const srv6EndpointBehaviorOptions = [
-        { label: 'End.DT4', value: BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT4 },
-        { label: 'End.DX4', value: BGP_SRV6_ENDPOINT_BEHAVIOR.END_DX4 },
-        { label: 'End.DT46', value: BGP_SRV6_ENDPOINT_BEHAVIOR.END_DT46 }
-    ];
-
-    const ipv4Data = ref({
-        prefix: DEFAULT_VALUES.IPV4_PREFIX,
-        mask: DEFAULT_VALUES.IPV4_MASK,
-        count: DEFAULT_VALUES.IPV4_COUNT,
-        randomAsPathEnabled: false,
-        asMin: 64512,
-        asMax: 65534,
-        asPathMinLength: 1,
-        asPathMaxLength: 5,
-        addPathEnabled: DEFAULT_VALUES.IPV4_ADD_PATH_ENABLED,
-        addPathCount: DEFAULT_VALUES.IPV4_ADD_PATH_COUNT,
-        customAttr: '',
-        rt: '',
-        labelMode: DEFAULT_VALUES.IPV4_LABEL_MODE,
-        labelStart: DEFAULT_VALUES.IPV4_LABEL_START,
-        labelStep: DEFAULT_VALUES.IPV4_LABEL_STEP,
-        srv6Enabled: DEFAULT_VALUES.IPV4_SRV6_ENABLED,
-        srv6SidMode: DEFAULT_VALUES.IPV4_SRV6_SID_MODE,
-        srv6Sid: DEFAULT_VALUES.IPV4_SRV6_SID,
-        srv6SidStep: DEFAULT_VALUES.IPV4_SRV6_SID_STEP,
-        srv6EndpointBehavior: DEFAULT_VALUES.IPV4_SRV6_ENDPOINT_BEHAVIOR,
-        addressFamily: BGP_ADDR_FAMILY.IPV4_UNC
+    const initialWorkspace = restoreIpv4RouteWorkspace(null);
+    const routeGroups = ref(initialWorkspace.groups);
+    const activeGroupId = ref(initialWorkspace.activeGroupId);
+    const activeRouteGroup = computed(
+        () => routeGroups.value.find(group => group.id === activeGroupId.value) || routeGroups.value[0]
+    );
+    const ipv4Data = computed({
+        get: () => activeRouteGroup.value.config,
+        set: value => {
+            activeRouteGroup.value.config = value;
+        }
     });
-
-    const validationErrors = ref({
-        prefix: '',
-        mask: '',
-        count: '',
-        addPathCount: '',
-        rt: '',
-        labelMode: '',
-        labelStart: '',
-        labelStep: '',
-        srv6SidMode: '',
-        srv6Sid: '',
-        srv6SidStep: '',
-        srv6EndpointBehavior: ''
-    });
+    const workspaceLoading = ref(true);
+    const workspaceSaving = ref(false);
+    const groupOperationLoading = ref(false);
+    const exportLoading = ref(false);
+    const groupStates = ref([]);
+    const groupStatesLoading = ref(false);
+    const groupStatesKnown = ref(false);
+    const groupStatesError = ref('');
+    let groupStatesRequestId = 0;
+    const activeGroupState = computed(() =>
+        groupStates.value.find(state => state.groupId === activeGroupId.value && Number(state.routeCount) > 0)
+    );
+    const savedWorkspaceSignature = ref('');
+    const workspaceSignature = computed(() =>
+        JSON.stringify(serializeIpv4RouteWorkspace(routeGroups.value, activeGroupId.value))
+    );
+    const workspaceDirty = computed(() => savedWorkspaceSignature.value !== workspaceSignature.value);
+    const workspaceBusy = computed(
+        () =>
+            workspaceLoading.value ||
+            workspaceSaving.value ||
+            routesGenerating.value ||
+            groupOperationLoading.value ||
+            exportLoading.value
+    );
+    const treeEditorRef = ref(null);
+    const validationErrors = ref({});
 
     const validator = new FormValidator(validationErrors);
-    validator.addRules(createBgpIpv4RouteConfigValidationRules());
+    const editableFields = new Set(
+        getVisibleRouteSections(ipv4Data.value).flatMap(section => section.fields.map(field => field.key))
+    );
+    const routeValidationRules = Object.fromEntries(
+        Object.entries(createBgpIpv4RouteConfigValidationRules()).filter(([key]) => editableFields.has(key))
+    );
+    routeValidationRules.count.push({
+        validator: value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) && Number(value) > 0,
+        message: '数量必须为正整数'
+    });
+    routeValidationRules.ipStep = [
+        {
+            validator: value => /^\d+$/.test(String(value)) && Number.isSafeInteger(Number(value)) && Number(value) > 0,
+            message: 'IP 步长必须为正整数'
+        }
+    ];
+    validator.addRules(routeValidationRules);
 
     // 暴露给父组件
     defineExpose({
@@ -417,15 +255,58 @@
     const routeCardTitle = computed(() => (isLabelRoute.value ? 'IPv4 Label路由配置' : 'IPv4-UNC路由配置'));
     const displayRouteTitle = computed(() => (isDisplayLabelRoute.value ? 'IPv4 Label' : 'IPv4-UNC'));
 
-    const customRouteAttrVisible = ref(false);
-    const advancedConfigVisible = ref(false);
-
-    const showCustomRouteAttr = () => {
-        customRouteAttrVisible.value = true;
+    const selectRouteGroup = id => {
+        activeGroupId.value = id;
+        validator.clearErrors();
     };
-
-    const handleCustomRouteAttrSubmit = data => {
-        ipv4Data.value.customAttr = data;
+    const addRouteGroup = () => {
+        const group = createIpv4RouteGroup(`路由组 ${routeGroups.value.length + 1}`);
+        routeGroups.value.push(group);
+        selectRouteGroup(group.id);
+    };
+    const copyRouteGroup = (groupId = activeGroupId.value) => {
+        const source = routeGroups.value.find(group => group.id === groupId);
+        if (workspaceBusy.value || !source) return;
+        const group = createIpv4RouteGroup(`${source.name || '路由组'} 副本`, source.config);
+        routeGroups.value.push(group);
+        selectRouteGroup(group.id);
+    };
+    const removeRouteGroup = async (groupId = activeGroupId.value) => {
+        if (routeGroups.value.length <= 1 || workspaceBusy.value || !groupStatesKnown.value || groupStatesLoading.value)
+            return;
+        if (!routeGroups.value.some(group => group.id === groupId)) return;
+        groupOperationLoading.value = true;
+        try {
+            if (groupStates.value.some(state => state.groupId === groupId && Number(state.routeCount) > 0)) {
+                await withdrawGroupRoutes(groupId);
+            }
+            const index = routeGroups.value.findIndex(group => group.id === groupId);
+            routeGroups.value.splice(index, 1);
+            selectRouteGroup(routeGroups.value[Math.min(index, routeGroups.value.length - 1)].id);
+        } catch (error) {
+            notify.error(`移除路由组失败：${error.message}`);
+            await refreshGroupStates();
+        } finally {
+            groupOperationLoading.value = false;
+        }
+    };
+    const persistWorkspace = async () => {
+        const snapshot = serializeIpv4RouteWorkspace(routeGroups.value, activeGroupId.value);
+        const result = await window.bgpApi.saveIpv4UNCRouteConfig(snapshot);
+        if (result.status !== 'success') throw new Error(result.msg || '路由组配置保存失败');
+        savedWorkspaceSignature.value = JSON.stringify(snapshot);
+    };
+    const saveWorkspace = async () => {
+        if (workspaceBusy.value) return;
+        workspaceSaving.value = true;
+        try {
+            await persistWorkspace();
+            notify.success('路由组配置已保存');
+        } catch (error) {
+            notify.error(error.message);
+        } finally {
+            workspaceSaving.value = false;
+        }
     };
 
     const routeViewsImportVisible = ref(false);
@@ -447,68 +328,13 @@
             }
         ];
 
-        if (!isDisplayLabelRoute.value) {
-            columns.push(
-                {
-                    title: 'RD',
-                    dataIndex: 'rd',
-                    key: 'rd',
-                    width: 90,
-                    customRender: ({ text }) => text || '0:0'
-                },
-                {
-                    title: 'Path ID',
-                    dataIndex: 'pathId',
-                    key: 'pathId',
-                    width: 90,
-                    customRender: ({ text }) => (text === undefined || text === null ? 0 : text)
-                }
-            );
-        }
-
-        if (isDisplayLabelRoute.value) {
-            columns.push({
-                title: 'Label',
-                dataIndex: 'label',
-                key: 'label',
-                width: 90,
-                customRender: ({ text }) => (text === undefined || text === null ? '-' : text)
-            });
-        }
-
+        columns.push(...getAttributeResultColumns(ipv4Data.value));
         columns.push({
-            title: 'RT',
-            dataIndex: 'rt',
-            key: 'rt',
+            title: '操作',
+            key: 'action',
             width: 150,
-            ellipsis: true
+            align: 'center'
         });
-
-        if (!isDisplayLabelRoute.value && sentRoutes.value.some(route => route.srv6Sid)) {
-            columns.push({
-                title: 'SRv6 SID',
-                dataIndex: 'srv6Sid',
-                key: 'srv6Sid',
-                width: 220,
-                ellipsis: true
-            });
-        }
-
-        columns.push(
-            {
-                title: 'AS 路径',
-                dataIndex: 'asPath',
-                key: 'asPath',
-                width: 180,
-                ellipsis: true
-            },
-            {
-                title: '操作',
-                key: 'action',
-                width: 150,
-                align: 'center'
-            }
-        );
 
         return columns;
     });
@@ -522,6 +348,84 @@
         showTotal: total => `共 ${total} 条，每页 25 条`
     });
 
+    const refreshGroupStates = async () => {
+        const requestId = ++groupStatesRequestId;
+        groupStatesLoading.value = true;
+        groupStatesKnown.value = false;
+        groupStatesError.value = '';
+        try {
+            if (typeof window.bgpApi?.getRouteGroupStates !== 'function') {
+                throw new Error('请重启应用后查看路由组生成状态');
+            }
+            const result = await window.bgpApi.getRouteGroupStates();
+            if (requestId !== groupStatesRequestId) return;
+            if (result?.status !== 'success') {
+                throw new Error(result?.msg || '路由组生成状态读取失败');
+            }
+            groupStates.value = result.data?.groups || [];
+            groupStatesKnown.value = true;
+        } catch (error) {
+            if (requestId === groupStatesRequestId) {
+                groupStatesError.value = error.message.startsWith('请重启应用')
+                    ? error.message
+                    : `生成状态不可用，请启动 BGP 后刷新。${error.message}`;
+            }
+        } finally {
+            if (requestId === groupStatesRequestId) groupStatesLoading.value = false;
+        }
+    };
+
+    const withdrawGroupRoutes = async groupId => {
+        if (typeof window.bgpApi?.withdrawRouteGroup !== 'function') {
+            throw new Error('请重启应用后撤销路由组');
+        }
+        const result = await window.bgpApi.withdrawRouteGroup({ groupId });
+        if (result?.status !== 'success') throw new Error(result?.msg || '路由组撤销失败');
+        await refreshRoutes();
+        notify.success(`已撤销本组 ${Number(result.data?.deleted) || 0} 条路由`);
+    };
+
+    const withdrawRouteGroup = async (groupId = activeGroupId.value) => {
+        if (
+            workspaceBusy.value ||
+            !groupStatesKnown.value ||
+            groupStatesLoading.value ||
+            !groupStates.value.some(state => state.groupId === groupId && Number(state.routeCount) > 0)
+        )
+            return;
+        groupOperationLoading.value = true;
+        try {
+            await withdrawGroupRoutes(groupId);
+        } catch (error) {
+            notify.error(`本组路由撤销失败：${error.message}`);
+            await refreshGroupStates();
+        } finally {
+            groupOperationLoading.value = false;
+        }
+    };
+
+    const exportRoutes = async groupId => {
+        if (workspaceBusy.value) return;
+        const state =
+            groupId && groupStates.value.find(item => item.groupId === groupId && Number(item.routeCount) > 0);
+        if (groupId && (!groupStatesKnown.value || groupStatesLoading.value || !state)) return;
+        const addressFamily = Number(state ? state.addressFamily : displayAddressFamily.value);
+        if (![BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST].includes(addressFamily)) return;
+        exportLoading.value = true;
+        try {
+            if (typeof window.bgpApi?.exportMrt !== 'function') throw new Error('请重启应用后使用 MRT 导出');
+            const result = await window.bgpApi.exportMrt({ addressFamily, ...(groupId ? { groupId } : {}) });
+            if (result?.data?.canceled) return;
+            if (result?.status !== 'success') throw new Error(result?.msg || 'MRT 导出失败');
+            notify.success(`已导出 ${Number(result.data?.routeCount) || 0} 条路由到 ${result.data?.filePath}`);
+        } catch (error) {
+            notify.error(`MRT 导出失败：${error.message}`);
+        } finally {
+            exportLoading.value = false;
+        }
+    };
+    const exportRouteGroup = groupId => exportRoutes(groupId);
+
     const clearRuntimeRoutes = () => {
         routeListRequestId += 1;
         routeDetailRequestId += 1;
@@ -532,16 +436,20 @@
         routeDetailVisible.value = false;
         routeDetailLoading.value = false;
         routeDetail.value = null;
+        void refreshGroupStates();
     };
     onMounted(async () => {
-        // 加载保存的配置
-        const savedConfig = await window.bgpApi.loadIpv4UNCRouteConfig();
-        if (savedConfig.status === 'success') {
-            if (savedConfig.data) {
-                Object.assign(ipv4Data.value, savedConfig.data);
-            }
-        } else {
-            console.error('IPv4-UNC路由配置文件加载失败', savedConfig.msg);
+        try {
+            const savedConfig = await window.bgpApi.loadIpv4UNCRouteConfig();
+            if (savedConfig.status !== 'success') throw new Error(savedConfig.msg || 'IPv4 路由组配置加载失败');
+            const workspace = restoreIpv4RouteWorkspace(savedConfig.data);
+            routeGroups.value = workspace.groups;
+            activeGroupId.value = workspace.activeGroupId;
+            savedWorkspaceSignature.value = workspaceSignature.value;
+        } catch (error) {
+            notify.error(error.message);
+        } finally {
+            workspaceLoading.value = false;
         }
     });
 
@@ -553,22 +461,13 @@
         }
     );
 
-    watch(
-        () => ipv4Data.value.addressFamily,
-        value => {
-            if (Number(value) === BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-                ipv4Data.value.srv6Enabled = false;
-                ipv4Data.value.addPathEnabled = false;
-            }
-        }
-    );
-
     const handleTableChange = (pag, _filters, _sorter) => {
         pagination.value.current = pag.current;
         refreshRoutes();
     };
 
     const refreshRoutes = async () => {
+        const groupStatesRefresh = refreshGroupStates();
         const requestId = ++routeListRequestId;
         const addressFamily = displayAddressFamily.value;
         const current = pagination.value.current;
@@ -596,6 +495,7 @@
                 pagination.value.total = 0;
             }
         } finally {
+            await groupStatesRefresh;
             if (requestId === routeListRequestId) {
                 routeListLoading.value = false;
             }
@@ -615,44 +515,47 @@
     };
 
     const generateRoutes = async () => {
-        if (routesGenerating.value) {
+        if (workspaceBusy.value) {
             return;
         }
 
         try {
             const hasErrors = validator.validate(ipv4Data.value);
             if (hasErrors) {
-                if (
-                    isLabelRoute.value &&
-                    ['labelMode', 'labelStart', 'labelStep'].some(field => validationErrors.value[field])
-                ) {
-                    advancedConfigVisible.value = true;
-                }
                 notify.error('请检查IPv4路由配置信息是否正确');
+                return;
+            }
+
+            const overlap = findIpv4RouteGroupOverlap(routeGroups.value, activeGroupId.value);
+            if (overlap) {
+                notify.error(
+                    `与路由组“${overlap.groupName}”的 ${overlap.prefix}/${overlap.mask} 前缀范围重叠，请调整后生成。`
+                );
                 return;
             }
 
             routesGenerating.value = true;
             await nextTick();
 
-            const payload = JSON.parse(JSON.stringify(ipv4Data.value));
-            const saveResult = await window.bgpApi.saveIpv4UNCRouteConfig(payload);
-            if (saveResult.status !== 'success') {
-                notify.error(saveResult.msg || '配置文件保存失败');
-                return;
-            }
+            const payload = compileRouteRulePayload(ipv4Data.value, activeRouteGroup.value);
+            await persistWorkspace();
 
             const result = await window.bgpApi.generateIpv4Routes(payload);
             if (result.status === 'success') {
                 notify.success(`${result.msg}`);
                 pagination.value.current = 1;
-                await refreshRoutes();
+                if (displayAddressFamily.value !== payload.addressFamily) {
+                    displayAddressFamily.value = payload.addressFamily;
+                } else {
+                    await refreshRoutes();
+                }
             } else {
                 notify.error(`${result.msg}`);
             }
         } catch (e) {
             notify.error(`IPv4路由生成失败: ${e.message}`);
         } finally {
+            if (routesGenerating.value) await refreshGroupStates();
             routesGenerating.value = false;
         }
     };
@@ -780,7 +683,7 @@
         overflow: visible;
         display: flex;
         flex-direction: column;
-        padding: 8px 10px !important;
+        padding: 0 !important;
     }
 
     .bgp-route-list-card :deep(.nn-card-body) {
@@ -792,75 +695,60 @@
         padding: 8px 10px !important;
     }
 
-    .bgp-route-form {
-        flex: 0 0 auto;
+    .workspace-header-actions {
+        flex-wrap: wrap;
+        justify-content: flex-end;
+    }
+
+    .group-runtime-toolbar {
         display: flex;
-        flex-direction: column;
-        overflow: visible;
+        align-items: center;
+        justify-content: space-between;
+        min-width: 0;
+        height: 32px;
+        padding: 6px 12px;
+        border-bottom: 1px solid var(--nn-color-border-light);
     }
 
-    .bgp-route-form :deep(.nn-form-item) {
-        flex: 0 0 auto;
-        margin-bottom: 8px;
-    }
-
-    .bgp-route-form :deep(.nn-form-item-label) {
-        padding-bottom: 0;
-    }
-
-    .bgp-route-form :deep(.nn-input) {
-        height: 28px;
-    }
-
-    .bgp-route-form :deep(.nn-select-selector) {
-        min-height: 28px !important;
-        height: 28px !important;
-    }
-
-    .bgp-route-form :deep(.nn-select-selection-item) {
-        line-height: 26px !important;
-    }
-
-    .config-section {
-        border-top: 1px solid var(--nn-color-border-light);
-        padding: 8px 0 0;
-    }
-
-    .config-section:first-child {
-        border-top: none;
-        padding-top: 0;
-    }
-
-    .section-title {
-        margin-bottom: 6px;
-        color: var(--nn-color-text-secondary);
-        font-size: 12px;
-        font-weight: 600;
-    }
-
-    .action-row {
-        border-top: 1px solid var(--nn-color-border-light);
-        display: grid;
-        grid-template-columns: 1fr auto 1fr;
+    .group-runtime-description {
+        display: flex;
+        align-items: center;
+        min-width: 0;
         gap: 12px;
+        font-size: 12px;
+    }
+
+    .group-runtime-description > strong {
+        flex-shrink: 0;
+    }
+
+    .group-runtime-description > span {
+        color: var(--nn-color-text-secondary);
+        font-size: 11px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .workspace-save-state {
+        display: inline-flex;
         align-items: center;
-        padding: 8px 0;
+        gap: 5px;
+        margin-right: 4px;
+        color: var(--nn-color-text-secondary);
+        font-size: 11px;
+        white-space: nowrap;
     }
 
-    .custom-attr-button {
-        justify-self: start;
-        padding-left: 0;
+    .save-state-dot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--nn-color-text-success);
     }
 
-    .route-secondary-actions {
-        display: flex;
-        align-items: center;
-        justify-self: start;
-    }
-
-    .generate-route-button {
-        grid-column: 2;
-        justify-self: center;
+    .workspace-save-state.is-dirty .save-state-dot {
+        background: var(--nn-color-text-warning);
     }
 
     .route-list-actions {
@@ -955,25 +843,26 @@
         z-index: 1;
     }
 
-    .inline-radio-group {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 4px 12px;
-    }
-
-    @media (max-width: 768px) {
-        .action-row {
-            grid-template-columns: 1fr;
+    @media (max-width: 720px) {
+        .bgp-route-page {
+            overflow-y: auto;
         }
 
-        .custom-attr-button {
-            justify-self: start;
-            text-align: left;
+        .bgp-route-card :deep(.nn-card-head-wrapper) {
+            flex-wrap: wrap;
+            gap: 8px;
         }
 
-        .generate-route-button {
-            grid-column: 1;
-            justify-self: stretch;
+        .workspace-header-actions {
+            gap: 6px;
+        }
+
+        .workspace-save-state {
+            display: none;
+        }
+
+        .bgp-route-list-card {
+            flex: 0 0 360px;
         }
     }
 </style>

@@ -142,6 +142,7 @@
         "files": [
             "dist/**/*",
             "electron/**/*",
+            "shared/**/*",
             "package.json",
             "LICENSE",
             "THIRD_PARTY_NOTICES.md",

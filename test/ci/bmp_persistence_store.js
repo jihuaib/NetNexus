@@ -377,7 +377,7 @@ try {
         state: 'syncing'
     });
     const validScopeIdentityJson = invalidSqlMutation.scope.identityJson;
-    invalidSqlMutation.scope.identityJson = null;
+    invalidSqlMutation.scope = { ...invalidSqlMutation.scope, identityJson: null };
     assert.throws(
         () => store.applyBatch(batch('sql-constraint-retry', [invalidSqlMutation])),
         /NOT NULL constraint failed/

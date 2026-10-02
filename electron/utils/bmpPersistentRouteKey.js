@@ -238,6 +238,23 @@ function resolveIpPrefix(prefixValue, lengthValue, afi) {
         throw new Error(`Conflicting prefix lengths: ${cidrLength} and ${lengthValue}`);
     }
 
+    if (parsed.family === 'ipv4') {
+        // Preserve the exact canonical bytes/text without allocating two tiny
+        // Buffers for every cache miss in a million-prefix table dump.
+        const addressBits = Number.parseInt(parsed.addressHex, 16);
+        const networkBits = (addressBits & (prefixLength === 0 ? 0 : 0xffffffff << (32 - prefixLength))) >>> 0;
+        const first = networkBits >>> 24;
+        const second = (networkBits >>> 16) & 0xff;
+        const third = (networkBits >>> 8) & 0xff;
+        const fourth = networkBits & 0xff;
+        return {
+            family: parsed.family,
+            prefixLength,
+            networkHex: HEX_BYTES[first] + HEX_BYTES[second] + HEX_BYTES[third] + HEX_BYTES[fourth],
+            networkText: `${first}.${second}.${third}.${fourth}`
+        };
+    }
+
     const network = Buffer.from(parsed.addressHex, 'hex');
     const wholeBytes = Math.floor(prefixLength / 8);
     const remainingBits = prefixLength % 8;

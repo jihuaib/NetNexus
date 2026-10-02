@@ -29,6 +29,30 @@
                         </nn-row>
                         <nn-row>
                             <nn-col :span="24">
+                                <nn-form-item label="处理线程数" name="threadCount">
+                                    <nn-tooltip
+                                        :title="validationErrors.threadCount"
+                                        :open="!!validationErrors.threadCount"
+                                    >
+                                        <nn-input-number
+                                            v-model:value="bmpConfig.threadCount"
+                                            data-testid="bmp-thread-count-input"
+                                            :min="1"
+                                            :max="MAX_BMP_THREAD_COUNT"
+                                            :precision="0"
+                                            style="width: 100%"
+                                            :status="validationErrors.threadCount ? 'error' : ''"
+                                        />
+                                    </nn-tooltip>
+                                    <div class="nn-helper-text">
+                                        收发处理与数据库写入各使用此数量的线程，最多同时接入此数量的客户端；超限连接将被拒绝。
+                                        保存后下次启动生效。
+                                    </div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
                                 <nn-form-item label="认证方式" name="authType">
                                     <nn-radio-group
                                         v-model:value="bmpConfig.authType"
@@ -417,12 +441,15 @@
     const TCP_MD5_SETTINGS_LISTENER_ID = 'bmp-config-tcp-md5-settings';
     const MAX_TCP_AO_PROFILE_COUNT = 32;
     const MAX_TCP_MD5_PROFILE_COUNT = 32;
+    const DEFAULT_BMP_THREAD_COUNT = 4;
+    const MAX_BMP_THREAD_COUNT = 16;
 
     const labelCol = { style: { width: '100px' } };
     const wrapperCol = { span: 40 };
 
     const bmpConfig = ref({
         port: DEFAULT_VALUES.DEFAULT_BMP_PORT,
+        threadCount: DEFAULT_BMP_THREAD_COUNT,
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         pathMarkingTlvType: getDefaultPathMarkingTlvType(DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT),
         persistenceEnabled: true,
@@ -771,6 +798,7 @@
 
     const validationErrors = ref({
         port: '',
+        threadCount: '',
         pathMarkingTlvType: '',
         tcpAoProfileIds: '',
         tcpMd5ProfileIds: ''
@@ -940,6 +968,7 @@
         const authType = normalizeAuthType(bmpConfig.value.authType);
         return {
             port: bmpConfig.value.port,
+            threadCount: bmpConfig.value.threadCount,
             bmpV4TlvDraft: normalizeBmpV4TlvDraft(bmpConfig.value.bmpV4TlvDraft),
             pathMarkingTlvType: normalizePathMarkingTlvType(
                 bmpConfig.value.pathMarkingTlvType,
@@ -1273,6 +1302,7 @@
         if (savedConfig.status === 'success') {
             if (savedConfig.data) {
                 bmpConfig.value.port = savedConfig.data.port || DEFAULT_VALUES.DEFAULT_BMP_PORT;
+                bmpConfig.value.threadCount = savedConfig.data.threadCount ?? DEFAULT_BMP_THREAD_COUNT;
                 const savedDraft = normalizeBmpV4TlvDraft(savedConfig.data.bmpV4TlvDraft);
                 bmpConfig.value.bmpV4TlvDraft = savedDraft;
                 bmpConfig.value.pathMarkingTlvType = normalizePathMarkingTlvType(

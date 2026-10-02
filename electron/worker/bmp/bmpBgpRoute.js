@@ -177,6 +177,13 @@ class BmpBgpRoute {
         return owner?.getRouteAttr?.(this) || this.getInlineRouteAttr() || { ...DEFAULT_BMP_ROUTE_ATTR };
     }
 
+    getImmutableRouteAttr() {
+        // Do not bypass an external attribute owner. The parser's transient
+        // routes only share the frozen inline object created for this UPDATE.
+        if (typeof this.getRouteAttrOwner()?.getRouteAttr === 'function') return null;
+        return this._inlineAttr && Object.isFrozen(this._inlineAttr) ? this._inlineAttr : null;
+    }
+
     getRouteAttrEntry() {
         const owner = this.getRouteAttrOwner();
         return owner?.getRouteAttrEntry?.(this) || null;
@@ -197,6 +204,15 @@ class BmpBgpRoute {
         }
 
         this._inlineAttr = this.makeRouteAttr(attr);
+        this.attrId = null;
+        return null;
+    }
+
+    assignSharedRouteAttr(attr) {
+        if (!attr || !Object.isFrozen(attr)) throw new Error('Shared BMP route attributes must be immutable');
+        if (typeof this.getRouteAttrOwner()?.assignRouteAttr === 'function') return this.assignRouteAttr(attr);
+        this._inlineAttr = attr;
+        this.attrId = null;
         return null;
     }
 

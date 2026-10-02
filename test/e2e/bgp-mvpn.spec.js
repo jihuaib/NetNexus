@@ -194,20 +194,28 @@ function assertWirePageParity(updates, pageRoutes) {
 }
 
 function expectedRendererCells(route) {
-    return [route.rd, route.rt, route.asPath, route.sourceIp, route.groupIp].map(normalizeCellText);
+    return [route.rd, route.rt ? `rt:${route.rt}` : '—', route.asPath || '—', route.sourceIp, route.groupIp].map(
+        normalizeCellText
+    );
 }
 
 async function readRendererRows(table) {
-    return table.locator('.nn-table-tbody > .nn-table-row').evaluateAll(rows =>
-        rows.map(row =>
-            Array.from(row.querySelectorAll(':scope > .nn-table-cell'))
-                .slice(0, -1)
-                .map(cell =>
-                    String(cell.innerText || '')
+    const headers = await table.locator('.nn-table-thead .nn-table-cell').allTextContents();
+    const indices = ['RD', 'Extended Community', 'AS 路径', 'Source IP', 'Group IP'].map(title =>
+        headers.findIndex(header => normalizeCellText(header) === title)
+    );
+    expect(indices.every(index => index >= 0)).toBe(true);
+    return table.locator('.nn-table-tbody > .nn-table-row').evaluateAll(
+        (rows, indices) =>
+            rows.map(row => {
+                const cells = row.querySelectorAll(':scope > .nn-table-cell');
+                return indices.map(index =>
+                    String(cells[index].innerText || '')
                         .trim()
                         .replace(/\s+/g, ' ')
-                )
-        )
+                );
+            }),
+        indices
     );
 }
 
@@ -265,9 +273,7 @@ async function assertRendererPage(page, routes) {
             await quickJumper.press('Enter');
         }
         await expect(rows).toHaveCount(expectedRows.length, { timeout: 30000 });
-        await expect(rows.first().locator('.nn-table-cell').nth(4)).toHaveText(expectedRows[0][4], {
-            timeout: 30000
-        });
+        await expect(rows.first().getByText(expectedRows[0][4], { exact: true })).toBeVisible({ timeout: 30000 });
         expect(await readRendererRows(table), `MVPN renderer page ${currentPage}`).toEqual(expectedRows);
     }
 }

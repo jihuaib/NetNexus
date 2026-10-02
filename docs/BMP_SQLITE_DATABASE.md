@@ -1,12 +1,54 @@
 # BMP SQLite 数据库说明
 
-本文档说明 NetNexus BMP SQLite schema v13 的定位、固定路由分区、全局路由对象、整数代理键、候选驱动的对象回收、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
+本文档说明 NetNexus BMP 按 client 独立存储的 SQLite schema v13、固定路由分区、库内共享路由对象、整数代理键、候选驱动的对象回收、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
+
+## 按 client 隔离的存储布局
+
+`persistenceDbPath` 是存储定位基址，不再是所有 client 共用的路由数据库。每个稳定 `source_id` 对应一个完整的独立数据库：
+
+```text
+bmp/bmp.sqlite3.clients/<source_id>.sqlite3
+```
+
+每个文件独立保存 source、connection、scope、所有地址族的路由、属性、payload 和统计数据。相同 NLRI 或相同属性出现在不同 client 时，分别在各自的文件中保存；属性去重、引用计数、回收、撤销和 epoch 清理均不跨 client。本文后续的“全库”和“全局对象”仅指某一个 client 数据库内部，整数代理键不能跨文件使用。
+
+client 归属沿用现有稳定 source identity，不采用临时 TCP 源端口或连接 UUID，因此重连复用原文件。本次不改变任何 NLRI 身份算法，也不按 IP、EVPN Route Type、FlowSpec 组件等再拆数据库；已有地址族物理分表保持不变。
+
+BMP 的 `threadCount` 默认是 4，范围为 1–16。它同时设置解析 worker 数和持久化 Writer 数；一个解析槽在整个连接生命周期内只服务一条 BMP 连接，因此最多同时接入 `threadCount` 条 BMP 连接。槽位已满时，新连接立即关闭，不排队等待。断线关闭操作与该连接已有的数据保持 FIFO，完成解析和会话关闭后才释放槽；重连重新占用空闲槽，但仍按稳定 source identity 复用原 client 数据库。连接上限不限制历史 client 的数量。
+
+启用持久化时，可以把执行模型简化为：
+
+```text
+socket / 启停 / 查询协调线程
+  ├─ N 个解析 worker：每条在线 BMP 连接独占一个槽，解析 BMP/BGP 和生成 mutation
+  ├─ N 个数据库 Writer：按稳定 source ID 固定分配，写入各 client 的独立 SQLite 文件
+  └─ 共享查询 Reader：按 source 定位单库，或聚合发现到的 client 数据库
+
+N = threadCount，默认 4，范围 1–16
+```
+
+socket 接收和业务协调仍在协调线程，不是每条 TCP 连接独立运行整个 BMP 服务，也不把一条连接的路由拆给多个解析线程。每个 Writer 可管理多个 client 的独立文件；同一 client 的写入和生命周期事件保持 FIFO，跨 client 可以并行。停止服务会等待连接关闭、解析队列和持久化队列完成，再关闭数据库及 worker。此模型增加的是多连接解析与写入并行能力，不承诺单 client 的解析或单库写入吞吐按 N 倍增长。
+
+解析线程异常会停止 BMP、通知界面并清理 worker，不继续接收数据或自动迁移会话。重新启动时，沿用数据库已有的中断连接恢复流程。删除离线 client 前，会先等待尚未完成的解析和连接关闭，再等待数据库写入屏障，避免延迟 mutation 重新写回已删除的数据。
+
+读线程发现分库目录，按 source 定位查询；全局路由分页的 opaque cursor 同时记录 client 和库内位置。Route Assurance 按 client 依次流式读取，仍保持每个 client 内的 NLRI 分组顺序；按需启动的分析 reader 不计入上述 N 个解析槽或 N 个 Writer。
+
+首次创建先在私有临时目录完成 schema 初始化并关闭 SQLite，再原子发布正式文件，避免读线程看到未初始化的库。每个 worker 的打开数据库缓存有上限，重新打开被驱逐的连接不会被误判为 collector 重启。
+
+删除单个 client 时清空该库的路由、属性和其它记录，但保留空文件，使已经打开的 reader 不会继续持有旧 inode。服务停止后的“删除 BMP 数据库”操作才关闭 reader 并删除所有合法 client 数据库及其 sidecar；未知文件不删除。旧共享 `bmp.sqlite3` 及其 sidecar 不读取、不迁移、不删除，设置页会提示其保留状态。
+
+验证覆盖真实多 Writer 交错写入及 fence、相同 NLRI/属性的物理隔离、EVPN/FlowSpec、单 client 更新/撤销/删除、重连/EOR、分页游标、LRU 和离线恢复。另有强制 Node-fork 回归：同一进程两轮真实 BMP 启动、收路由、Route Assurance、停止和离线读取，检查正常退出码及无退出信号。此轮未做单 client 千万路由写入吞吐压测。
+
+Electron `ELECTRON_RUN_AS_NODE` 的 Node-fork 兜底路径使用 JSON IPC 和 `electron/worker/core/protocolProcessSerialization.js` 的纯 JS 图编码，保留 Buffer、TypedArray、特殊数值、Map/Set、Date、循环及重复引用。这避开了当前 Electron 运行时对复杂对象执行 V8 序列化时的 BackingStore 回收崩溃；不能用 `v8.serialize()` 再包 base64 替代，因为序列化本身也能复现该崩溃。标准 `utilityProcess`、进程内 worker-thread 和普通 Node 的高级 IPC 通道保持原样。
 
 如果目标是先理解页面怎么用、路由矩阵/路由追踪有什么区别，以及详情长什么样，请先看带截图的 [BMP 监控器说明](BMP_MONITOR.md)；本文继续解释这些页面怎样关联 SQLite 表并组装字段。
 
 实现依据：
 
 - Schema、事务、查询和清理：`electron/worker/bmp/bmpPersistenceStore.js`
+- client 文件定位、安全检查和分库查询：`electron/worker/bmp/bmpClientPersistencePaths.js`、`bmpClientPersistenceStore.js`
+- 有界 Writer 池、跨线程 fence 和水位：`electron/worker/bmp/bmpClientPersistenceClient.js`
+- 每连接独占解析槽和 FIFO 关闭：`electron/worker/bmp/bmpIngestClientPool.js`
 - 固定分区清单和安全路由：`electron/worker/bmp/bmpRoutePartitionManifest.js`
 - 稳定 source、scope、route ID：`electron/utils/bmpPersistentRouteKey.js`
 - Mutation 构造：`electron/worker/bmp/bmpPersistenceMutation.js`
@@ -415,9 +457,9 @@ SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 
 数据库基本信息：
 
-| 项目 | schema v10 的值 |
+| 项目 | schema v13 的值 |
 | --- | --- |
-| 数据库文件 | 通常为 Electron `userData/bmp/bmp.sqlite3` |
+| 数据库文件 | 每个 client 一个 `userData/bmp/bmp.sqlite3.clients/<source_id>.sqlite3` |
 | Schema version | `13`，保存在 `PRAGMA user_version` |
 | 稳定键 schema version | `2`（固定顺序的规范化字符串哈希，见 7.1） |
 | 稳定键算法 | SHA-256 |
@@ -432,8 +474,8 @@ SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 
 WAL 模式运行时，数据库目录还可能存在：
 
-- `bmp.sqlite3-wal`：尚未 checkpoint 回主文件的已提交 WAL 页面。
-- `bmp.sqlite3-shm`：WAL 共享内存索引。
+- `<source_id>.sqlite3-wal`：该 client 尚未 checkpoint 回主文件的已提交 WAL 页面。
+- `<source_id>.sqlite3-shm`：该 client 的 WAL 共享内存索引。
 
 ## 2. Schema v13 的核心变化
 
@@ -747,7 +789,7 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 
 ### 7.1 `bmp_route_identities`
 
-该表保存“这是什么路由”，跨 source、scope 和 RIB stage 全局复用。
+该表保存“这是什么路由”，在同一 client 内跨 scope 和 RIB stage 复用，不跨 client 复用。
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
@@ -962,7 +1004,7 @@ v11 删除了 `bmp_route_events`。数据库不再保存 announce / replace / wi
 
 同一个 `batch_id` 重试时整批不会重复执行。批次记录与其他表之间没有关联，按 `created_at_ms` 独立清理。
 
-一批中的 source、connection、scope、全局路由对象、current projection、counter、连接序号和 statistics 修改在一个 SQLite transaction 中提交。
+同一 client 批次中的 source、connection、scope、库内路由对象、current projection、counter、连接序号和 statistics 修改在一个 SQLite transaction 中提交。包含多个 client 的传输批次先按 client 拆开，各库独立提交，不承诺跨库原子事务；重试依靠各库的 `batch_id` 幂等记录。若重试涉及已提交子批次，Route Assurance 会失效并重新读取已提交状态，避免遗漏首次提交的增量。
 
 ## 11. Statistics tables
 
@@ -1056,8 +1098,47 @@ SQLite Writer transaction
 1. 解析并校验 scope 的物理 partition。
 2. 将 route 拆成 identity/NLRI、扩展展示 payload 和 attributes 后分别 upsert；普通路由 payload 可以复用全局 `{}` 行。
 3. 只有 mutation connection 等于 scope 当前 connection，且 epoch 等于 scope 当前 epoch，才允许更新 current projection。
-4. 同一 `(scope_pk, route_pk)` 已存在时更新 payload、attribute、时间和 `last_sequence`，旧 payload/attribute 记入 GC 候选。
-5. 根据是否新增、属性变化或仅刷新，把本次变更分类为 `announce`、`replace`、`refresh` 或 `upsert-noop`；该分类只出现在返回给 Worker 的 committed delta 中（供 Route Assurance 增量使用），不再落库。
+4. 同一 `(scope_pk, route_pk)` 已存在时先比较 payload、attribute、connection、epoch 和显式状态。全部相同且仍为 active 时，只更新 `last_seen_ms`、`source_timestamp_ms` 和 `last_sequence`，保持首次观察时间不变，不改未变的索引列。只有确实替换了 payload/attribute 引用，才把对应旧引用记入 GC 候选。
+5. 新增、属性/payload 变化、连接/epoch 切换和状态变化仍走完整 UPSERT，开启分析时构造 committed delta。纯时间/顺序刷新不构造业务增量；source 或 scope 的分析上下文变化则要求重建分析快照，避免未重新上报的路由仍使用旧上下文。该分类不再落库。
+
+### 13.1.1 重复上报优化与测量
+
+真实解析路径在同一个 UPDATE 内按地址族及有效 Next Hop 共享不可变属性对象，公共 AS_PATH、Community 等只提取一次，属性 JSON/哈希只生成一次；经典 IPv4 的 NEXT_HOP 不与其他地址族的 MP_REACH Next Hop 混用。每条路由的 NLRI、Path ID、Label、Path Marking 和 Route TLV 仍独立，外部属性修改采用 copy-on-write，不影响共享该对象的其他路由。这不是跨 client 共享属性，也不会跳过报文解析。
+
+数据库快速刷新只适用于同内容、同连接和同 epoch 的已存在路由。它仍保存最近观察时间、设备时间及新 sequence，仍检查 scope 所属连接和 epoch；重连刷新、EOR 清理、撤销和旧序号保护保持原语义。持久化本身不意味着重复报文不再处理，不能把旧 `batch_id` 重试的幂等短路当作正常重复上报的性能。
+
+纯路由 upsert 批次还会按 partition/scope 每 250 个路由键批量预取 current 行的整数引用和状态，避免每条路由单独跨 native 边界查询。缓存只存在于当前事务/批次，明确区分“已查不存在”和“未预取”；同一路由在批内多次出现时，只有成功写入才同步缓存，仍按原 FIFO 顺序执行。含 EOR、撤销或其他生命周期事件的混合批次保留逐条查询路径，不跨批持有完整路由缓存，也不提前修改 scope 或执行生命周期操作。
+
+解析侧按 session/owner 共享冻结的 source、connection 和 scope 描述对象；元数据、端点、VRF、状态或 epoch 变化时创建新对象，已排队的 mutation 不会被后续修改污染。缓存位于模块 WeakMap，不进入会话快照，不跨 client 共享状态。Worker 的结构化复制会保留批内共享引用；中转线程不再对纯路由 DTO 二次深拷贝，事件及统计中的 Buffer 等仍正常恢复。持久化 transport 对完整描述内容进行去重，而不是仅按 ID 合并；Writer 只对同一个描述对象做一次规范化、scope identity 解析和 source 绑定检查，仍先校验整批再写入任何 client。
+
+维表预取先批量查询已有 identity/payload/attribute 的整数 PK，只有缺失对象才批量插入并 RETURNING；已存在对象不再执行 INSERT OR IGNORE，payload 哈希碰撞校验仍保留。纯 upsert、单一稳定 source/connection/scope 上下文且路由 key 不重复的批次，可以将同内容路由的观察元数据刷新推迟到事务内末尾，每 250 行执行一次 guarded UPDATE。完整语义变更仍按原路径执行；存在同 key 重复、上下文切换或生命周期事件时禁用推迟刷新，保留 FIFO 逐条处理。批量 UPDATE 再次检查 payload/attribute、connection/epoch、active 状态、行序号及 scope 实际 owner/epoch，随后才提交 connection 高水位；任何错误回滚整批。5000 条符合条件的重复路由可由 5000 次单行刷新降为 20 次批量刷新，但仍保存每条路由的观察时间和序号，并非丢弃重复报文。
+
+批量 SQL 必须由刷新记录驱动：先使用 `(scope_pk, route_pk)` 唯一索引取得符合上述守卫的 `path_pk`，再按 current 表的整数主键更新。不能仅按 scope/connection/epoch 范围扫描后再与 250 条记录关联，否则在百万行 scope 上会严重退化。回归测试同时断言执行计划中的唯一索引双列定点查找、目标行主键查找和持久索引/计数触发器不被改写，防止“SQL 调用少但扫描量更大”的回归。
+
+可重复的端到端基准使用一个 peer 或一个 Loc-RIB 实例、独立全新临时库、固定线程与批量配置，计时从 TCP 发送开始直到末尾独特标记路由提交。首次和重复上报使用完全相同的报文字节，但接收时间及内部 sequence 都是新值；每轮校验准确路由条数、首/中/末路由属性和最近观察时间。报文构造与校验不计入写入耗时。
+
+```sh
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/benchmarks/bmp_repeated_ingest_benchmark.js \
+  --routes=1000000 --rounds=3 --label=baseline --output=/tmp/bmp-baseline.json
+# 修改优化代码后，在没有其他压测的情况下使用相同命令参数复测。
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/benchmarks/bmp_repeated_ingest_benchmark.js \
+  --routes=1000000 --rounds=3 --label=optimized --output=/tmp/bmp-optimized.json
+node scripts/benchmarks/compare_bmp_repeated_ingest_benchmarks.js \
+  /tmp/bmp-baseline.json /tmp/bmp-optimized.json /tmp/bmp-comparison.json
+```
+
+默认每个 UPDATE 含 50 条 IPv4 /24 NLRI，共 100 组属性，使用 1 个解析 Worker 和 1 个 Writer、5000 条攒批、20 ms flush，关闭 Route Assurance；peer 和 Loc-RIB 各跑 3 轮，并交替测试顺序。比较工具会检查配置、硬件/运行时、报文 SHA-256 和基准脚本哈希一致，再计算耗时下降和吞吐提升。数据库及原始结果保留在新建临时目录，不读取或修改应用数据库；较小的同路径回归见 `test/ci/bmp_repeated_ingest_tcp.js`。
+
+2026-10-02 在 Apple M4 Pro / macOS arm64 / Electron 22.3.27 上，以每种 scope 100 万条路由实测。下表为三轮中位数；优化前指已经支持属性共享和 current 引用批量预取的上一版，优化后增加上述描述对象复用、缺失维表插入和定点批量刷新。优化前另做一轮复测，确认核心文件哈希、报文、配置与运行时和三轮基线一致；优化后也校验被测文件哈希与交付代码一致。
+
+| Scope | 上报 | 优化前 | 优化后 | 耗时下降 |
+| --- | --- | ---: | ---: | ---: |
+| Peer | 首次 | 31.315 s | 23.399 s | 25.28% |
+| Peer | 重复 | 20.510 s | 10.267 s | 49.94% |
+| Loc-RIB | 首次 | 31.389 s | 24.653 s | 21.46% |
+| Loc-RIB | 重复 | 22.260 s | 11.965 s | 46.25% |
+
+这是 TCP 接收到落库的端到端结果，不是 SQL 微基准，也不包含 UI 或 Route Assurance 分析耗时。百万次 NLRI 解析、路由键生成、消息传输和逐行观察元数据持久化仍然存在，因此不代表重复上报可以完全跳过处理。EVPN、IPv4/IPv6 FlowSpec 的快路径与语义变化回退由 `test/ci/bmp_non_ip_bulk_refresh.js` 另行验证；未知 AF/SAFI 保留 raw NLRI，不宣称已经解析 VPN FlowSpec。
 
 ### 13.2 Withdraw
 
@@ -1210,8 +1291,8 @@ SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及�
 - 不要手工向分区表写入错误的 `partition_id`，也不要绕过 family validation trigger。
 - 不要手工修改 scope counters；不要绕过 Writer 删除 current row。
 - 不要根据外部输入拼接物理表名，表名必须来自固定 manifest。
-- 不要只备份 `bmp.sqlite3` 而忽略正在使用的 WAL/SHM。
-- 最稳妥的离线备份方式是先停止 BMP，让队列 drain 并 checkpoint，再复制数据库文件。
+- 不要只备份某个 client 的主文件而忽略正在使用的 WAL/SHM。
+- 最稳妥的离线备份方式是先停止 BMP，让队列 drain 并 checkpoint，再复制整个 `bmp.sqlite3.clients` 分库目录。
 - 大量删除后文件不会自动缩小；`freelist_count` 表示可复用页，是否执行 `VACUUM` 应由运维窗口和可用磁盘空间决定。
 - `bmp_current_routes_all` 是只读统一视图，不应作为写入目标。
-- v13 没有旧库兼容层；Writer 发现 schema 不匹配会直接清空并重建数据库，需要保留旧数据时必须在启动 BMP 之前备份。
+- v13 没有旧 schema 兼容层；Writer 发现某个 client 库的 schema 不匹配会清空并重建该文件，需要保留数据时必须在启动 BMP 之前备份。旧共享 `bmp.sqlite3` 不在此初始化流程中，仍原样保留。

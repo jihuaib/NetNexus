@@ -100,6 +100,10 @@ contextBridge.exposeInMainWorld('bgpApi', {
     // bgp操作
     startBgp: bgpConfigData => ipcRenderer.invoke('bgp:startBgp', bgpConfigData),
     stopBgp: () => ipcRenderer.invoke('bgp:stopBgp'),
+    getRouteDatabaseInfo: () => ipcRenderer.invoke('bgp:getRouteDatabaseInfo'),
+    deleteRouteDatabase: () => ipcRenderer.invoke('bgp:deleteRouteDatabase'),
+    getRouteGroupStates: () => ipcRenderer.invoke('bgp:getRouteGroupStates'),
+    withdrawRouteGroup: config => ipcRenderer.invoke('bgp:withdrawRouteGroup', config),
 
     // peer操作
     configIpv4Peer: ipv4PeerConfigData => ipcRenderer.invoke('bgp:configIpv4Peer', ipv4PeerConfigData),
@@ -118,6 +122,7 @@ contextBridge.exposeInMainWorld('bgpApi', {
     getRoutes: (addressFamily, page, pageSize, options = {}) =>
         ipcRenderer.invoke('bgp:getRoutes', addressFamily, page, pageSize, options),
     getRouteDetail: (addressFamily, route) => ipcRenderer.invoke('bgp:getRouteDetail', addressFamily, route),
+    exportMrt: options => ipcRenderer.invoke('bgp:exportMrt', options),
 
     saveIpv4QpRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv4QpRouteConfig', config),
     loadIpv4QpRouteConfig: () => ipcRenderer.invoke('bgp:loadIpv4QpRouteConfig'),

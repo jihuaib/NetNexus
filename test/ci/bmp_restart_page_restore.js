@@ -6,6 +6,12 @@ const path = require('node:path');
 const { once } = require('node:events');
 
 const BmpConst = require('../../electron/const/bmpConst');
+const BmpApp = require('../../electron/app/bmpApp');
+const {
+    getClientDatabaseDirectory,
+    getClientDatabasePath,
+    listClientDatabases
+} = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessHost');
 const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
 const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
@@ -208,8 +214,22 @@ async function main() {
     let thirdHarness = null;
     let firstSocket = null;
     let secondSocket = null;
+    const offlineApp = Object.create(BmpApp.prototype);
+    Object.assign(offlineApp, {
+        persistenceDbPath: dbPath,
+        worker: null,
+        bmpStarting: false,
+        persistenceDatabaseDeleting: false,
+        offlinePersistenceReader: null,
+        offlinePersistenceOpenPromise: null,
+        offlinePersistenceLock: Promise.resolve(),
+        offlinePersistenceClosePromises: new Set(),
+        logLevel: 'off'
+    });
+    const legacyContents = 'legacy shared database must remain unread and unchanged';
 
     try {
+        fs.writeFileSync(dbPath, legacyContents);
         firstHarness = await startWorker(dbPath, port, 'bmp-restart-seed');
         firstSocket = await sendScenario(port, scenario);
 
@@ -243,6 +263,32 @@ async function main() {
         await firstSocketClosed;
         firstSocket = null;
         await stopWorker(firstHarness);
+
+        assert.equal(fs.readFileSync(dbPath, 'utf8'), legacyContents);
+        assert.equal(fs.existsSync(getClientDatabasePath(dbPath, sourceId)), true);
+        assert.deepEqual(
+            listClientDatabases(dbPath).map(database => database.sourceId),
+            [sourceId]
+        );
+        const offlineStatus = await offlineApp.queryPersistenceStatus();
+        assert.equal(offlineStatus.status, 'success');
+        assert.equal(offlineStatus.data.storageMode, 'client-databases');
+        assert.equal(offlineStatus.data.storageDirectory, getClientDatabaseDirectory(dbPath));
+        assert.equal(offlineStatus.data.clientDatabaseCount, 1);
+        assert.equal(offlineStatus.data.legacyDatabaseExists, true);
+        const standaloneOfflineRoutes = await offlineApp.queryPersistedRoutes({
+            sourceId,
+            scopeId: locRibScopeId,
+            routeState: 'all',
+            page: 1,
+            pageSize: 10,
+            prefixFilter: defaultLocRibPrefix
+        });
+        assert.equal(standaloneOfflineRoutes.status, 'success');
+        assert.equal(standaloneOfflineRoutes.data.total, 1);
+        assert.equal(standaloneOfflineRoutes.data.list[0].persistentScopeId, locRibScopeId);
+        assert.equal(standaloneOfflineRoutes.data.list[0].routeState, 'stale');
+        await offlineApp.closeOfflinePersistenceReader();
 
         // This is a genuinely fresh worker: its in-memory session map starts empty,
         // and no BMP device has reconnected when the following page queries run.
@@ -400,6 +446,11 @@ async function main() {
         });
         assert.equal(crashRestoredRoutes.data.total, 1);
         assert.equal(crashRestoredRoutes.data.list[0].routeState, 'stale');
+        assert.equal(
+            fs.readFileSync(dbPath, 'utf8'),
+            legacyContents,
+            'restart must never read or modify legacy storage'
+        );
 
         console.log(
             `BMP restart page restore regression passed: source=${sourceId.slice(0, 12)}, ` +
@@ -411,6 +462,7 @@ async function main() {
         await stopWorker(firstHarness).catch(() => {});
         await stopWorker(secondHarness).catch(() => {});
         await stopWorker(thirdHarness).catch(() => {});
+        await offlineApp.closeOfflinePersistenceReader().catch(() => {});
         fs.rmSync(tempDir, { recursive: true, force: true });
     }
 }

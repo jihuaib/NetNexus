@@ -100,8 +100,9 @@
                                     <nn-form-item-rest>
                                         <nn-space size="middle">
                                             <nn-checkbox
-                                                v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
+                                                v-for="addressFamily in ADD_PATH_ADDRESS_FAMILIES"
                                                 :key="`ipv4-add-path-${addressFamily}`"
+                                                :data-testid="`bgp-ipv4-peer-add-path-${addressFamily}-checkbox`"
                                                 v-model:checked="
                                                     ipv4PeerConfigData.addressFamilyConfig[addressFamily].sendAddPath
                                                 "
@@ -228,8 +229,9 @@
                                     <nn-form-item-rest>
                                         <nn-space size="middle">
                                             <nn-checkbox
-                                                v-for="addressFamily in UNICAST_ADD_PATH_ADDRESS_FAMILIES"
+                                                v-for="addressFamily in ADD_PATH_ADDRESS_FAMILIES"
                                                 :key="`ipv6-add-path-${addressFamily}`"
+                                                :data-testid="`bgp-ipv6-peer-add-path-${addressFamily}-checkbox`"
                                                 v-model:checked="
                                                     ipv6PeerConfigData.addressFamilyConfig[addressFamily].sendAddPath
                                                 "
@@ -745,13 +747,18 @@
     const wrapperCol = { span: 40 };
 
     const SRV6_PREFIX_SID_ADDRESS_FAMILIES = [BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV6_UNC];
-    const UNICAST_ADD_PATH_ADDRESS_FAMILIES = [BGP_ADDR_FAMILY.IPV4_UNC, BGP_ADDR_FAMILY.IPV6_UNC];
+    const ADD_PATH_ADDRESS_FAMILIES = [
+        BGP_ADDR_FAMILY.IPV4_UNC,
+        BGP_ADDR_FAMILY.IPV6_UNC,
+        BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST
+    ];
     const ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES = [
-        ...new Set([...SRV6_PREFIX_SID_ADDRESS_FAMILIES, ...UNICAST_ADD_PATH_ADDRESS_FAMILIES])
+        ...new Set([...SRV6_PREFIX_SID_ADDRESS_FAMILIES, ...ADD_PATH_ADDRESS_FAMILIES])
     ];
     const ADDRESS_FAMILY_LABEL_MAP = {
         [BGP_ADDR_FAMILY.IPV4_UNC]: 'IPv4-UNC',
-        [BGP_ADDR_FAMILY.IPV6_UNC]: 'IPv6-UNC'
+        [BGP_ADDR_FAMILY.IPV6_UNC]: 'IPv6-UNC',
+        [BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: 'IPv4 Label'
     };
 
     const getAddressFamilyLabel = addressFamily =>
@@ -770,7 +777,8 @@
         const normalized = createDefaultAddressFamilyConfig();
         ADDRESS_FAMILY_CONFIG_ADDRESS_FAMILIES.forEach(addressFamily => {
             const familyConfig = config?.[addressFamily] || config?.[String(addressFamily)] || {};
-            normalized[addressFamily].sendSrv6PrefixSid = familyConfig.sendSrv6PrefixSid === true;
+            normalized[addressFamily].sendSrv6PrefixSid =
+                SRV6_PREFIX_SID_ADDRESS_FAMILIES.includes(addressFamily) && familyConfig.sendSrv6PrefixSid === true;
             normalized[addressFamily].sendAddPath = familyConfig.sendAddPath === true;
         });
         return normalized;
@@ -862,7 +870,7 @@
     const canSelectIpv6PeerSrv6Family = addressFamily =>
         hasSelectedAddressFamily(ipv6PeerConfigData.value.addressFamilyIpv6, addressFamily);
     const getAddPathNegotiationText = record => {
-        if (!UNICAST_ADD_PATH_ADDRESS_FAMILIES.includes(record.addressFamily)) {
+        if (!ADD_PATH_ADDRESS_FAMILIES.includes(record.addressFamily)) {
             return '-';
         }
         if (record.addPathSendEnabled && record.addPathReceiveEnabled) {
@@ -926,7 +934,7 @@
     };
 
     const clearAddPathAddressFamilyConfig = addressFamilyConfig => {
-        UNICAST_ADD_PATH_ADDRESS_FAMILIES.forEach(addressFamily => {
+        ADD_PATH_ADDRESS_FAMILIES.forEach(addressFamily => {
             ensureAddressFamilyConfig(addressFamilyConfig, addressFamily).sendAddPath = false;
         });
     };
