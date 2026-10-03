@@ -1,6 +1,7 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
 const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
+const { normalizeClientSourceId } = require('./bmpClientPersistencePaths');
 
 const RAW_HIGH_WATERMARK_BYTES = 1024 * 1024;
 const RAW_LOW_WATERMARK_BYTES = 512 * 1024;
@@ -215,11 +216,17 @@ class BmpIngestClientPool {
         return record.closePromise;
     }
 
-    fence() {
+    fence(sourceId) {
+        const targetSourceId = sourceId ? normalizeClientSourceId(sourceId) : null;
         return Promise.all(
             this.slots.flatMap(slot => {
                 const record = slot.record;
                 if (!record) return [];
+                const recordSourceId = targetSourceId ? record.session.getPersistentSourceId?.() : null;
+                // Initiation may still be in the parser FIFO, before its result
+                // has established this record's identity in the coordinator.
+                // Fence unknown records too: one may be the target reconnect.
+                if (targetSourceId && recordSourceId && recordSourceId !== targetSourceId) return [];
                 // A destroyed socket can precede its 'close' callback. Readers
                 // and especially DELETE_SOURCE must also fence its final close,
                 // otherwise the delayed close mutation could recreate the source.

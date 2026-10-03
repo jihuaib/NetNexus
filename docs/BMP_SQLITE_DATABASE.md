@@ -1155,6 +1155,51 @@ node scripts/benchmarks/compare_bmp_repeated_ingest_benchmarks.js \
 
 如果新连接已经用 Peer Up 打开 scope、但一直没有 EOR，refresh timeout 到期后只保留该连接实际重新上报的路径，并删除旧 connection/epoch 路径。若同一设备重连后某个历史 scope 连 Peer Up 都没有再次出现，Collector 在确认该 source 只有一个更高代的在线连接后，也从新连接建立时间开始使用同一 refresh timeout 清空该 scope 的旧路径；scope 仍保持 `down`，不会伪装为在线或 `ready`。同一 source 存在多个并发在线连接时不执行这项整 scope 清理，避免不同 feed 互相删除。
 
+### 13.4 手动清理过期路由
+
+Peer 和 Loc-RIB 的“清理过期”只作用于选定的 `source_id + scope_id`，不随前缀搜索条件扩大或缩小范围。Client 断线但 BMP 服务仍运行时可以清理；BMP 服务未启动时返回明确错误，不再报告“成功删除 0 条”。
+
+清理开始前先等待该 source 的解析 FIFO，再等待其 Writer lane 的已排队 mutation。身份尚未从 Initiation 解析结果同步到协调线程的连接也等待解析 barrier，避免遗漏目标设备的重连报文。其余已知 source 的解析线程不参与等待，也不再向所有 Writer 广播清理请求。后续每批最多删除 20,000 条，批间可继续处理新上报；不反复建立全局写入屏障。
+
+手动清理使用 `includeDetails: false` 的轻量路径：
+
+1. 用 `bmp_scope_route_counts` 定位有效状态为 stale 的 connection/epoch/state 桶，而不是每批从 scope 的正常路由头部重新过滤。
+2. 经目标分区的 `scope_epoch` 索引选择窄引用键，放入临时候选表；不读取 payload、属性或 NLRI JSON，不构造逐路由 `routes/deltas`。
+3. 在同一事务内重新检查物理路径、引用键和有效 stale 状态，集合式登记 GC 候选、删除 current rows。计数 trigger 仍正常执行，共享 identity/payload/attributes 仍按所有分区的实际引用回收；异常时整个批次回滚。
+4. 只返回删除数量、是否还有候选和受影响的 scopes。每个已提交批次广播 scope 刷新事件；页面通过现有节流刷新读取最新已提交数量。
+
+同一 source/scope 的后台任务互斥，前端立即显示“清理中”并禁止重复提交。切换 Client、AF、RIB 或实例不会把旧任务的完成/失败状态写到新范围。服务停止或运行实例改变时取消后续批次，已提交批次不会回滚；失败展示具体后台原因并释放清理状态。
+
+Route Assurance 开启时，手动批量删除使投影失效，清理完成后从已提交的 RIB 重建，不传输百万条删除路由。清理期间不会反复启动全 RIB 重建。其他逐路由增量若返回“需要重建”（例如流式分组队列溢出），协调线程也会执行失效/重建，不能继续使用旧矩阵。
+
+这条路径不修改 schema，也不执行 `VACUUM`；删除释放的 SQLite 页可被后续写入复用，数据库文件不保证立即变小。带完整路由详情的清理仍用于需要逐路由删除增量的调用。
+
+性能对比脚本：
+
+```sh
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --expose-gc \
+  scripts/benchmarks/bmp_stale_purge_benchmark.js --routes=1000000 --rounds=3
+```
+
+脚本使用独立临时合成数据库，对相同 seed 的副本比较原详细清理和新手动批量清理。建库不计时，结果是 SQLite Store 清理耗时，不包含 TCP、线程消息传输、界面渲染或 Route Assurance 最终重建。`--sparse` 可测试 90% 当前路由与 10% 旧 epoch 路由混合的情况；`--kind=peer` 或 `--kind=loc-rib` 可单独运行。
+
+2026-10-03 在 Apple M4 Pro、Electron 22.3.27 / Node 16.17.1 / SQLite 3.49.2 上，以每批 20,000 条、全部 stale、共享小 payload/属性的合成路由执行 3 轮，交替原路径/优化路径顺序，取中位数：
+
+| 范围 | 过期路由数 | 原详细清理 | 新手动批量清理 | 耗时下降 |
+| --- | ---: | ---: | ---: | ---: |
+| Peer | 1,000,000 | 45.260 s | 5.932 s | 86.89% |
+| Loc-RIB | 1,000,000 | 45.632 s | 6.003 s | 86.84% |
+
+每次均完成 50 批，并验证无残留 stale 和外键异常。真实 Worker + 两个独立 client Writer 的集成测试另验证分批事件、当前活跃路由、其他 scope、另一 client 和共享对象保持正确；真实页面测试验证清理期间数量刷新及切换范围后的状态隔离。这些存储层数字不代表真实 BMP 报文或 UI 的端到端耗时，也不外推 EVPN/FlowSpec 的具体秒数。
+
+### 13.5 入站路由提交后的页面刷新
+
+收到路由事件不代表 SQLite Writer 已提交。Peer/Loc-RIB 页面通过只读 Reader 查询最新已提交快照，不等待整个写入队列清空；仅依赖接收通知时，最后一次查询可能只看到部分路由，后续入库没有新报文，页面便停在旧数量。
+
+Writer 的成功批次回调同时传递原批次，Worker 从 interned source/connection/scope 描述符收集受影响范围，补发轻量刷新信号。首次上报、替换、重复 refresh、撤销及 scope open/stale/EOR/timeout 均覆盖，Route Assurance 关闭或批次重放时也不遗漏。信号不展开 route/payload/attributes，不查询全 RIB；`changedCount: 0` 避免重复计算接收阶段已经统计的路由数。
+
+提交事件继续通过现有 1 秒 Worker 聚合和 1.5 秒页面节流，按 source/connection/scope 隔离；最后一批提交后仍会安排刷新，因此无需切换 tab 才能看到最终数量。失败批次不发送成功提交通知，旧运行实例和停止期间的回调不会重新启动刷新。页面查询保留 `fence: false`，避免大量上报时阻塞交互。
+
 ## 14. 定时 sweep 和引用对象 GC
 
 Worker 默认周期性执行小批量 sweep：

@@ -84,10 +84,12 @@
                                             <nn-tag color="orange">过期 {{ routeSummary.stale }}</nn-tag>
                                             <nn-button
                                                 danger
-                                                :disabled="routeSummary.stale === 0"
+                                                data-testid="bmp-loc-rib-purge-stale"
+                                                :loading="isPurgingStaleRoutes"
+                                                :disabled="isPurgingStaleRoutes || routeSummary.stale === 0"
                                                 @click="purgeStaleInstanceRoutes"
                                             >
-                                                清理过期
+                                                {{ isPurgingStaleRoutes ? '清理中…' : '清理过期' }}
                                             </nn-button>
                                         </div>
                                     </div>
@@ -757,6 +759,7 @@
     const routePrefixFilter = ref('');
     const appliedRoutePrefixFilter = ref('');
     const routeSummary = ref({ active: 0, stale: 0, total: 0 });
+    const stalePurgePendingKeys = ref(new Set());
     let instanceListRequestId = 0;
     let routeListRequestId = 0;
     const ROUTE_AUTO_REFRESH_INTERVAL_MS = 1500;
@@ -1170,6 +1173,17 @@
         }
     };
 
+    const getStalePurgeKey = (client = getMonitoredClientApiInfo(), instance = getActiveInstanceApiInfo()) => {
+        if (!client || !instance) return '';
+        return JSON.stringify([
+            getClientKey(client),
+            instance.persistentScopeId || instance.persistentOwnerKey || activeInstanceKey.value,
+            instance.addrFamilyType
+        ]);
+    };
+
+    const isPurgingStaleRoutes = computed(() => stalePurgePendingKeys.value.has(getStalePurgeKey()));
+
     const purgeStaleInstanceRoutes = async () => {
         if (!monitoredClient.value || !activeInstanceKey.value) return;
 
@@ -1178,19 +1192,27 @@
 
         const instance = getActiveInstanceApiInfo();
         if (!instance) return;
+        const purgeKey = getStalePurgeKey(client, instance);
+        if (!purgeKey || stalePurgePendingKeys.value.has(purgeKey)) return;
+        stalePurgePendingKeys.value.add(purgeKey);
 
         try {
             const res = await window.bmpApi.purgeStaleBgpInstanceRoutes(client, instance);
             if (res.status === 'success') {
                 notify.success(`已清理 ${res.data?.deleted || 0} 条过期路由`);
-                bgpRoutePagination.value.current = 1;
-                loadInstanceRoutes();
+                if (pageActive && purgeKey === getStalePurgeKey()) {
+                    clearScheduledRouteRefresh();
+                    bgpRoutePagination.value.current = 1;
+                    await loadInstanceRoutes({ expectedSelection: captureRouteSelection() });
+                }
             } else {
-                notify.error('清理过期路由失败');
+                notify.error(res.msg || '清理过期路由失败');
             }
         } catch (e) {
             console.error(e);
-            notify.error('清理过期路由失败');
+            notify.error(e?.message || '清理过期路由失败');
+        } finally {
+            stalePurgePendingKeys.value.delete(purgeKey);
         }
     };
 

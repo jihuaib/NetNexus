@@ -187,8 +187,11 @@ class BmpClientPersistenceClient {
         return Promise.all(this.clients.map(client => client.drain())).then(() => undefined);
     }
 
-    fence() {
+    fence(sourceId) {
         if (this.failure) return Promise.reject(this.failure);
+        if (sourceId) {
+            return this.getClient(normalizeClientSourceId(sourceId)).fence();
+        }
         // Each lane captures its target synchronously, before any await.
         return Promise.all(this.clients.map(client => client.fence())).then(() => undefined);
     }
@@ -228,11 +231,13 @@ class BmpClientPersistenceClient {
         return client.purgeSource(query);
     }
 
-    async purgeStaleRoutes(query = {}) {
+    async purgeStaleRoutes(query = {}, options = {}) {
         if (this.readOnly) throw new Error('Cannot purge stale routes through a read-only BMP persistence client');
-        if (query.sourceId) return this.getClient(query.sourceId).purgeStaleRoutes(query);
+        if (query.sourceId) return this.getClient(query.sourceId).purgeStaleRoutes(query, options);
         this.requireOpen();
-        return mergeMaintenanceResults(await Promise.all(this.clients.map(client => client.purgeStaleRoutes(query))));
+        return mergeMaintenanceResults(
+            await Promise.all(this.clients.map(client => client.purgeStaleRoutes(query, options)))
+        );
     }
 
     async sweep(options = {}) {

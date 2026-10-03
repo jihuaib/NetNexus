@@ -1429,7 +1429,7 @@ class BmpApp {
 
     async handlePurgeStaleBgpRoutes(event, client, session, af, ribType) {
         if (null === this.worker) {
-            return successResponse({ deleted: 0 }, 'BMP未启动');
+            return errorResponse('BMP未启动，请先启动 BMP 服务后清理过期路由');
         }
 
         try {
@@ -1448,7 +1448,7 @@ class BmpApp {
 
     async handlePurgeStaleBgpInstanceRoutes(event, client, instance) {
         if (null === this.worker) {
-            return successResponse({ deleted: 0 }, 'BMP未启动');
+            return errorResponse('BMP未启动，请先启动 BMP 服务后清理过期路由');
         }
 
         try {

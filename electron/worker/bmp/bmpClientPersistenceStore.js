@@ -722,15 +722,32 @@ class BmpClientPersistenceStore {
     purgeStaleRoutes(query = {}) {
         if (this.readOnly) throw new Error('Cannot purge stale routes from a read-only BMP persistence store');
         if (!query.scopeId && !query.ownerKey) throw new Error('BMP stale route purge requires scopeId or ownerKey');
-        const result = { purged: 0, hasMore: false, routes: [], deltas: [] };
-        for (const id of this.sourceIdsForQuery(query, true)) {
+        const compact = query.includeDetails === false;
+        const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
+        const result = compact
+            ? { purged: 0, hasMore: false, affectedScopes: [], nextCursor: null }
+            : { purged: 0, hasMore: false, routes: [], deltas: [] };
+        const sourceIds = this.sourceIdsForQuery(query, true);
+        for (const [index, id] of sourceIds.entries()) {
             const store = this.getStore(id);
             if (!store) continue;
-            const purged = store.purgeStaleRoutes({ ...query, sourceId: id });
+            const purged = store.purgeStaleRoutes({
+                ...query,
+                sourceId: id,
+                ...(compact ? { routeLimit: routeLimit - result.purged } : {})
+            });
             result.purged += purged.purged;
             result.hasMore ||= purged.hasMore;
-            result.routes.push(...purged.routes);
-            result.deltas.push(...purged.deltas);
+            if (compact) {
+                result.affectedScopes.push(...purged.affectedScopes);
+                if (result.purged >= routeLimit) {
+                    result.hasMore ||= index < sourceIds.length - 1;
+                    break;
+                }
+            } else {
+                result.routes.push(...purged.routes);
+                result.deltas.push(...purged.deltas);
+            }
         }
         return result;
     }

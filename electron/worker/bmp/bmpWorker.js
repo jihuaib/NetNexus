@@ -30,6 +30,19 @@ const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
 const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
 const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
 const READ_FENCE_TIMED_OUT = Symbol('bmp-read-fence-timeout');
+const COMMITTED_ROUTE_EVENTS = new Set([
+    'upsert',
+    'announce',
+    'replace',
+    'refresh',
+    'delete',
+    'withdraw',
+    'purge',
+    'scope_open',
+    'scope_stale',
+    'scope_eor',
+    'scope_timeout'
+]);
 const { BMP_AUTH_TYPES, redactAuthenticationConfig } = require('../../utils/tcpAuthConfig');
 
 class BmpWorker {
@@ -70,6 +83,7 @@ class BmpWorker {
         this.persistenceSweepRequestSources = new Set();
         this.clientDataDeleteInProgress = new Set();
         this.clientDeleteRemoteIpGates = new Map();
+        this.staleScopePurgeTasks = new Map();
 
         // 创建消息处理器
         this.messageHandler = new WorkerMessageHandler({
@@ -288,6 +302,12 @@ class BmpWorker {
     runRouteAssuranceRebuild() {
         const service = this.routeAssuranceService;
         if (!service?.enabled || service.state !== 'dirty') {
+            return;
+        }
+        if (this.staleScopePurgeTasks?.size > 0) {
+            // A manual purge invalidates the matrix in bounded batches. Wait
+            // for the whole task instead of repeatedly scanning a shrinking RIB.
+            this.scheduleRouteAssuranceRebuild();
             return;
         }
         const watermark = this.persistence?.getWatermark?.() || null;
@@ -536,7 +556,71 @@ class BmpWorker {
         return result;
     }
 
-    handleCommittedPersistenceResult(result) {
+    emitCommittedPersistenceRouteUpdates(batch) {
+        if (this.bmpStopping || !Array.isArray(batch?.mutations)) {
+            return;
+        }
+        // Receive notifications may query a reader before the async writer has
+        // committed. Send a trailing notification from the successful commit,
+        // including refresh-only batches and EOR, even when RA deltas are off.
+        // Interned descriptors let us allocate only once per scope/connection,
+        // without expanding route payloads or scanning the persisted RIB.
+        const scopes = new Map();
+        for (const mutation of batch.mutations) {
+            if (!COMMITTED_ROUTE_EVENTS.has(mutation?.eventType)) continue;
+            const scope = mutation.scope || batch.refs?.scopes?.[mutation.scopeRef];
+            const source = mutation.source || batch.refs?.sources?.[mutation.sourceRef];
+            const connection = mutation.connection || batch.refs?.connections?.[mutation.connectionRef];
+            if (
+                !scope?.id ||
+                !source?.id ||
+                (scope.kind !== 'peer' && scope.kind !== 'loc-rib') ||
+                scope.sourceId !== source.id ||
+                (connection?.sourceId && connection.sourceId !== source.id)
+            ) {
+                continue;
+            }
+            let connections = scopes.get(scope);
+            if (!connections) {
+                connections = new Map();
+                scopes.set(scope, connections);
+            }
+            let update = connections.get(connection);
+            if (!update) {
+                update = {
+                    type: BmpConst.BMP_ROUTE_UPDATE_TYPE.ROUTE_UPDATE,
+                    client: {
+                        sourceId: source.id,
+                        persistentSourceId: source.id,
+                        connectionId: connection?.id || null,
+                        persistentConnectionId: connection?.id || null
+                    },
+                    sourceId: source.id,
+                    persistentSourceId: source.id,
+                    scopeId: scope.id,
+                    persistentScopeId: scope.id,
+                    ownerKey: scope.ownerKey || null,
+                    persistentOwnerKey: scope.ownerKey || null,
+                    af: getAddrFamilyType(Number(scope.afi), Number(scope.safi)),
+                    ribType: scope.ribType,
+                    changedCount: 0,
+                    reason: 'persistence-commit',
+                    assuranceIncremental: true
+                };
+                connections.set(connection, update);
+            }
+            if (mutation.eventType.startsWith('scope_')) update.projectionReset = true;
+        }
+        for (const [scope, connections] of scopes) {
+            for (const update of connections.values()) {
+                if (scope.kind === 'loc-rib') this.enqueueInstanceRouteUpdateEvent(update);
+                else this.enqueueRouteUpdateEvent(update);
+            }
+        }
+    }
+
+    handleCommittedPersistenceResult(result, batch) {
+        this.emitCommittedPersistenceRouteUpdates(batch);
         if (this.routeAssuranceService?.enabled && result?.requiresProjectionRebuild) {
             // A retry can replay a commit from another client database without
             // its original deltas. Rebuild rather than accepting a partial matrix.
@@ -548,13 +632,13 @@ class BmpWorker {
             return;
         }
         try {
-            deltas.forEach(delta => {
+            for (const delta of deltas) {
                 if (!delta?.projectionChanged || !['upsert', 'delete'].includes(delta.action)) {
-                    return;
+                    continue;
                 }
                 const scope = delta.scope || delta.mutation?.scope || null;
                 const source = delta.source || delta.mutation?.source || null;
-                this.routeAssuranceService.applyCommittedDelta({
+                const applied = this.routeAssuranceService.applyCommittedDelta({
                     ...delta,
                     scope,
                     source,
@@ -564,7 +648,13 @@ class BmpWorker {
                     safi: delta.safi ?? scope?.safi,
                     route: delta.action === 'upsert' ? delta.current : delta.previous
                 });
-            });
+                if (applied === false) {
+                    // Stream-mode overflow deliberately drops its pending group
+                    // queue and asks the caller to rebuild the persisted view.
+                    this.invalidateRouteAssurance('committed-delta-rebuild-required');
+                    break;
+                }
+            }
         } catch (error) {
             logger.error(`Route Assurance committed delta failed: ${error.message}`);
             this.invalidateRouteAssurance('committed-delta-error');
@@ -628,7 +718,7 @@ class BmpWorker {
             throw new Error('BMP persistence database path is missing');
         }
 
-        this.persistence = this.createPersistenceClient({
+        const persistence = this.createPersistenceClient({
             dbPath: this.bmpConfigData.persistenceDbPath,
             logLevel: this.bmpConfigData.logLevel,
             batchSize: this.bmpConfigData.persistenceBatchSize,
@@ -648,8 +738,13 @@ class BmpWorker {
                 this.handlePersistenceFailure(error);
             },
             includeCommittedDeltas: () => this.routeAssuranceService?.enabled === true,
-            onCommittedBatch: result => this.handleCommittedPersistenceResult(result)
+            onCommittedBatch: (result, batch) => {
+                if (this.persistence === persistence && !this.bmpStopping) {
+                    this.handleCommittedPersistenceResult(result, batch);
+                }
+            }
         });
+        this.persistence = persistence;
         const status = await this.persistence.open();
         const persistenceReader = this.createPersistenceClient({
             dbPath: this.bmpConfigData.persistenceDbPath,
@@ -2435,20 +2530,90 @@ class BmpWorker {
         }
     }
 
-    async purgeStaleScope(scopeId) {
-        let deleted = 0;
-        let hasMore = true;
-        while (hasMore) {
-            const result = await this.persistence.purgeStaleRoutes({
-                scopeId,
-                routeLimit: 20000,
-                reason: 'manual-stale-purge'
-            });
-            this.handleCommittedPersistenceResult(result);
-            deleted += Number(result?.purged || 0);
-            hasMore = result?.hasMore === true && Number(result?.purged || 0) > 0;
+    assertStalePurgeRuntime(persistence, ingestPool) {
+        if (
+            !persistence ||
+            this.bmpStopping ||
+            this.bmpRuntimeStarted === false ||
+            this.persistence !== persistence ||
+            this.ingestPool !== ingestPool
+        ) {
+            const error = new Error('BMP已停止或运行实例已改变，过期路由清理已取消');
+            error.code = 'BMP_STALE_PURGE_CANCELLED';
+            throw error;
         }
-        return deleted;
+        if (this.persistenceFailure || persistence.failure) {
+            throw this.persistenceFailure || persistence.failure;
+        }
+    }
+
+    async purgeStaleScope(lookup = {}) {
+        const sourceId = typeof lookup.sourceId === 'string' ? lookup.sourceId.trim() : '';
+        const scopeId = typeof lookup.scopeId === 'string' ? lookup.scopeId.trim() : '';
+        if (!sourceId || !scopeId) {
+            throw new Error('过期路由清理需要客户端和路由范围标识');
+        }
+        const persistence = this.persistence;
+        const ingestPool = this.ingestPool;
+        this.assertStalePurgeRuntime(persistence, ingestPool);
+        this.staleScopePurgeTasks ||= new Map();
+        const key = JSON.stringify([sourceId, scopeId]);
+        const previous = this.staleScopePurgeTasks.get(key);
+        if (previous?.persistence === persistence && previous?.ingestPool === ingestPool) {
+            const error = new Error('该范围过期路由正在清理');
+            error.code = 'BMP_STALE_PURGE_IN_PROGRESS';
+            throw error;
+        }
+
+        const task = { persistence, ingestPool };
+        this.staleScopePurgeTasks.set(key, task);
+        try {
+            // A writer fence alone cannot see UPDATEs still queued in the parser.
+            // Capture this client's parser FIFO first, then its writer lane once.
+            await ingestPool?.fence(sourceId);
+            this.assertStalePurgeRuntime(persistence, ingestPool);
+            await persistence.fence(sourceId);
+            this.assertStalePurgeRuntime(persistence, ingestPool);
+
+            let deleted = 0;
+            let hasMore = true;
+            while (hasMore) {
+                const result = await persistence.purgeStaleRoutes(
+                    {
+                        sourceId,
+                        scopeId,
+                        includeDetails: false,
+                        routeLimit: 20000,
+                        reason: 'manual-stale-purge'
+                    },
+                    { fence: false }
+                );
+                this.assertStalePurgeRuntime(persistence, ingestPool);
+                const purged = Number(result?.purged || 0);
+                if (purged > 0) {
+                    // Do not ship/expand one deleted route per NLRI just to update
+                    // the matrix. Invalidate once per batch and rebuild when quiet.
+                    if (this.routeAssuranceService?.enabled) {
+                        this.invalidateRouteAssurance('manual-stale-purge');
+                    }
+                    const scopes = (Array.isArray(result.affectedScopes) ? result.affectedScopes : []).map(scope => {
+                        if (scope.sourceId !== sourceId || scope.scopeId !== scopeId) {
+                            throw new Error('过期路由清理结果不属于请求的客户端或路由范围');
+                        }
+                        return { ...scope, reason: 'manual-stale-purge' };
+                    });
+                    this.emitPersistenceSweepRouteUpdates(scopes);
+                }
+                deleted += purged;
+                hasMore = result?.hasMore === true && purged > 0;
+            }
+            return deleted;
+        } finally {
+            // A stopped task must never unlock a replacement runtime's task.
+            if (this.staleScopePurgeTasks.get(key) === task) {
+                this.staleScopePurgeTasks.delete(key);
+            }
+        }
     }
 
     requestNotificationPeerRoutePurge(query = {}) {
@@ -2546,8 +2711,16 @@ class BmpWorker {
             if (this.sendRouteLookupError(messageId, lookup)) {
                 return;
             }
-            const deleted = await this.purgeStaleScope(lookup.scopeId);
-            const summaryResult = await this.readPersistence('queryScopeSummary', { scopeId: lookup.scopeId });
+            const persistence = this.persistence;
+            const ingestPool = this.ingestPool;
+            const deleted = await this.purgeStaleScope(lookup);
+            this.assertStalePurgeRuntime(persistence, ingestPool);
+            const summaryResult = await this.readPersistence(
+                'queryScopeSummary',
+                { sourceId: lookup.sourceId, scopeId: lookup.scopeId },
+                { fence: false }
+            );
+            this.assertStalePurgeRuntime(persistence, ingestPool);
             lookup.bgpInstance?.setRouteSummary(summaryResult);
             this.messageHandler.sendSuccessResponse(messageId, { deleted }, 'BGP实例过期路由清理成功');
         } catch (error) {
@@ -2562,8 +2735,16 @@ class BmpWorker {
             if (this.sendRouteLookupError(messageId, lookup)) {
                 return;
             }
-            const deleted = await this.purgeStaleScope(lookup.scopeId);
-            const summaryResult = await this.readPersistence('queryScopeSummary', { scopeId: lookup.scopeId });
+            const persistence = this.persistence;
+            const ingestPool = this.ingestPool;
+            const deleted = await this.purgeStaleScope(lookup);
+            this.assertStalePurgeRuntime(persistence, ingestPool);
+            const summaryResult = await this.readPersistence(
+                'queryScopeSummary',
+                { sourceId: lookup.sourceId, scopeId: lookup.scopeId },
+                { fence: false }
+            );
+            this.assertStalePurgeRuntime(persistence, ingestPool);
             lookup.bgpSession?.setRouteSummary(lookup.afi, lookup.safi, lookup.ribType, summaryResult);
             this.messageHandler.sendSuccessResponse(messageId, { deleted }, '过期路由清理成功');
         } catch (error) {

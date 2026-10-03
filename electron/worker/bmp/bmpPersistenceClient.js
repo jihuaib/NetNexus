@@ -609,8 +609,11 @@ class BmpPersistenceClient {
         return this.sendRequest(BMP_PERSISTENCE_OP.PURGE_SOURCE, { sourceId });
     }
 
-    async purgeStaleRoutes(query = {}) {
-        if (!this.readOnly) {
+    async purgeStaleRoutes(query = {}, options = {}) {
+        // A multi-batch manual purge establishes its parser/writer boundary
+        // once. Later batches may share the FIFO with new announcements, whose
+        // effective state is checked again inside the deletion transaction.
+        if (!this.readOnly && options.fence !== false) {
             await this.fence();
         }
         return this.sendRequest(BMP_PERSISTENCE_OP.PURGE_STALE_ROUTES, query);

@@ -3583,6 +3583,9 @@ class BmpPersistenceStore {
         if (!query.scopeId && !query.ownerKey) {
             throw new Error('BMP stale route purge requires scopeId or ownerKey');
         }
+        if (query.includeDetails === false) {
+            return this.purgeStaleRoutesCompact(query);
+        }
 
         const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
         const where = [`${this.buildRouteStateSql()} = 'stale'`];
@@ -3700,6 +3703,177 @@ class BmpPersistenceStore {
                 mutation: null
             }))
         };
+    }
+
+    // Manual cleanup does not need one expanded route/RA delta per deletion.
+    // Counters identify stale connection/epoch/state buckets, so every batch
+    // starts at a stale bucket instead of rescanning the scope's active paths.
+    // All selection, stale revalidation, deletes and GC share one transaction.
+    purgeStaleRoutesCompact(query) {
+        if (query.cursor) {
+            throw new Error('BMP compact stale route purge does not accept a cursor');
+        }
+        const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
+        const params = {};
+        const where = [`${this.buildRouteStateSql().replace(/\br\./g, 'count.')} = 'stale'`];
+        const addFilter = (sql, name, value) => {
+            if (value !== undefined && value !== null && value !== '') {
+                where.push(sql);
+                params[name] = value;
+            }
+        };
+        addFilter('src.source_id = @sourceId', 'sourceId', query.sourceId);
+        addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
+        addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
+        addFilter('last_conn.connection_id = @connectionId', 'connectionId', query.connectionId);
+        addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
+        addFilter('s.afi = @afi', 'afi', finiteNumber(query.afi));
+        addFilter('s.safi = @safi', 'safi', finiteNumber(query.safi));
+        addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        addFilter('count.rib_epoch < @ribEpochBefore', 'ribEpochBefore', finiteNumber(query.ribEpochBefore));
+        const prefixWhere = [];
+        if (query.prefixExact !== undefined && query.prefixExact !== null && query.prefixExact !== '') {
+            prefixWhere.push('identity.prefix = @prefixExact');
+            params.prefixExact = query.prefixExact;
+        }
+        const prefixLength = finiteNumber(query.prefixLength);
+        if (prefixLength !== null) {
+            prefixWhere.push('identity.prefix_length = @prefixLength');
+            params.prefixLength = prefixLength;
+        }
+        const reason = query.reason || 'manual-stale-purge';
+        this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS bmp_stale_purge_candidates (
+            partition_id INTEGER NOT NULL, path_pk INTEGER NOT NULL,
+            scope_pk INTEGER NOT NULL, route_pk INTEGER NOT NULL,
+            payload_id INTEGER NOT NULL, attr_pk INTEGER,
+            PRIMARY KEY (partition_id, path_pk)
+        ) WITHOUT ROWID`);
+        return this.db.transaction(() => {
+            this.db.prepare('DELETE FROM temp.bmp_stale_purge_candidates').run();
+            const buckets = this.db
+                .prepare(
+                    `SELECT s.partition_id, s.scope_pk, count.connection_pk,
+                                 count.rib_epoch, count.explicit_state
+                            FROM bmp_rib_scopes s
+                            JOIN bmp_sources src ON src.source_pk = s.source_pk
+                            JOIN bmp_scope_route_counts count ON count.scope_pk = s.scope_pk
+                            LEFT JOIN bmp_connections last_conn ON last_conn.connection_pk = s.last_connection_pk
+                           WHERE ${where.join(' AND ')} AND count.route_count > 0
+                           ORDER BY s.scope_pk, count.connection_pk, count.rib_epoch, count.explicit_state`
+                )
+                .all(params);
+            let selected = 0;
+            const partitions = new Map();
+            for (const bucket of buckets) {
+                if (selected > routeLimit) break;
+                const partition = getBmpRoutePartitionById(bucket.partition_id);
+                partitions.set(partition.partitionId, partition);
+                selected += this.db
+                    .prepare(
+                        `INSERT INTO temp.bmp_stale_purge_candidates
+                              SELECT @partitionId, r.path_pk, r.scope_pk, r.route_pk, r.payload_id, r.attr_pk
+                                FROM ${partition.quotedTableName} r
+                                     INDEXED BY idx_${partition.tableName}_scope_epoch
+                                ${prefixWhere.length ? 'JOIN bmp_route_identities identity ON identity.route_pk = r.route_pk' : ''}
+                               WHERE r.scope_pk = @scopePk AND r.connection_pk = @connectionPk
+                                 AND r.rib_epoch = @epoch AND r.explicit_state = @explicitState
+                                 ${prefixWhere.length ? `AND ${prefixWhere.join(' AND ')}` : ''}
+                                 AND EXISTS (SELECT 1 FROM bmp_rib_scopes s
+                                              WHERE s.scope_pk = r.scope_pk
+                                                AND ${this.buildRouteStateSql()} = 'stale')
+                               ORDER BY r.path_pk LIMIT @limit`
+                    )
+                    .run({
+                        ...params,
+                        partitionId: partition.partitionId,
+                        scopePk: bucket.scope_pk,
+                        connectionPk: bucket.connection_pk,
+                        epoch: bucket.rib_epoch,
+                        explicitState: bucket.explicit_state,
+                        limit: routeLimit + 1 - selected
+                    }).changes;
+            }
+            // Keep GC references paired with the exact selected physical path,
+            // and re-evaluate actual scope ownership/epoch/state before deletion.
+            for (const partition of partitions.values()) {
+                this.db
+                    .prepare(
+                        `DELETE FROM temp.bmp_stale_purge_candidates AS candidate
+                               WHERE partition_id = @partitionId AND NOT EXISTS (
+                                   SELECT 1 FROM ${partition.quotedTableName} r
+                                   JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk
+                                   WHERE r.path_pk = candidate.path_pk AND r.scope_pk = candidate.scope_pk
+                                     AND r.route_pk = candidate.route_pk AND r.payload_id = candidate.payload_id
+                                     AND r.attr_pk IS candidate.attr_pk
+                                     AND ${this.buildRouteStateSql()} = 'stale'
+                               )`
+                    )
+                    .run({ partitionId: partition.partitionId });
+            }
+            selected = this.db.prepare('SELECT COUNT(*) AS count FROM temp.bmp_stale_purge_candidates').get().count;
+            const hasMore = selected > routeLimit;
+            if (hasMore) {
+                this.db
+                    .prepare(
+                        `DELETE FROM temp.bmp_stale_purge_candidates
+                               WHERE (partition_id, path_pk) IN (
+                                   SELECT partition_id, path_pk FROM temp.bmp_stale_purge_candidates
+                                    ORDER BY partition_id, path_pk LIMIT -1 OFFSET @limit
+                               )`
+                    )
+                    .run({ limit: routeLimit });
+            }
+            const affectedScopes = this.db
+                .prepare(
+                    `SELECT src.source_id AS sourceId, s.scope_id AS scopeId, s.owner_key AS ownerKey,
+                                 s.scope_kind AS scopeKind, s.afi, s.safi, s.rib_type AS ribType,
+                                 COUNT(*) AS deletedRoutes
+                            FROM temp.bmp_stale_purge_candidates candidate
+                            JOIN bmp_rib_scopes s ON s.scope_pk = candidate.scope_pk
+                            JOIN bmp_sources src ON src.source_pk = s.source_pk
+                           GROUP BY s.scope_pk ORDER BY s.scope_pk`
+                )
+                .all()
+                .map(scope => ({ ...scope, reason }));
+            for (const [kind, column] of [
+                [GC_KIND.IDENTITY, 'route_pk'],
+                [GC_KIND.PAYLOAD, 'payload_id'],
+                [GC_KIND.ATTRIBUTE, 'attr_pk']
+            ]) {
+                this.db
+                    .prepare(
+                        `INSERT OR IGNORE INTO temp.bmp_gc_candidates(kind, pk)
+                              SELECT ${kind}, ${column} FROM temp.bmp_stale_purge_candidates
+                               WHERE ${column} IS NOT NULL`
+                    )
+                    .run();
+            }
+            let purged = 0;
+            for (const partition of partitions.values()) {
+                purged += this.db
+                    .prepare(
+                        `DELETE FROM ${partition.quotedTableName} AS r
+                               WHERE r.path_pk IN (SELECT path_pk FROM temp.bmp_stale_purge_candidates
+                                                   WHERE partition_id = @partitionId)
+                                 AND EXISTS (
+                                     SELECT 1 FROM temp.bmp_stale_purge_candidates candidate
+                                     JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk
+                                     WHERE candidate.partition_id = @partitionId
+                                       AND candidate.path_pk = r.path_pk AND candidate.scope_pk = r.scope_pk
+                                       AND candidate.route_pk = r.route_pk AND candidate.payload_id = r.payload_id
+                                       AND candidate.attr_pk IS r.attr_pk
+                                       AND ${this.buildRouteStateSql()} = 'stale'
+                                 )`
+                    )
+                    .run({ partitionId: partition.partitionId }).changes;
+            }
+            if (purged !== Math.min(selected, routeLimit)) {
+                throw new Error('BMP compact stale route purge candidates changed before deletion');
+            }
+            if (purged > 0) this.collectGarbage();
+            this.db.prepare('DELETE FROM temp.bmp_stale_purge_candidates').run();
+            return { purged, hasMore, affectedScopes, nextCursor: null };
+        })();
     }
 
     purgeSource(query = {}) {
