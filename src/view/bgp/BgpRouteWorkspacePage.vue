@@ -29,23 +29,6 @@
                     </nn-button>
                 </nn-space>
             </template>
-            <div class="group-runtime-toolbar">
-                <div class="group-runtime-description" role="status" aria-live="polite">
-                    <strong :data-testid="`${testPrefix}-group-generation-state`">
-                        {{
-                            activeGroupState
-                                ? `本组已生成 ${activeGroupState.routeCount} 条路由`
-                                : groupStatesKnown
-                                  ? '本组未生成路由'
-                                  : '本组生成状态待刷新'
-                        }}
-                    </strong>
-                    <span v-if="groupStatesError" :data-testid="`${testPrefix}-group-state-error`">
-                        {{ groupStatesError }}
-                    </span>
-                    <span v-else>右键路由组可复制、撤销或移除；重新生成会替换本组路由。</span>
-                </div>
-            </div>
             <BgpRouteTreeEditor
                 ref="treeEditorRef"
                 v-model:groups="routeGroups"
@@ -55,6 +38,7 @@
                 :disabled="workspaceBusy"
                 :remove-group-disabled="!groupStatesKnown || groupStatesLoading"
                 :generation-states="groupStates"
+                :generation-state-error="groupStatesError"
                 :export-enabled="api.allowExport"
                 :errors="validationErrors"
                 @update:active-group-id="selectRouteGroup"
@@ -692,36 +676,6 @@
     .workspace-header-actions {
         flex-wrap: wrap;
         justify-content: flex-end;
-    }
-
-    .group-runtime-toolbar {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        min-width: 0;
-        height: 32px;
-        padding: 6px 12px;
-        border-bottom: 1px solid var(--nn-color-border-light);
-    }
-
-    .group-runtime-description {
-        display: flex;
-        align-items: center;
-        min-width: 0;
-        gap: 12px;
-        font-size: 12px;
-    }
-
-    .group-runtime-description > strong {
-        flex-shrink: 0;
-    }
-
-    .group-runtime-description > span {
-        color: var(--nn-color-text-secondary);
-        font-size: 11px;
-        overflow: hidden;
-        text-overflow: ellipsis;
-        white-space: nowrap;
     }
 
     .workspace-save-state {

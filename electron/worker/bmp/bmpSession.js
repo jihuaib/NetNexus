@@ -33,6 +33,45 @@ const {
 
 const LOC_RIB_DEFAULT_RD = '0:0';
 const LOC_RIB_DEFAULT_RD_RAW = 'raw:0000000000000000';
+const MAX_BMP_MESSAGE_BYTES = 16 * 1024 * 1024;
+const BMP_BUFFER_BLOCK_BYTES = 64 * 1024;
+const FRAME_STATES = new WeakMap();
+
+function frameState(session) {
+    let state = FRAME_STATES.get(session);
+    if (!state) {
+        state = { blocks: [], bytes: 0, capacity: 0, length: 0, closed: false };
+        FRAME_STATES.set(session, state);
+    }
+    return state;
+}
+
+function bufferedFrame(state) {
+    if (state.blocks.length === 0) return Buffer.alloc(0);
+    if (state.blocks.length === 1) return state.blocks[0].buffer.subarray(0, state.bytes);
+    return Buffer.concat(
+        state.blocks.map(block => block.buffer.subarray(0, block.used)),
+        state.bytes
+    );
+}
+
+function appendFrameBytes(state, data, start, count, limit) {
+    const end = start + count;
+    while (start < end) {
+        let block = state.blocks[state.blocks.length - 1];
+        if (!block || block.used === block.buffer.length) {
+            const capacity = Math.min(BMP_BUFFER_BLOCK_BYTES, limit - state.capacity);
+            block = { buffer: Buffer.allocUnsafe(capacity), used: 0 };
+            state.blocks.push(block);
+            state.capacity += capacity;
+        }
+        const copied = Math.min(end - start, block.buffer.length - block.used);
+        data.copy(block.buffer, block.used, start, start + copied);
+        block.used += copied;
+        state.bytes += copied;
+        start += copied;
+    }
+}
 const LOC_RIB_DEFAULT_RD_ADD_PATH_INFERRED_WARNING =
     'Loc-RIB ADD-PATH is inferred from RD 0:0 for the same AFI/SAFI; Peer Up did not advertise ADD-PATH for this RD';
 
@@ -82,6 +121,26 @@ class BmpSession {
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
         return `${localIp}|${localPort}|${remoteIp}|${remotePort}`;
+    }
+
+    get messageBuffer() {
+        return bufferedFrame(frameState(this));
+    }
+
+    set messageBuffer(buffer) {
+        const closed = FRAME_STATES.get(this)?.closed === true;
+        const bytes = Buffer.isBuffer(buffer) ? buffer.length : 0;
+        FRAME_STATES.set(this, {
+            blocks: bytes ? [{ buffer: Buffer.from(buffer), used: bytes }] : [],
+            bytes,
+            capacity: bytes,
+            length: 0,
+            closed
+        });
+    }
+
+    get bufferedMessageBytes() {
+        return frameState(this).capacity;
     }
 
     static parseKey(key) {
@@ -464,7 +523,7 @@ class BmpSession {
         return addPathMap;
     }
 
-    createBgpParsingContext(tlvs, fallbackContext, direction = 'receive') {
+    createBgpParsingContext(tlvs, fallbackContext, direction = 'receive', asnSize = fallbackContext?.asnSize || 4) {
         const statelessAddPathMap = this.decodeStatelessParsingTlvs(tlvs);
         const getFallbackAddPathInfo = (afi, safi) => {
             if (!fallbackContext) {
@@ -481,9 +540,10 @@ class BmpSession {
 
         if (statelessAddPathMap.size === 0) {
             if (!fallbackContext || typeof fallbackContext.isAddPathReceiveEnabled !== 'function') {
-                return fallbackContext;
+                return { asnSize };
             }
             return {
+                asnSize,
                 getAddPathReceiveInfo: (afi, safi) => {
                     if (typeof fallbackContext.getAddPathReceiveInfo === 'function') {
                         return fallbackContext.getAddPathReceiveInfo(afi, safi, direction);
@@ -495,6 +555,7 @@ class BmpSession {
         }
 
         return {
+            asnSize,
             getAddPathReceiveInfo: (afi, safi) => {
                 const key = `${afi}|${safi}`;
                 if (statelessAddPathMap.has(key)) {
@@ -1066,10 +1127,31 @@ class BmpSession {
         };
     }
 
+    parsePeerUpOpenMessages(message, position) {
+        // RFC 7854 section 4.10: the monitored router's Sent OPEN precedes
+        // the remote peer's Received OPEN, including asymmetric ADD-PATH.
+        const sent = this.parseEmbeddedBgpPacket(message, position, null, 'Sent BGP OPEN');
+        if (sent.error || !sent.parsed?.valid || sent.parsed.type !== BgpConst.BGP_PACKET_TYPE.OPEN) {
+            return { error: sent.error || 'Peer Up Sent OPEN is invalid' };
+        }
+        position += sent.length;
+        const received = this.parseEmbeddedBgpPacket(message, position, null, 'Received BGP OPEN');
+        if (received.error || !received.parsed?.valid || received.parsed.type !== BgpConst.BGP_PACKET_TYPE.OPEN) {
+            return { error: received.error || 'Peer Up Received OPEN is invalid' };
+        }
+        return {
+            parsedSendBgpOpen: sent.parsed,
+            parsedRecvBgpOpen: received.parsed,
+            position: position + received.length
+        };
+    }
+
     parseRouteMonitoringBgpUpdate(message, position, version, context, peerFlags = 0, peerType = null) {
         if (version === BmpConst.BMP_VERSION.V4) {
             const tlvResult = parseBmpTlvs(message, position, { indexed: true });
             this.logTlvWarnings('Route Monitoring TLV', tlvResult.warnings);
+            if (tlvResult.warnings.length > 0)
+                return { error: 'BMPv4 Route Monitoring TLV is truncated', routeTlvs: tlvResult.tlvs };
 
             const routeTlvs = tlvResult.tlvs;
             const bgpMessageTlv = routeTlvs.find(tlv => this.isRouteMonitoringBgpMessageTlv(tlv));
@@ -1088,7 +1170,12 @@ class BmpSession {
             const bgpContext = this.createBgpParsingContext(
                 routeTlvs,
                 context,
-                this.getAddPathParsingDirection(peerType, effectivePeerFlags)
+                this.getAddPathParsingDirection(peerType, effectivePeerFlags),
+                peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB
+                    ? 4
+                    : (effectivePeerFlags & BmpConst.BMP_SESSION_FLAGS.AS_PATH) !== 0
+                      ? 2
+                      : 4
             );
             const parsed = parseBgpPacket(bgpMessageTlv.value, bgpContext);
             if (!parsed.valid) {
@@ -1105,11 +1192,19 @@ class BmpSession {
         const bgpContext = this.createBgpParsingContext(
             [],
             context,
-            this.getAddPathParsingDirection(peerType, peerFlags)
+            this.getAddPathParsingDirection(peerType, peerFlags),
+            peerType === BmpConst.BMP_PEER_TYPE.LOCAL_RIB
+                ? 4
+                : (peerFlags & BmpConst.BMP_SESSION_FLAGS.AS_PATH) !== 0
+                  ? 2
+                  : 4
         );
         const embedded = this.parseEmbeddedBgpPacket(message, position, bgpContext, 'BGP Update message');
         if (embedded.error) {
             return embedded;
+        }
+        if (position + embedded.length !== message.length) {
+            return { error: 'BMPv3 Route Monitoring contains bytes after its BGP Update' };
         }
 
         return {
@@ -1179,14 +1274,11 @@ class BmpSession {
                     routeAttr.origin = attr.origin;
                     break;
                 case BgpConst.BGP_PATH_ATTR.AS_PATH:
-                    routeAttr.asPath = '';
-                    attr.segments.forEach(seg => {
-                        if (seg.typeName === 'AS_SEQUENCE') {
-                            routeAttr.asPath += seg.asNumbers.join(' ');
-                        } else {
-                            routeAttr.asPath += `{${seg.asNumbers.join(' ')}}`;
-                        }
-                    });
+                    routeAttr.asPath = attr.segments
+                        .map(seg =>
+                            seg.typeName === 'AS_SEQUENCE' ? seg.asNumbers.join(' ') : `{${seg.asNumbers.join(' ')}}`
+                        )
+                        .join(' ');
                     break;
                 case BgpConst.BGP_PATH_ATTR.NEXT_HOP:
                     routeAttr.nextHop = attr.nextHop;
@@ -1421,6 +1513,7 @@ class BmpSession {
                 // Preserve partially decoded NLRI for diagnostics, but never allow an
                 // invalid UPDATE to advance an EOR-gated stale sweep.
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
+                return;
             }
 
             let isNotify = false;
@@ -1682,6 +1775,7 @@ class BmpSession {
             }
             if (!parsedBgpUpdate.valid) {
                 logger.error(`Received BGP Update message is invalid: ${parsedBgpUpdate.error}`);
+                return;
             }
             this.logContextualRouteMonitoringDetail(locRibPeer, parsedBgpUpdate, {
                 scope: 'loc-rib',
@@ -2408,6 +2502,7 @@ class BmpSession {
             this.tlvs = [];
             const tlvResult = parseBmpTlvs(message);
             this.logTlvWarnings('Initiation TLV', tlvResult.warnings);
+            if (tlvResult.warnings.length > 0) return;
             this.tlvs = tlvResult.tlvs;
 
             // 提取已知的TLV类型
@@ -2687,35 +2782,17 @@ class BmpSession {
             const remotePort = message.readUInt16BE(position);
             position += 2;
 
-            let parsedRecvBgpOpen = null;
-            let parsedSendBgpOpen = null;
-
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP recv Open message
-                const bgpRecvOpenHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: recvOpenLength, type: _recvOpenType } = this.parseBgpHeader(bgpRecvOpenHeader);
-                const bgpRecvOpen = message.subarray(position, position + recvOpenLength);
-                parsedRecvBgpOpen = parseBgpPacket(bgpRecvOpen);
-                if (!parsedRecvBgpOpen.valid) {
-                    logger.error(`Received BGP Open message is invalid: ${parsedRecvBgpOpen.error}`);
-                }
-                position += recvOpenLength;
+            const opens = this.parsePeerUpOpenMessages(message, position);
+            if (opens.error) {
+                logger.warn(opens.error);
+                return;
             }
-
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP send Open message
-                const bgpSendOpenHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: sendOpenLength, type: _sendOpenType } = this.parseBgpHeader(bgpSendOpenHeader);
-                const bgpSendOpen = message.subarray(position, position + sendOpenLength);
-                parsedSendBgpOpen = parseBgpPacket(bgpSendOpen);
-                if (!parsedSendBgpOpen.valid) {
-                    logger.error(`Sent BGP Open message is invalid: ${parsedSendBgpOpen.error}`);
-                }
-                position += sendOpenLength;
-            }
+            const { parsedRecvBgpOpen, parsedSendBgpOpen } = opens;
+            position = opens.position;
 
             const peerUpTlvResult = parseBmpTlvs(message, position);
             this.logTlvWarnings('Peer Up TLV', peerUpTlvResult.warnings);
+            if (peerUpTlvResult.warnings.length > 0) return;
             const peerUpTlvs = peerUpTlvResult.tlvs;
             const vrfTableNames = this.decodeVrfTableNameTlvs(peerUpTlvs);
             const effectiveSessionFlags =
@@ -2976,35 +3053,17 @@ class BmpSession {
             const remotePort = message.readUInt16BE(position);
             position += 2;
 
-            let parsedRecvBgpOpen = null;
-            let parsedSendBgpOpen = null;
-
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP recv Open message
-                const bgpRecvOpenHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: recvOpenLength, type: _recvOpenType } = this.parseBgpHeader(bgpRecvOpenHeader);
-                const bgpRecvOpen = message.subarray(position, position + recvOpenLength);
-                parsedRecvBgpOpen = parseBgpPacket(bgpRecvOpen);
-                if (!parsedRecvBgpOpen.valid) {
-                    logger.error(`Received BGP Open message is invalid: ${parsedRecvBgpOpen.error}`);
-                }
-                position += recvOpenLength;
+            const opens = this.parsePeerUpOpenMessages(message, position);
+            if (opens.error) {
+                logger.warn(opens.error);
+                return;
             }
-
-            if (position + BgpConst.BGP_HEAD_LEN <= message.length) {
-                // BGP send Open message
-                const bgpSendOpenHeader = message.subarray(position, position + BgpConst.BGP_HEAD_LEN);
-                const { length: sendOpenLength, type: _sendOpenType } = this.parseBgpHeader(bgpSendOpenHeader);
-                const bgpSendOpen = message.subarray(position, position + sendOpenLength);
-                parsedSendBgpOpen = parseBgpPacket(bgpSendOpen);
-                if (!parsedSendBgpOpen.valid) {
-                    logger.error(`Sent BGP Open message is invalid: ${parsedSendBgpOpen.error}`);
-                }
-                position += sendOpenLength;
-            }
+            const { parsedRecvBgpOpen, parsedSendBgpOpen } = opens;
+            position = opens.position;
 
             const peerUpTlvResult = parseBmpTlvs(message, position);
             this.logTlvWarnings('Peer Up Local-RIB TLV', peerUpTlvResult.warnings);
+            if (peerUpTlvResult.warnings.length > 0) return;
             const peerUpTlvs = peerUpTlvResult.tlvs;
             const vrfTableNames = this.decodeVrfTableNameTlvs(peerUpTlvs);
             const effectiveInstanceFlags =
@@ -3449,6 +3508,11 @@ class BmpSession {
             }
 
             const { version, length, type } = header;
+            if (length !== message.length || length < BmpConst.BMP_HEADER_LENGTH || length > MAX_BMP_MESSAGE_BYTES) {
+                logger.warn(`Invalid BMP message length ${length}; closing connection`);
+                this.closeSession();
+                return;
+            }
             this.bmpVersion = version;
             if (version !== BmpConst.BMP_VERSION.V3 && version !== BmpConst.BMP_VERSION.V4) {
                 logger.warn(`Unsupported BMP version ${version} from ${clientAddress}`);
@@ -3508,34 +3572,70 @@ class BmpSession {
     }
 
     recvMsg(buffer) {
-        this.messageBuffer = Buffer.concat([this.messageBuffer, buffer]);
-        this.processBufferedMessages();
-    }
-
-    processBufferedMessages() {
-        while (this.messageBuffer.length >= BmpConst.BMP_HEADER_LENGTH) {
-            const messageLength = this.messageBuffer.readUInt32BE(1);
-            if (messageLength < BmpConst.BMP_HEADER_LENGTH) {
-                logger.warn(`Invalid BMP message length ${messageLength}, closing session`);
-                this.messageBuffer = Buffer.alloc(0);
-                this.closeSession();
-                break;
+        if (!Buffer.isBuffer(buffer)) return;
+        const state = frameState(this);
+        let offset = 0;
+        while (offset < buffer.length && !state.closed) {
+            if (state.bytes === 0 && buffer.length - offset >= BmpConst.BMP_HEADER_LENGTH) {
+                const length = this.validateFrameHeader(buffer, offset);
+                if (!length) return;
+                if (buffer.length - offset >= length) {
+                    // The common case: TCP coalesces complete small BMP frames.
+                    // Parse directly, without a per-frame allocation/copy.
+                    this.processMessage(buffer.subarray(offset, offset + length));
+                    offset += length;
+                    continue;
+                }
             }
-
-            if (this.messageBuffer.length < messageLength) {
-                logger.info(
-                    `Waiting for more data. Have ${this.messageBuffer.length} bytes, need ${messageLength} bytes`
-                );
-                break;
+            if (state.bytes < BmpConst.BMP_HEADER_LENGTH) {
+                const count = Math.min(BmpConst.BMP_HEADER_LENGTH - state.bytes, buffer.length - offset);
+                appendFrameBytes(state, buffer, offset, count, BmpConst.BMP_HEADER_LENGTH);
+                offset += count;
+                if (state.bytes < BmpConst.BMP_HEADER_LENGTH) return;
+                state.length = this.validateFrameHeader(state.blocks[0].buffer, 0);
+                if (!state.length) return;
             }
-
-            const completeMessage = this.messageBuffer.subarray(0, messageLength);
-            this.messageBuffer = this.messageBuffer.subarray(messageLength);
+            const count = Math.min(state.length - state.bytes, buffer.length - offset);
+            appendFrameBytes(state, buffer, offset, count, state.length);
+            offset += count;
+            if (state.bytes < state.length) return;
+            const completeMessage = bufferedFrame(state);
+            state.blocks = [];
+            state.bytes = 0;
+            state.capacity = 0;
+            state.length = 0;
             this.processMessage(completeMessage);
         }
     }
 
+    validateFrameHeader(buffer, offset) {
+        const version = buffer[offset];
+        const length = buffer.readUInt32BE(offset + 1);
+        if (
+            (version !== BmpConst.BMP_VERSION.V3 && version !== BmpConst.BMP_VERSION.V4) ||
+            length < BmpConst.BMP_HEADER_LENGTH ||
+            length > MAX_BMP_MESSAGE_BYTES
+        ) {
+            logger.warn(`Invalid BMP frame version ${version} or length ${length}; closing connection`);
+            this.closeSession();
+            return 0;
+        }
+        return length;
+    }
+
+    processBufferedMessages() {
+        const buffer = this.messageBuffer;
+        this.messageBuffer = Buffer.alloc(0);
+        this.recvMsg(buffer);
+    }
+
     closeSession() {
+        const state = frameState(this);
+        state.closed = true;
+        state.blocks = [];
+        state.bytes = 0;
+        state.capacity = 0;
+        state.length = 0;
         this.invalidateRouteAssurance('bmp-session-close');
         this.persistConnectionClose('bmp-session-close');
         // Close direct socket if exists

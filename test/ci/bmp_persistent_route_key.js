@@ -1,11 +1,15 @@
 const assert = require('assert');
 const path = require('path');
+const crypto = require('crypto');
+const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 
 const routeKey = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bmpPersistentRouteKey.js'));
 
 const {
     KEY_SCHEMA_VERSION,
     canonicalStringify,
+    canonicalizeRouteIdentity,
+    formatRouteLookupKey,
     createSourceKey,
     createScopeKey,
     createRouteKey,
@@ -321,5 +325,257 @@ const baseScope = {
 
 // Stable JSON is also exposed for collision verification and migration tooling.
 assert.strictEqual(canonicalStringify({ z: 1, a: { y: 2, x: 3 } }), canonicalStringify({ a: { x: 3, y: 2 }, z: 1 }));
+
+function makeLookupRoute(afi, safi, nlri, pathId = 3) {
+    const route = new BmpBgpRoute(null, null);
+    Object.assign(route, {
+        afi,
+        safi,
+        pathId,
+        rd: nlri.rd || '0:0',
+        rdRaw: nlri.rdRaw || null,
+        ip: nlri.prefix || 'identical display prefix',
+        mask: nlri.length ?? 0,
+        nlriDetail: nlri
+    });
+    return route;
+}
+
+function lookupKey(route) {
+    const identity = canonicalizeRouteIdentity(route);
+    const formatted = formatRouteLookupKey(identity, route);
+    assert.strictEqual(route.getRouteKey(), formatted, 'in-memory and persistence lookup keys must agree');
+    return formatted;
+}
+
+// Ordinary IP lookup formatting reuses the canonical network. It must not add
+// hashing, JSON serialization, or prefix normalization to the mutation hot path.
+{
+    const identity = canonicalizeRouteIdentity({ afi: 1, safi: 1, pathId: 3, nlri: { prefix: '192.0.2.129/24' } });
+    const createHash = crypto.createHash;
+    const stringify = JSON.stringify;
+    crypto.createHash = () => {
+        throw new Error('route lookup formatting must not hash');
+    };
+    JSON.stringify = () => {
+        throw new Error('ordinary IP route lookup formatting must not serialize JSON');
+    };
+    try {
+        assert.strictEqual(formatRouteLookupKey(identity), '3|0:0|192.0.2.0|24');
+        assert.strictEqual(
+            formatRouteLookupKey(identity, { rd: '65000:7', rdRaw: 'raw:0000fde800000007' }),
+            '3|raw:0000fde800000007|192.0.2.0|24'
+        );
+        assert.strictEqual(
+            makeLookupRoute(1, 1, { prefix: '192.0.2.129', length: 24 }).getRouteKey(),
+            '3|0:0|192.0.2.0|24'
+        );
+    } finally {
+        crypto.createHash = createHash;
+        JSON.stringify = stringify;
+    }
+    const ipv6 = makeLookupRoute(2, 1, { prefix: '2001:0db8:1:2:ffff:ffff:ffff:ffff', length: 64 });
+    assert.strictEqual(lookupKey(ipv6), '3|0:0|2001:db8:1:2::|64');
+    const legacy = new BmpBgpRoute(null, null);
+    Object.assign(legacy, { pathId: 3, ip: '192.0.2.129', mask: 24 });
+    assert.strictEqual(
+        legacy.getRouteKey(),
+        '3|0:0|192.0.2.129|24',
+        'AF-less synthetic routes retain the static key path'
+    );
+}
+
+// QP's complete variable-prefix identity includes DQPN presence AND bit length.
+{
+    const prefix = { prefix: '203.0.113.0', length: 24 };
+    const variants = [
+        { ...prefix, dqpn: null, dqpnBits: null },
+        { ...prefix, dqpn: 0, dqpnBits: 0 },
+        { ...prefix, dqpn: 1, dqpnBits: 8 },
+        { ...prefix, dqpn: 1, dqpnBits: 16 }
+    ].map(nlri => makeLookupRoute(1, 241, nlri));
+    const keys = variants.map(lookupKey);
+    assert.strictEqual(new Set(keys).size, variants.length);
+    assert.strictEqual(keys[0], '3|0:0|qp:1:203.0.113.0/24;dqpn=absent');
+    assert.strictEqual(keys[1], '3|0:0|qp:1:203.0.113.0/24;dqpn=0/0');
+    assert.strictEqual(keys[2], '3|0:0|qp:1:203.0.113.0/24;dqpn=1/8');
+    assert.strictEqual(
+        lookupKey(makeLookupRoute(1, 241, { ...prefix, prefix: '203.0.113.129', dqpn: 1, dqpnBits: 8 })),
+        keys[2]
+    );
+    assert.notStrictEqual(lookupKey(makeLookupRoute(1, 241, { ...prefix, length: 25, dqpn: 1, dqpnBits: 8 })), keys[2]);
+    assert.notStrictEqual(lookupKey(makeLookupRoute(1, 241, variants[2].nlriDetail, 4)), keys[2]);
+    assert.throws(
+        () => canonicalizeRouteIdentity(makeLookupRoute(1, 241, { ...prefix, dqpn: 1 })),
+        /both be present or absent/
+    );
+}
+
+// RD's canonical identity takes precedence over mutable/display metadata. Its
+// binary type remains significant even when the printable RD is identical.
+{
+    const typeZero = makeLookupRoute(1, 128, {
+        prefix: '10.20.30.129',
+        length: 24,
+        rd: '65000:7',
+        rdRaw: 'raw:0000fde800000007'
+    });
+    const typeTwo = makeLookupRoute(1, 128, { ...typeZero.nlriDetail, rdRaw: 'raw:00020000fde80007' });
+    assert.strictEqual(lookupKey(typeZero), '3|raw:0000fde800000007|10.20.30.0|24');
+    assert.notStrictEqual(lookupKey(typeZero), lookupKey(typeTwo));
+    const identity = canonicalizeRouteIdentity(typeZero);
+    assert.strictEqual(
+        formatRouteLookupKey(identity, { rd: 'wrong:9', rdRaw: 'raw:ffffffffffffffff' }),
+        lookupKey(typeZero)
+    );
+    assert.strictEqual(
+        lookupKey(makeLookupRoute(1, 128, { prefix: '10.20.30.0', length: 24, rd: '065000:0007' })),
+        '3|65000:7|10.20.30.0|24'
+    );
+}
+
+// Each EVPN type uses its RFC identity, not the formatted prefix, ESI/Gateway
+// where mutable, labels, or NLRI's encoded length. No lookup formatting hashes.
+{
+    const esi = '00:00:00:00:00:00:00:00:00:01';
+    const families = [
+        [{ routeType: 1, rd: '65000:1', esi, ethernetTagId: 100 }, 'esi', '00:00:00:00:00:00:00:00:00:02'],
+        [
+            {
+                routeType: 2,
+                rd: '65000:1',
+                esi,
+                ethernetTagId: 100,
+                macLength: 48,
+                macAddress: 'aa:bb:cc:dd:ee:ff',
+                ipLength: 32,
+                ipAddress: '192.0.2.1'
+            },
+            'macAddress',
+            'aa:bb:cc:dd:ee:00'
+        ],
+        [
+            { routeType: 3, rd: '65000:1', ethernetTagId: 100, ipLength: 32, originatingRouterIp: '192.0.2.1' },
+            'originatingRouterIp',
+            '192.0.2.2'
+        ],
+        [
+            { routeType: 4, rd: '65000:1', esi, ipLength: 32, originatingRouterIp: '192.0.2.1' },
+            'esi',
+            '00:00:00:00:00:00:00:00:00:02'
+        ],
+        [
+            {
+                routeType: 5,
+                rd: '65000:1',
+                esi,
+                ethernetTagId: 100,
+                prefixLength: 24,
+                ipPrefix: '192.0.2.129',
+                gatewayIp: '192.0.2.1'
+            },
+            'ipPrefix',
+            '198.51.100.0'
+        ]
+    ];
+    const createHash = crypto.createHash;
+    crypto.createHash = () => {
+        throw new Error('complete lookup keys must not add a second hash');
+    };
+    try {
+        for (const [nlri, changedField, changedValue] of families) {
+            const first = makeLookupRoute(25, 70, { ...nlri, labels: [{ label: 100 }], length: 216 });
+            const key = lookupKey(first);
+            assert.ok(
+                key.startsWith('3|65000:1|25:70:evpn:'),
+                'EVPN lookup keys carry family and type-specific identity'
+            );
+            const updated = makeLookupRoute(25, 70, {
+                ...nlri,
+                ...(nlri.routeType === 2 || nlri.routeType === 5 ? { esi: 'mutable-new-esi' } : {}),
+                gatewayIp: '198.51.100.1',
+                labels: [{ label: 300 }, { label: 400 }],
+                length: 240,
+                nextHop: '192.0.2.254',
+                rawNlri: 'new forwarding bytes',
+                warnings: ['annotation']
+            });
+            assert.strictEqual(
+                lookupKey(updated),
+                key,
+                `EVPN RT${nlri.routeType} path updates retain their lookup key`
+            );
+            assert.notStrictEqual(lookupKey(makeLookupRoute(25, 70, { ...nlri, [changedField]: changedValue })), key);
+        }
+    } finally {
+        crypto.createHash = createHash;
+    }
+}
+
+// Opaque/structured NLRI keys retain all canonical fields and escape delimiters
+// reversibly; equal display prefixes and injected pipes cannot alias another key.
+{
+    const raw = makeLookupRoute(1, 133, { prefix: 'same display', rawNlri: '010218c00002', routeType: 1 });
+    const key = lookupKey(raw);
+    assert.notStrictEqual(lookupKey(makeLookupRoute(1, 133, { ...raw.nlriDetail, rawNlri: '010218c00003' })), key);
+    assert.notStrictEqual(lookupKey(makeLookupRoute(1, 133, { ...raw.nlriDetail, routeType: 2 })), key);
+    assert.notStrictEqual(lookupKey(makeLookupRoute(2, 133, raw.nlriDetail)), key);
+    const structured = makeLookupRoute(3, 99, { prefix: 'same display', descriptor: { value: 'left|right', code: 1 } });
+    const escaped = lookupKey(structured);
+    assert.strictEqual(escaped.split('|').length, 3);
+    assert.ok(escaped.includes('left\\u007cright'));
+    const completeNlriJson = escaped.slice(escaped.indexOf(':structured-nlri:') + ':structured-nlri:'.length);
+    assert.deepStrictEqual(JSON.parse(completeNlriJson), canonicalizeRouteIdentity(structured).nlri);
+    assert.notStrictEqual(
+        lookupKey(
+            makeLookupRoute(3, 99, { ...structured.nlriDetail, descriptor: { value: 'left\\u007cright', code: 1 } })
+        ),
+        escaped
+    );
+    assert.notStrictEqual(
+        lookupKey(makeLookupRoute(3, 99, { ...structured.nlriDetail, descriptor: { value: 'left|right', code: 2 } })),
+        escaped
+    );
+}
+
+// Persistence's existing canonical string supplies EVPN/structured semantic
+// JSON once. Its literal separator cannot be confused with an escaped NLRI
+// control character, and the optimized lookup string remains byte-identical.
+{
+    const identities = [
+        createRouteKey({
+            afi: 25,
+            safi: 70,
+            pathId: 3,
+            nlri: {
+                routeType: 2,
+                rd: '65000:1',
+                ethernetTagId: 100,
+                macLength: 48,
+                macAddress: 'aa:bb:cc:dd:ee:ff',
+                ipLength: 32,
+                ipAddress: '192.0.2.1'
+            }
+        }),
+        createRouteKey({
+            afi: 3,
+            safi: 99,
+            pathId: 3,
+            nlri: { prefix: 'display', descriptor: { value: 'left\u001fright|tail', code: 1 } }
+        })
+    ];
+    const expected = identities.map(key => formatRouteLookupKey(key.canonicalIdentity));
+    const stringify = JSON.stringify;
+    JSON.stringify = () => {
+        throw new Error('precomputed canonical route strings must not serialize semantic JSON twice');
+    };
+    try {
+        identities.forEach((key, index) => {
+            assert.strictEqual(formatRouteLookupKey(key.canonicalIdentity, {}, key.canonicalJson), expected[index]);
+        });
+    } finally {
+        JSON.stringify = stringify;
+    }
+}
 
 console.log('BMP persistent route key tests passed');

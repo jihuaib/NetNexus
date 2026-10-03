@@ -95,16 +95,18 @@ const third = buildRouteUpsertMutation(bmpSession, owner, changed, 1, 1, RIB, { 
 assert.notEqual(third.route.attrId, first.route.attrId);
 
 // 3. Compact NLRI: plain prefixes drop nlriJson and keep flags; the route key
-//    is the v2 canonical string; identity fields are complete.
+//    is the v3 canonical string; identity fields are complete.
 assert.equal(first.route.nlriJson, null);
 assert.equal(first.route.nlriFlags, 3, 'valid + rd present');
 assert.equal(first.route.prefix, '203.0.113.0');
 assert.equal(first.route.prefixLength, 24);
+assert.equal(first.route.legacyRouteKey, '3|0:0|203.0.113.0|24');
+assert.equal(second.route.legacyRouteKey, '3|raw:0000000000000000|203.0.114.0|24');
 assert.equal(first.route.keyVersion, KEY_SCHEMA_VERSION);
 assert.equal(first.route.identityJson, createRouteKey({ afi: 1, safi: 1, pathId: 3, route: plain }).canonicalJson);
 assert.equal(
     first.route.identityJson,
-    ['bmp-route', '2', '1', '1', '3', 'ip-prefix', 'ipv4', 'cb007100', '24'].join('\u001f')
+    ['bmp-route', '3', '1', '1', '3', 'ip-prefix', 'ipv4', 'cb007100', '24'].join('\u001f')
 );
 
 // 4. Scope descriptors are cached per owner, but epoch/state/reason follow each call.
@@ -134,7 +136,30 @@ const withdraw = buildRouteWithdrawMutation(
     { kind: 'peer' }
 );
 assert.equal(withdraw.route.id, first.route.id);
+assert.equal(withdraw.route.legacyRouteKey, first.route.legacyRouteKey);
 assert.equal(withdraw.route.nlriJson, null);
 assert.equal(withdraw.route.nlriFlags, 2, 'rd present, no valid flag');
+
+// The public key reuses the normalized persistent identity, never a second
+// getRouteKey()/hash call or an untrusted caller-supplied display key.
+const hostBits = makeRoute('203.0.113.99', 24, attr);
+hostBits.routeKey = 'lossy-display-key';
+hostBits.getRouteKey = () => {
+    throw new Error('mutation must not normalize/hash the route a second time');
+};
+const normalized = buildRouteUpsertMutation(bmpSession, owner, hostBits, 1, 1, RIB, { kind: 'peer' });
+assert.equal(normalized.route.id, first.route.id);
+assert.equal(normalized.route.legacyRouteKey, first.route.legacyRouteKey);
+const rawRdWithdraw = buildRouteWithdrawMutation(
+    bmpSession,
+    owner,
+    { prefix: decorated.ip, length: decorated.mask, pathId: 3, rd: '0:0', rdRaw: decorated.rdRaw },
+    null,
+    1,
+    1,
+    RIB,
+    { kind: 'peer' }
+);
+assert.equal(rawRdWithdraw.route.legacyRouteKey, second.route.legacyRouteKey);
 
 console.log('BMP persistence mutation tests passed');

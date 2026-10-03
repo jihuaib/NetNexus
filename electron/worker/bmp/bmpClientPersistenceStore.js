@@ -1,6 +1,7 @@
 const fs = require('fs');
 const path = require('path');
 const BmpPersistenceStore = require('./bmpPersistenceStore');
+const { prepareBmpDatabaseVersions } = require('./bmpDatabaseVersionCheck');
 const {
     normalizeClientSourceId,
     getClientDatabaseDirectory,
@@ -169,6 +170,13 @@ class BmpClientPersistenceStore {
     open() {
         if (this.opened) return this;
         assertClientDatabaseDirectory(this.dbPath, { create: !this.readOnly });
+        if (!this.readOnly) {
+            prepareBmpDatabaseVersions(this.dbPath, {
+                expectedVersion: BmpPersistenceStore.SCHEMA_VERSION,
+                workerIndex: this.workerIndex,
+                workerCount: this.workerCount
+            });
+        }
         this.opened = true;
         try {
             // Recover every existing owned client even if no new packet arrives
@@ -643,7 +651,7 @@ class BmpClientPersistenceStore {
 
     getStatus(options = {}) {
         const clientDatabases = [];
-        for (const id of this.sourceIdsForQuery(options)) {
+        for (const id of this.sourceIdsForQuery(options, !this.readOnly && options.ownedOnly === true)) {
             const store = this.getStore(id);
             if (store) clientDatabases.push({ sourceId: id, ...store.getStatus(options) });
         }
@@ -693,6 +701,7 @@ class BmpClientPersistenceStore {
                       ['ingestBatches', 'bmp_ingest_batches']
                   ])
                       purged.counts[field] += store.db.prepare(`DELETE FROM ${table}`).run().changes;
+                  store.db.prepare('DELETE FROM main.bmp_gc_candidates').run();
                   return purged;
               })()
             : {

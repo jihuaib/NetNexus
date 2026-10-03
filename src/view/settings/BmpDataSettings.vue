@@ -18,15 +18,6 @@
                 class="database-warning"
             />
 
-            <nn-alert
-                v-if="databaseInfo.legacyDatabaseExists"
-                type="info"
-                show-icon
-                message="旧共享数据库已保留"
-                :description="`旧文件 ${databaseInfo.legacyDatabasePath} 不参与当前查询，也不会被此处的删除操作移除。`"
-                class="database-warning"
-            />
-
             <div class="database-panel">
                 <nn-descriptions :column="1" bordered size="small" class="database-details">
                     <nn-descriptions-item label="BMP 服务">
@@ -86,8 +77,6 @@
         dbPath: '',
         storageDirectory: '',
         clientDatabaseCount: 0,
-        legacyDatabaseExists: false,
-        legacyDatabasePath: null,
         exists: false,
         running: false,
         starting: false,
@@ -211,7 +200,7 @@
 
         dialog.confirm({
             title: '确认删除 BMP 数据库',
-            content: '将永久删除全部客户端数据库中的会话、路由和统计数据，且无法恢复。旧共享数据库会保留。是否继续？',
+            content: '将永久删除全部客户端数据库中的会话、路由和统计数据，且无法恢复。是否继续？',
             okText: '永久删除',
             cancelText: '取消',
             okType: 'danger',

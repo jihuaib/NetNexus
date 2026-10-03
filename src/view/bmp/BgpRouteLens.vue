@@ -486,6 +486,7 @@
     let lastAutoErrorMessage = '';
     let suppressNextStateRefresh = false;
     let lastAppliedDeepLink = '';
+    let pageActive = false;
 
     const normalizeResult = payload => {
         const source = payload && typeof payload === 'object' ? payload : {};
@@ -615,6 +616,7 @@
     };
 
     const runQuery = async (query, silent = false) => {
+        if (!pageActive) return;
         const currentRequestId = ++requestId;
         if (!silent) loading.value = true;
         try {
@@ -660,7 +662,7 @@
     };
 
     const scheduleRefresh = () => {
-        if (!lastQuery.value || !hasSearched.value) return;
+        if (!pageActive || !lastQuery.value || !hasSearched.value) return;
         clearRefreshTimer();
         refreshTimer = setTimeout(() => {
             refreshTimer = null;
@@ -685,7 +687,7 @@
     };
 
     const applyDeepLinkQuery = () => {
-        if (currentRoute.name !== 'BgpRouteLens') return;
+        if (!pageActive || currentRoute.name !== 'BgpRouteLens') return;
         const query = String(currentRoute.query.q || '').trim();
         if (!query) return;
         const requestedState = String(currentRoute.query.state || 'active').toLowerCase();
@@ -723,17 +725,25 @@
     );
 
     onActivated(() => {
+        if (pageActive) return;
+        pageActive = true;
         registerEvents();
+        const previousRequestId = requestId;
         applyDeepLinkQuery();
+        if (requestId === previousRequestId && lastQuery.value && hasSearched.value) {
+            scheduleRefresh();
+        }
     });
-    onDeactivated(() => {
+    const deactivatePage = () => {
+        if (!pageActive) return;
+        pageActive = false;
+        requestId += 1;
+        loading.value = false;
         clearRefreshTimer();
         unregisterEvents();
-    });
-    onBeforeUnmount(() => {
-        clearRefreshTimer();
-        unregisterEvents();
-    });
+    };
+    onDeactivated(deactivatePage);
+    onBeforeUnmount(deactivatePage);
 
     const formatValue = value => {
         if (value === null || value === undefined || value === '') return '-';

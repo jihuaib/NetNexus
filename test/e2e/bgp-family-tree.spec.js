@@ -64,10 +64,22 @@ async function generate(page, profile) {
     await dismissToasts(page);
     await page.getByTestId(generateButtonId(profile)).click();
 }
-async function groupAction(page, profile, action) {
+async function groupMenu(page, profile) {
     const prefix = prefixFor(profile);
     await page.getByTestId(`${prefix}-tree-group-${await groupId(page, profile)}`).click({ button: 'right' });
     await expect(page.getByTestId(`${prefix}-group-context-menu`)).toBeVisible();
+}
+async function expectGeneratedCount(page, profile, count) {
+    await expect(page.getByTestId(generateButtonId(profile))).toBeEnabled();
+    await groupMenu(page, profile);
+    await expect(
+        page.getByTestId(`${prefixFor(profile)}-group-context-menu`).locator('.nn-context-menu-meta')
+    ).toHaveText(`已生成 ${count} 条`);
+    await page.keyboard.press('Escape');
+}
+async function groupAction(page, profile, action) {
+    const prefix = prefixFor(profile);
+    await groupMenu(page, profile);
     await page.getByTestId(`${prefix}-${action}-group-button`).click();
 }
 
@@ -234,7 +246,7 @@ test.describe('BGP family tree workspaces', () => {
             await expect(page.getByTestId(`${prefix}-attribute-valueCount-input`)).toHaveValue('3');
             await expect(page.getByTestId(`${prefix}-attribute-min-input`)).toHaveValue('400');
             await generate(page, profile);
-            await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 3 条路由');
+            await expectGeneratedCount(page, profile, 3);
             expect(
                 payloads
                     .at(-1)
@@ -306,7 +318,7 @@ test.describe('BGP family tree workspaces', () => {
             await expect(preview).toContainText(profile.last);
             await expect(preview).toContainText('3 个前缀 × 2 条路径 = 6 条路由');
             await generate(page, profile);
-            await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 6 条路由');
+            await expectGeneratedCount(page, profile, 6);
             expect(payloads.at(-1)).toMatchObject({ addressFamily: profile.family, ipStep: '2', count: '3' });
             expect(payloads.at(-1).nlriRules.find(rule => rule.type === 'addPath').count).toBe('2');
 
@@ -315,7 +327,7 @@ test.describe('BGP family tree workspaces', () => {
                 await selectRoot(page, profile);
                 await page.getByTestId(basicFieldId(profile, 'prefix')).fill('10.20.1.0');
                 await generate(page, profile);
-                await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 6 条路由');
+                await expectGeneratedCount(page, profile, 6);
                 expect(payloads).toHaveLength(2);
                 expect(generated.size).toBe(2);
                 await selectRoot(page, profile);
@@ -361,7 +373,7 @@ test.describe('BGP family tree workspaces', () => {
             await expect(page.getByTestId(`${prefix}-attribute-values-input`)).toHaveValue('100\n200');
             await expect(page.getByTestId(`${prefix}-attribute-enabled-switch`)).toHaveCount(0);
             await generate(page, profile);
-            await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 2 条路由');
+            await expectGeneratedCount(page, profile, 2);
             expect(payloads.at(-1).groupName).toBe(`Tree ${profile.key}`);
             expect(
                 payloads
@@ -372,8 +384,11 @@ test.describe('BGP family tree workspaces', () => {
             expect(payloads.at(-1).attributeRules.some(rule => rule.type === 'origin')).toBe(false);
             expect(payloads.at(-1).attributeRules.some(rule => Object.hasOwn(rule, 'enabled'))).toBe(false);
             await groupAction(page, profile, 'withdraw');
-            await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组未生成路由');
+            await expect(page.getByTestId(generateButtonId(profile))).toHaveText('生成本组路由');
             expect(generated.size).toBe(0);
+            await groupMenu(page, profile);
+            await expect(page.getByTestId(`${prefix}-withdraw-group-button`)).toHaveAttribute('aria-disabled', 'true');
+            await page.keyboard.press('Escape');
             await expect(medNodes).toHaveCount(2);
         });
     }
@@ -476,7 +491,7 @@ test.describe('BGP family tree workspaces', () => {
         await page.getByTestId(`${prefix}-attribute-value-input`).fill('2001:db8:880::1');
         await expect(page.getByTestId(`${prefix}-route-range-preview`)).toContainText('3 个前缀 × 2 条路径 = 6 条路由');
         await generate(page, profile);
-        await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 6 条路由');
+        await expectGeneratedCount(page, profile, 6);
         expect(payloads.at(-1).attributeRules.find(rule => rule.type === 'srv6').endpointBehavior).toBe(18);
     });
 
@@ -523,7 +538,7 @@ test.describe('BGP family tree workspaces', () => {
         await page.getByTestId(`${prefix}-tree-attribute-dqpn`).last().click();
         await page.getByTestId(`${prefix}-attribute-start-input`).fill('2');
         await generate(page, profile);
-        await expect(page.getByTestId(`${prefix}-group-generation-state`)).toContainText('本组已生成 1 条路由');
+        await expectGeneratedCount(page, profile, 1);
         expect(generated.size).toBe(2);
         await groupAction(page, profile, 'remove');
         await expect(page.locator('.route-group-item')).toHaveCount(1);

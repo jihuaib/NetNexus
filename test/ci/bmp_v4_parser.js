@@ -12,6 +12,7 @@ const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const { buildScope, buildRouteUpsertMutation } = require('../../electron/worker/bmp/bmpPersistenceMutation');
 const { decodeExtendedPeerFlagsValue } = require('../../electron/utils/bmpUtils');
+const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
 
 const persistenceTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-v4-parser-'));
 const persistenceStores = new Set();
@@ -333,8 +334,8 @@ function peerUpPayload(flags = 0, options = {}) {
         ip('192.0.2.254'),
         u16(179),
         u16(50000),
-        bgpOpen('192.0.2.2', options.recvAddPathMode ?? null),
         bgpOpen('192.0.2.1', options.sendAddPathMode ?? null),
+        bgpOpen('192.0.2.2', options.recvAddPathMode ?? null),
         ...tlvs
     ]);
 }
@@ -346,8 +347,8 @@ function peerUpPayloadForAf(afi, safi, flags = 0) {
         ip('192.0.2.254'),
         u16(179),
         u16(50000),
-        bgpOpenForAf('192.0.2.2', afi, safi),
-        bgpOpenForAf('192.0.2.1', afi, safi)
+        bgpOpenForAf('192.0.2.1', afi, safi),
+        bgpOpenForAf('192.0.2.2', afi, safi)
     ]);
 }
 
@@ -358,8 +359,8 @@ function peerUpPayloadForAddressFamilies(flags = 0, options = {}) {
         ip(options.localAddress || '192.0.2.254'),
         u16(options.localPort || 179),
         u16(options.remotePort || 50000),
-        bgpOpenForAddressFamilies(options.peerAddress || '192.0.2.2', options.recvAddressFamilies),
-        bgpOpenForAddressFamilies(options.routerId || '192.0.2.1', options.sendAddressFamilies)
+        bgpOpenForAddressFamilies(options.routerId || '192.0.2.1', options.sendAddressFamilies),
+        bgpOpenForAddressFamilies(options.peerAddress || '192.0.2.2', options.recvAddressFamilies)
     ]);
 }
 
@@ -369,12 +370,12 @@ function locRibPeerUpPayload(flags = 0, options = {}) {
         Buffer.alloc(16),
         u16(0),
         u16(0),
-        Array.isArray(options.recvAddressFamilies)
-            ? bgpOpenForAddressFamilies('192.0.2.1', options.recvAddressFamilies)
-            : bgpOpen('192.0.2.1', options.recvAddPathMode ?? null),
         Array.isArray(options.sendAddressFamilies)
             ? bgpOpenForAddressFamilies('192.0.2.1', options.sendAddressFamilies)
             : bgpOpen('192.0.2.1', options.sendAddPathMode ?? null),
+        Array.isArray(options.recvAddressFamilies)
+            ? bgpOpenForAddressFamilies('192.0.2.1', options.recvAddressFamilies)
+            : bgpOpen('192.0.2.1', options.recvAddPathMode ?? null),
         tlv(BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME, Buffer.from(options.vrfTableName || 'global'))
     ]);
 }
@@ -2849,17 +2850,17 @@ assert.equal(exactPrivateLabeledRoute.nlriDetail.warnings.length, 0);
 const invalidPrivateNoLabelRoute = exactPrivateLabeledUnicastRoutes.find(
     route => route.ip === '10.202.0.0' && route.mask === 16 && route.pathId === 74
 );
-assert.ok(invalidPrivateNoLabelRoute, 'IPv4 labeled-unicast route without label should still be stored');
-assert.ok(
-    hasRouteParseStatus(invalidPrivateNoLabelRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.ERROR),
-    'IPv4 labeled-unicast route without label should be marked error'
+assert.equal(invalidPrivateNoLabelRoute, undefined, 'Invalid labeled-unicast NLRI must not enter persistence');
+const invalidPrivateNoLabelPacket = parseBgpPacket(
+    labeledUnicastNoLabelUpdate('10.202.0.0', { pathId: 74 }),
+    privateLabeledAddPathUnicastNoAddPathBgpSession
 );
+assert.equal(invalidPrivateNoLabelPacket.valid, false);
+const invalidPrivateNoLabelNlri = invalidPrivateNoLabelPacket.pathAttributes.find(attr => attr.mpReach).mpReach.nlri[0];
 assert.ok(
-    invalidPrivateNoLabelRoute.nlriDetail.errors.includes('Labeled Unicast NLRI has no MPLS label'),
-    'Route detail should keep concrete parser errors'
+    invalidPrivateNoLabelNlri.errors.includes('Labeled Unicast NLRI has no MPLS label'),
+    'Packet diagnostics must keep concrete parser errors without persisting the invalid route'
 );
-assert.equal(invalidPrivateNoLabelRoute.nlriDetail.warnings.length, 0);
-assert.equal(invalidPrivateNoLabelRoute.getRouteListInfo().errors, undefined);
 
 const { session: locRibUnicastAddPathLabeledRouteSession } = makeSession();
 const locRibLabeledRouteRd = rd(65000, 102);
@@ -3186,17 +3187,17 @@ assert.equal(exactLocRibLabeledRoute.nlriDetail.warnings.length, 0);
 const invalidLocRibNoLabelRoute = exactLocRibLabeledRoutes.find(
     route => route.ip === '10.103.0.0' && route.mask === 16 && route.pathId === 75
 );
-assert.ok(invalidLocRibNoLabelRoute, 'Loc-RIB IPv4 labeled-unicast route without label should still be stored');
-assert.ok(
-    hasRouteParseStatus(invalidLocRibNoLabelRoute.parseStatus, BmpConst.BMP_ROUTE_PARSE_STATUS.ERROR),
-    'Loc-RIB IPv4 labeled-unicast route without label should be marked error'
+assert.equal(invalidLocRibNoLabelRoute, undefined, 'Invalid Loc-RIB labeled-unicast NLRI must not enter persistence');
+const invalidLocRibNoLabelPacket = parseBgpPacket(
+    labeledUnicastNoLabelUpdate('10.103.0.0', { nextHop: '0.0.0.0', pathId: 75 }),
+    exactLocRibLabeledRouteInstance
 );
+assert.equal(invalidLocRibNoLabelPacket.valid, false);
+const invalidLocRibNoLabelNlri = invalidLocRibNoLabelPacket.pathAttributes.find(attr => attr.mpReach).mpReach.nlri[0];
 assert.ok(
-    invalidLocRibNoLabelRoute.nlriDetail.errors.includes('Labeled Unicast NLRI has no MPLS label'),
-    'Loc-RIB route detail should keep concrete parser errors'
+    invalidLocRibNoLabelNlri.errors.includes('Labeled Unicast NLRI has no MPLS label'),
+    'Loc-RIB packet diagnostics must retain the parser error without persisting the invalid route'
 );
-assert.equal(invalidLocRibNoLabelRoute.nlriDetail.warnings.length, 0);
-assert.equal(invalidLocRibNoLabelRoute.getRouteListInfo().errors, undefined);
 
 const { session: statelessAddPathSession } = makeSession();
 statelessAddPathSession.processMessage(

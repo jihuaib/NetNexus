@@ -87,7 +87,7 @@ function databaseSnapshot(store) {
     snapshot.routes = store.db
         .prepare('SELECT * FROM bmp_current_routes_all ORDER BY partition_id, scope_pk, route_pk')
         .all();
-    snapshot.gc = store.db.prepare('SELECT * FROM temp.bmp_gc_candidates ORDER BY kind, pk').all();
+    snapshot.gc = store.db.prepare('SELECT * FROM main.bmp_gc_candidates ORDER BY kind, pk').all();
     return snapshot;
 }
 

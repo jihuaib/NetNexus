@@ -113,6 +113,34 @@ async function clearToasts(page) {
     await expect(page.locator('.nn-toast')).toHaveCount(0);
 }
 
+async function openIpv4GroupMenu(page) {
+    const groupId = await page.getByTestId('bgp-ipv4-route-workspace').getAttribute('data-active-group-id');
+    await page.getByTestId(`bgp-ipv4-tree-group-${groupId}`).click({ button: 'right' });
+    await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toBeVisible();
+}
+
+async function expectGeneratedCount(page, count) {
+    const generateButton = page.getByTestId('bgp-generate-ipv4-routes-button');
+    await expect(generateButton).toBeEnabled();
+    const selected = page.locator('[role="treeitem"][aria-selected="true"] .route-tree-title');
+    const previous = await selected.evaluate(element => {
+        const testId = element.dataset.testid;
+        return {
+            testId,
+            index: Array.from(document.querySelectorAll(`[data-testid="${testId}"]`)).indexOf(element)
+        };
+    });
+    if (count === 0) await expect(generateButton).toHaveText('生成本组路由');
+    await openIpv4GroupMenu(page);
+    const menu = page.getByTestId('bgp-ipv4-group-context-menu');
+    if (count > 0) await expect(menu.locator('.nn-context-menu-meta')).toHaveText(`已生成 ${count} 条`);
+    else await expect(page.getByTestId('bgp-ipv4-withdraw-group-button')).toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    // Opening the group menu should not leave a different editor selected.
+    await page.getByTestId(previous.testId).nth(previous.index).click();
+}
+
 async function withdrawTreeGroup(page, groupId) {
     await page.getByTestId(`bgp-ipv4-tree-group-${groupId}`).click({ button: 'right' });
     await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toBeVisible();
@@ -478,7 +506,7 @@ test.describe('BGP pages', () => {
         }
         await expect(page.getByTestId('bgp-ipv4-route-table')).toContainText('10.51.0.5/32');
         await expect(page.getByText('共 10 条，每页 25 条')).toBeVisible();
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 10 条路由');
+        await expectGeneratedCount(page, 10);
         const groups = await getGroupStates(page);
         expect(groups).toHaveLength(1);
         expect(groups[0]).toMatchObject({
@@ -499,7 +527,7 @@ test.describe('BGP pages', () => {
             expect(update.withdrawnCount).toBe(0);
             expect(update.mpUnreach).toMatchObject({ afi: 1, safi: 1 });
         }
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组未生成路由');
+        await expectGeneratedCount(page, 0);
         expect((await getRouteSnapshot(controller)).total).toBe(0);
     });
 
@@ -653,7 +681,7 @@ test.describe('BGP pages', () => {
             await page.getByTestId('bgp-ipv4-attribute-start-input').fill('10');
             await page.getByTestId('bgp-ipv4-attribute-step-input').fill('1');
             await page.getByTestId('bgp-generate-ipv4-routes-button').click();
-            await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 6 条路由');
+            await expectGeneratedCount(page, 6);
             const original = JSON.parse(JSON.stringify(controller.lastGeneratedIpv4RouteConfig));
             const snapshot = await controller.waitForRoutes(12, 6);
             const allPaths = [0, 1, 2].flatMap(index => [0, 1].map(id => `10.64.0.${index + 1}/32#${id}`));
@@ -707,7 +735,7 @@ test.describe('BGP pages', () => {
             await page.getByTestId(`bgp-ipv4-tree-group-${original.groupId}`).click();
             await page.getByTestId('bgp-ipv4-route-prefix-input').fill('10.65.0.1');
             await withdrawTreeGroup(page, original.groupId);
-            await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组未生成路由');
+            await expectGeneratedCount(page, 0);
             expect((await controller.waitForRoutes(12, 0)).total).toBe(0);
             updates = await controller.waitForClientUpdates(
                 items => flattenWithdrawnRoutes(items.slice(offset)).length === 3
@@ -742,7 +770,7 @@ test.describe('BGP pages', () => {
         await addTreeRule(page, 'med');
         await page.getByTestId('bgp-ipv4-attribute-value-input').fill('10');
         await page.getByTestId('bgp-generate-ipv4-routes-button').click();
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 6 条路由');
+        await expectGeneratedCount(page, 6);
         const originalConfig = JSON.parse(JSON.stringify(controller.lastGeneratedIpv4RouteConfig));
         expect(originalConfig.groupId).toBeTruthy();
         expect(originalConfig.groupName).toBe('Snapshot replacement');
@@ -821,10 +849,10 @@ test.describe('BGP pages', () => {
         await page.getByTestId(`bgp-ipv4-tree-nlri-${originalConfig.groupId}`).click();
         await page.getByTestId('bgp-ipv4-route-prefix-input').fill('10.99.0.1');
         await page.getByTestId('bgp-ipv4-route-count-input').fill('9');
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 1 条路由');
+        await expectGeneratedCount(page, 1);
         offset = controller.getClientUpdates().length;
         await withdrawTreeGroup(page, originalConfig.groupId);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组未生成路由');
+        await expectGeneratedCount(page, 0);
         updates = await controller.waitForClientUpdates(
             items => flattenWithdrawnRoutes(items.slice(offset)).length >= 1
         );

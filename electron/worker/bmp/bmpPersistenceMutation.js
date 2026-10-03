@@ -4,7 +4,8 @@ const {
     canonicalStringify,
     createSourceKey,
     createScopeKey,
-    createRouteKey
+    createRouteKey,
+    formatRouteLookupKey
 } = require('../../utils/bmpPersistentRouteKey');
 
 // Per-owner cache of the immutable part of a scope descriptor (key, identity,
@@ -99,9 +100,13 @@ function isEmptyPayloadValue(field, value) {
     );
 }
 
-function compactRoutePayload(routeInfo) {
+function compactRoutePayload(routeInfo, nlriFlags) {
     const payload = { ...routeInfo };
+    const nlri = payload.nlriDetail;
     [...DUPLICATED_ROUTE_ATTRIBUTE_FIELDS, ...ROUTE_IDENTITY_PAYLOAD_FIELDS].forEach(field => delete payload[field]);
+    if (nlri && (nlriFlags === undefined ? !canCompactPayloadNlri(routeInfo, nlri) : nlriFlags === null)) {
+        payload.nlriDetail = nlri;
+    }
     Object.entries(payload).forEach(([field, value]) => {
         if (isEmptyPayloadValue(field, value)) {
             delete payload[field];
@@ -110,12 +115,23 @@ function compactRoutePayload(routeInfo) {
     return payload;
 }
 
+function canCompactPayloadNlri(route, nlri = route.nlriDetail) {
+    return (
+        compactNlri(nlri, {
+            prefix: normalizePersistedPrefix(route.ip || route.prefix, route.mask ?? route.length),
+            prefixLength: route.mask ?? route.length,
+            pathId: route.pathId || 0,
+            rd: route.rd || null
+        }) !== null
+    );
+}
+
 // Same result as compactRoutePayload(route.getRouteInfo()) for a BmpBgpRoute,
 // without materializing the full route info object first.
-function buildRoutePayload(route) {
+function buildRoutePayload(route, nlriFlags) {
     if (typeof route?.getPathStatusInfo !== 'function' || typeof route.getRouteTlvInfo !== 'function') {
         const routeInfo = typeof route?.getRouteInfo === 'function' ? route.getRouteInfo() : { ...route };
-        return compactRoutePayload(routeInfo);
+        return compactRoutePayload(routeInfo, nlriFlags);
     }
     const source = {
         rdRaw: route.rdRaw,
@@ -132,6 +148,11 @@ function buildRoutePayload(route) {
             payload[field] = value;
         }
     });
+    // Labels, warnings, wire bytes and other non-identity NLRI annotations
+    // belong to this path, not the identity shared by every peer/stage.
+    if (route.nlriDetail && (nlriFlags === undefined ? !canCompactPayloadNlri(route) : nlriFlags === null)) {
+        payload.nlriDetail = route.nlriDetail;
+    }
     return payload;
 }
 
@@ -480,7 +501,9 @@ function compactNlri(nlriDetail, { prefix, prefixLength, pathId, rd }) {
         return null;
     }
     const keys = Object.keys(nlriDetail);
-    if (!keys.every(key => COMPACT_NLRI_KEYS.has(key))) {
+    // Parsers may expose optional diagnostics as enumerable undefined values.
+    // JSON omits them, so they do not require a per-prefix payload object.
+    if (!keys.every(key => nlriDetail[key] === undefined || COMPACT_NLRI_KEYS.has(key))) {
         return null;
     }
     if (
@@ -494,13 +517,13 @@ function compactNlri(nlriDetail, { prefix, prefixLength, pathId, rd }) {
         return null;
     }
     let flags = 0;
-    if ('valid' in nlriDetail) {
+    if (nlriDetail.valid !== undefined) {
         if (nlriDetail.valid !== true) {
             return null;
         }
         flags |= NLRI_FLAG_VALID;
     }
-    if ('rd' in nlriDetail) {
+    if (nlriDetail.rd !== undefined) {
         if (nlriDetail.rd !== rd) {
             return null;
         }
@@ -553,7 +576,10 @@ function buildRoute(owner, route, afi, safi) {
         // Canonical identity string (not JSON): what the route id hashes.
         identityJson: key.canonicalJson,
         keyVersion: key.schemaVersion,
-        legacyRouteKey: route.getRouteKey?.() || route.routeKey || null,
+        // Reuse the normalized NLRI already computed for persistence. The
+        // public lookup key must identify the same complete NLRI, without a
+        // second normalization/hash or a lossy display-prefix fallback.
+        legacyRouteKey: formatRouteLookupKey(key.canonicalIdentity, route, key.canonicalJson),
         afi: Number(afi),
         safi: Number(safi),
         pathId: Number(route.pathId || 0),
@@ -561,11 +587,11 @@ function buildRoute(owner, route, afi, safi) {
         prefix: persistedPrefix,
         prefixLength,
         nlriKind: key.canonicalIdentity.nlri.kind,
-        nlriJson: nlriFlags === null ? stringify(nlriDetail) : null,
+        nlriJson: null,
         nlriFlags: nlriFlags ?? 0,
         attrId,
         attrJson,
-        routeJson: stringify(buildRoutePayload(route))
+        routeJson: stringify(buildRoutePayload(route, nlriFlags))
     };
 }
 
@@ -579,13 +605,15 @@ function buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute = null) {
         safi: Number(safi),
         pathId: Number(withdrawn.pathId || 0),
         rd: withdrawn.rd || '0:0',
+        rdRaw: withdrawn.rdRaw || null,
         ip: withdrawn.prefix,
         mask: withdrawn.length,
         nlriDetail: withdrawn
     };
     const key = createRouteKey({ afi, safi, route, nlri: withdrawn });
-    const legacyRouteKey = `${route.pathId}|${route.rd}|${route.ip}|${route.mask}`;
-    const withdrawnPrefix = normalizePersistedPrefix(route.ip, route.mask);
+    const legacyRouteKey = formatRouteLookupKey(key.canonicalIdentity, route, key.canonicalJson);
+    const withdrawnPrefix =
+        key.canonicalIdentity.nlri.prefix?.networkText || normalizePersistedPrefix(route.ip, route.mask);
     const withdrawnFlags =
         key.canonicalIdentity.nlri.kind === 'ip-prefix'
             ? compactNlri(withdrawn, {
@@ -607,7 +635,7 @@ function buildWithdrawRoute(owner, withdrawn, afi, safi, existingRoute = null) {
         prefix: withdrawnPrefix,
         prefixLength: route.mask,
         nlriKind: key.canonicalIdentity.nlri.kind,
-        nlriJson: withdrawnFlags === null ? stringify(withdrawn) : null,
+        nlriJson: null,
         nlriFlags: withdrawnFlags ?? 0,
         attrId: null,
         attrJson: null,

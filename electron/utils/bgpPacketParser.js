@@ -26,6 +26,8 @@ const {
     getBgpAddPathTypeName
 } = require('../utils/bgpUtils');
 const bgpAddressFamily = require('./bgpAddressFamily');
+const MINIMUM_MESSAGE_LENGTHS = { 1: 29, 2: 23, 3: 21, 4: 19, 5: 23 };
+const FIXED_ATTRIBUTE_LENGTHS = { 1: [1], 3: [4], 4: [4], 5: [4], 6: [0], 7: [6, 8], 18: [8], 35: [4] };
 
 const LABEL_UNICAST_ADD_PATH_INFERRED_WARNING =
     'label-unicast ADD-PATH is inferred from same-AFI unicast capability; Peer Up did not advertise ADD-PATH for label-unicast';
@@ -240,8 +242,42 @@ function parseAddressFamilyNlriSequenceCandidate(
             position = endPosition;
         }
 
-        if (parsedNlri.route.valid === false && Array.isArray(parsedNlri.route.errors)) {
-            errors.push(...parsedNlri.route.errors.map(error => `${routeLabel} ${routeIndex}: ${error}`));
+        if (parsedNlri.route.valid === false) {
+            const routeErrors = parsedNlri.route.errors?.length ? parsedNlri.route.errors : ['NLRI is invalid'];
+            errors.push(...routeErrors.map(error => `${routeLabel} ${routeIndex}: ${error}`));
+        }
+        // The simple-IP family decoder is also used by packet inspection and
+        // deliberately returns partial fields. Enforce its semantic bounds here,
+        // before any route can reach the persistence key builder.
+        if (
+            (afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 || afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6) &&
+            (bgpAddressFamily.isSimpleIpNlri(afi, safi) ||
+                safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST ||
+                safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN ||
+                safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP)
+        ) {
+            const maximum = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? 128 : 32;
+            if (
+                !Number.isInteger(parsedNlri.route.length) ||
+                parsedNlri.route.length < 0 ||
+                parsedNlri.route.length > maximum
+            ) {
+                errors.push(`${routeLabel} ${routeIndex}: prefix length is outside AFI bounds`);
+            }
+        }
+        if (
+            safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP &&
+            !(parsedNlri.route.dqpn === null && parsedNlri.route.dqpnBits === null) &&
+            (!Number.isSafeInteger(parsedNlri.route.dqpn) ||
+                parsedNlri.route.dqpn < 0 ||
+                !Number.isInteger(parsedNlri.route.dqpnBits) ||
+                parsedNlri.route.dqpnBits < 0 ||
+                parsedNlri.route.dqpnBits > 64)
+        ) {
+            errors.push(`${routeLabel} ${routeIndex}: QP DQPN is missing or outside supported bounds`);
+        }
+        if (parsedNlri.route.rawNlri === '') {
+            errors.push(`${routeLabel} ${routeIndex}: NLRI value is empty`);
         }
         if (Array.isArray(parsedNlri.route.warnings)) {
             warnings.push(...parsedNlri.route.warnings.map(warning => `${routeLabel} ${routeIndex}: ${warning}`));
@@ -326,6 +362,16 @@ function parseBgpPacket(buffer, context) {
         const length = buffer.readUInt16BE(BgpConst.BGP_MARKER_LEN);
         const type = buffer[BgpConst.BGP_MARKER_LEN + 2];
 
+        if (length < (MINIMUM_MESSAGE_LENGTHS[type] || BgpConst.BGP_HEAD_LEN) || length !== buffer.length) {
+            return {
+                valid: false,
+                error: `Invalid BGP message length ${length} for type ${type}: got ${buffer.length}`
+            };
+        }
+        if (type === BgpConst.BGP_PACKET_TYPE.KEEPALIVE && length !== BgpConst.BGP_HEAD_LEN) {
+            return { valid: false, error: 'BGP KEEPALIVE must contain only its header' };
+        }
+
         // Check if the buffer contains the complete packet
         if (buffer.length < length) {
             return {
@@ -388,8 +434,16 @@ function parseOpenMessage(buffer) {
     position += 2;
     const routerId = `${buffer[position]}.${buffer[position + 1]}.${buffer[position + 2]}.${buffer[position + 3]}`;
     position += 4;
-    const optParamLen = buffer[position];
+    let optParamLen = buffer[position];
     position += 1;
+    const extendedParameters = optParamLen !== 0 && buffer[position] === 255;
+    if (extendedParameters) {
+        if (position + 3 > buffer.length) throw new Error('BGP OPEN extended optional parameter length is truncated');
+        optParamLen = buffer.readUInt16BE(position + 1);
+        position += 3;
+    }
+    if (position + optParamLen !== buffer.length) throw new Error('BGP OPEN optional parameter length is inconsistent');
+    if (version !== BgpConst.BGP_VERSION) throw new Error('Unsupported BGP OPEN version');
 
     const result = {
         version,
@@ -405,9 +459,13 @@ function parseOpenMessage(buffer) {
         const optParamsEnd = position + optParamLen;
 
         while (position < optParamsEnd) {
+            const parameterHeaderLength = extendedParameters ? 3 : 2;
+            if (position + parameterHeaderLength > optParamsEnd)
+                throw new Error('BGP OPEN optional parameter header is truncated');
             const paramType = buffer[position];
-            const paramLen = buffer[position + 1];
-            position += 2;
+            const paramLen = extendedParameters ? buffer.readUInt16BE(position + 1) : buffer[position + 1];
+            position += parameterHeaderLength;
+            if (position + paramLen > optParamsEnd) throw new Error('BGP OPEN optional parameter value is truncated');
 
             // Parameter type 2 is capability
             if (paramType === BgpConst.BGP_OPEN_OPT_TYPE.OPT_TYPE) {
@@ -416,9 +474,22 @@ function parseOpenMessage(buffer) {
 
                 // Parse capability value based on capability code
                 while (capPosition < capPositionEnd) {
+                    if (capPosition + 2 > capPositionEnd) throw new Error('BGP OPEN capability header is truncated');
                     const capCode = buffer[capPosition];
                     const capLen = buffer[capPosition + 1];
                     capPosition += 2;
+                    if (capPosition + capLen > capPositionEnd)
+                        throw new Error('BGP OPEN capability value is truncated');
+                    const capCodes = BgpConst.BGP_OPEN_CAP_CODE;
+                    if (
+                        ((capCode === capCodes.MULTIPROTOCOL_EXTENSIONS || capCode === capCodes.FOUR_OCTET_AS) &&
+                            capLen !== 4) ||
+                        (capCode === capCodes.ROUTE_REFRESH && capLen !== 0) ||
+                        (capCode === capCodes.BGP_ROLE && capLen !== 1) ||
+                        (capCode === capCodes.EXTENDED_NEXT_HOP_ENCODING && (capLen === 0 || capLen % 6 !== 0)) ||
+                        (capCode === capCodes.ADD_PATH && (capLen === 0 || capLen % 4 !== 0))
+                    )
+                        throw new Error(`BGP OPEN capability ${capCode} has invalid length ${capLen}`);
 
                     const capability = {
                         code: capCode,
@@ -524,6 +595,7 @@ function parseUpdateMessage(buffer, context) {
 
     // Parse withdrawn routes
     const withdrawnRoutesEnd = position + withdrawnRoutesLength;
+    if (withdrawnRoutesEnd + 2 > buffer.length) throw new Error('BGP UPDATE withdrawn routes length is inconsistent');
     const parsedWithdrawnRoutes = parseIpv4NlriSequence(
         buffer,
         position,
@@ -539,10 +611,15 @@ function parseUpdateMessage(buffer, context) {
     position += 2;
 
     const pathAttributesEnd = position + pathAttributesLength;
-    const { pathAttributes, nextPosition } = parsePathAttributes(buffer, position, pathAttributesEnd, context);
+    if (pathAttributesEnd > buffer.length) throw new Error('BGP UPDATE path attribute length is inconsistent');
+    const {
+        pathAttributes,
+        nextPosition,
+        errors: pathAttributeErrors
+    } = parsePathAttributes(buffer, position, pathAttributesEnd, context);
     position = nextPosition;
     annotateEvpnPathAttributes(pathAttributes);
-    const attributeErrors = [];
+    const attributeErrors = [...pathAttributeErrors];
     const attributeWarnings = [];
     pathAttributes.forEach(attr => {
         if (attr.valid === false && Array.isArray(attr.errors)) {
@@ -586,9 +663,16 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
     let position = startPosition;
     const pathAttributes = [];
     const asnSize = (context && context.asnSize) || 4;
+    const errors = [];
+    if (endPosition > buffer.length || startPosition > endPosition) {
+        return { pathAttributes, nextPosition: buffer.length, errors: ['Path attribute section is truncated'] };
+    }
 
     while (position < endPosition) {
-        if (position + 2 > buffer.length) break;
+        if (position + 2 > endPosition) {
+            errors.push('Path attribute header is truncated');
+            break;
+        }
         const flags = buffer[position];
         const typeCode = buffer[position + 1];
         position += 2;
@@ -597,16 +681,25 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
         let attributeLength;
 
         if (extendedLength) {
-            if (position + 2 > buffer.length) break;
+            if (position + 2 > endPosition) {
+                errors.push('Path attribute extended length is truncated');
+                break;
+            }
             attributeLength = buffer.readUInt16BE(position);
             position += 2;
         } else {
-            if (position + 1 > buffer.length) break;
+            if (position + 1 > endPosition) {
+                errors.push('Path attribute length is truncated');
+                break;
+            }
             attributeLength = buffer[position];
             position += 1;
         }
 
-        if (position + attributeLength > buffer.length) break;
+        if (position + attributeLength > endPosition) {
+            errors.push('Path attribute value exceeds its section');
+            break;
+        }
         const attributeValue = buffer.subarray(position, position + attributeLength);
         position += attributeLength;
 
@@ -616,28 +709,53 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
             length: attributeLength,
             value: attributeValue
         };
+        if (FIXED_ATTRIBUTE_LENGTHS[typeCode] && !FIXED_ATTRIBUTE_LENGTHS[typeCode].includes(attributeLength)) {
+            attribute.valid = false;
+            attribute.errors = [`Invalid attribute length ${attributeLength}`];
+            pathAttributes.push(attribute);
+            continue;
+        }
+        if (
+            (typeCode === BgpConst.BGP_PATH_ATTR.COMMUNITY && attributeLength % 4 !== 0) ||
+            (typeCode === BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES && attributeLength % 8 !== 0)
+        ) {
+            attribute.valid = false;
+            attribute.errors = ['Community attribute value is truncated'];
+            pathAttributes.push(attribute);
+            continue;
+        }
 
         // Parse specific attribute types
         switch (typeCode) {
             case BgpConst.BGP_PATH_ATTR.ORIGIN: {
                 // ORIGIN
-                if (attributeValue.length >= 1) attribute.origin = getBgpOriginType(attributeValue[0]);
+                if (attributeValue[0] > 2) {
+                    attribute.valid = false;
+                    attribute.errors = ['ORIGIN value is invalid'];
+                } else attribute.origin = getBgpOriginType(attributeValue[0]);
                 break;
             }
-            case BgpConst.BGP_PATH_ATTR.AS_PATH: {
+            case BgpConst.BGP_PATH_ATTR.AS_PATH:
+            case BgpConst.BGP_PATH_ATTR.AS4_PATH: {
                 // AS_PATH
                 // Heuristic to detect ASN size if not provided
-                let effectiveAsnSize = asnSize;
-                if (!context || !context.asnSize) {
-                    // Check if total length matches 2-byte or 4-byte ASNs
-                    // Very simple check: header is 2 bytes (Type, Count).
-                    if (attributeValue.length >= 2) {
-                        const count = attributeValue[1];
-                        if (attributeValue.length === 2 + count * 2) effectiveAsnSize = 2;
-                        else if (attributeValue.length === 2 + count * 4) effectiveAsnSize = 4;
-                    }
+                let parsedPath = parseAsPath(
+                    attributeValue,
+                    typeCode === BgpConst.BGP_PATH_ATTR.AS4_PATH ? 4 : asnSize
+                );
+                if (
+                    typeCode === BgpConst.BGP_PATH_ATTR.AS_PATH &&
+                    (!context || !context.asnSize) &&
+                    parsedPath.errors.length > 0
+                ) {
+                    // Standalone packet inspection has no BMP A bit. Validate all
+                    // segments rather than guessing from the first segment count.
+                    const legacyPath = parseAsPath(attributeValue, 2);
+                    if (legacyPath.errors.length === 0) parsedPath = legacyPath;
                 }
-                attribute.segments = parseAsPath(attributeValue, effectiveAsnSize);
+                attribute.segments = parsedPath.segments;
+                attribute.valid = parsedPath.errors.length === 0;
+                attribute.errors = parsedPath.errors;
                 break;
             }
             case BgpConst.BGP_PATH_ATTR.NEXT_HOP: {
@@ -661,11 +779,14 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
                 // ATOMIC_AGGREGATE
                 break;
             }
-            case BgpConst.BGP_PATH_ATTR.AGGREGATOR: {
+            case BgpConst.BGP_PATH_ATTR.AGGREGATOR:
+            case BgpConst.BGP_PATH_ATTR.AS4_AGGREGATOR: {
                 // AGGREGATOR
                 if (attributeValue.length >= 6) {
-                    attribute.aggregatorAs = attributeValue.readUInt16BE(0);
-                    attribute.aggregatorIp = `${attributeValue[2]}.${attributeValue[3]}.${attributeValue[4]}.${attributeValue[5]}`;
+                    const addressOffset = attributeValue.length === 8 ? 4 : 2;
+                    attribute.aggregatorAs =
+                        addressOffset === 4 ? attributeValue.readUInt32BE(0) : attributeValue.readUInt16BE(0);
+                    attribute.aggregatorIp = `${attributeValue[addressOffset]}.${attributeValue[addressOffset + 1]}.${attributeValue[addressOffset + 2]}.${attributeValue[addressOffset + 3]}`;
                 }
                 break;
             }
@@ -724,7 +845,7 @@ function parsePathAttributes(buffer, startPosition, endPosition, context) {
         pathAttributes.push(attribute);
     }
 
-    return { pathAttributes, nextPosition: position };
+    return { pathAttributes, nextPosition: endPosition, errors };
 }
 
 /**
@@ -776,13 +897,25 @@ function parseRouteRefreshMessage(buffer) {
  */
 function parseAsPath(buffer, asnSize = 4) {
     const segments = [];
+    const errors = [];
     let position = 0;
 
     while (position < buffer.length) {
-        if (position + 2 > buffer.length) break;
+        if (position + 2 > buffer.length) {
+            errors.push('AS_PATH segment header is truncated');
+            break;
+        }
         const segmentType = buffer[position];
         const segmentLength = buffer[position + 1];
         position += 2;
+        if (segmentType < 1 || segmentType > 4 || segmentLength === 0) {
+            errors.push('AS_PATH segment type or count is invalid');
+            break;
+        }
+        if (position + segmentLength * asnSize > buffer.length) {
+            errors.push('AS_PATH segment value is truncated');
+            break;
+        }
 
         const asNumbers = [];
         for (let i = 0; i < segmentLength; i++) {
@@ -802,7 +935,7 @@ function parseAsPath(buffer, asnSize = 4) {
         });
     }
 
-    return segments;
+    return { segments, errors };
 }
 
 /**
@@ -1361,6 +1494,7 @@ function annotateEvpnPathAttributes(pathAttributes) {
  * @returns {Object} Parsed MP_REACH_NLRI data
  */
 function parseMpReachNlri(buffer, context) {
+    if (buffer.length < 5) throw new Error('MP_REACH_NLRI header is truncated');
     let position = 0;
     const afi = buffer.readUInt16BE(position);
     position += 2;
@@ -1368,6 +1502,7 @@ function parseMpReachNlri(buffer, context) {
     position += 1;
     const nextHopLength = buffer[position];
     position += 1;
+    if (position + nextHopLength + 1 > buffer.length) throw new Error('MP_REACH_NLRI next hop is truncated');
 
     const nextHop = bgpAddressFamily.parseNextHop(buffer, position, nextHopLength, afi, safi);
 
@@ -1393,7 +1528,7 @@ function parseMpReachNlri(buffer, context) {
         nextHopLength,
         nextHop,
         nlri: parsedNlri.routes,
-        valid: parsedNlri.errors.length === 0,
+        valid: parsedNlri.valid,
         errors: parsedNlri.errors,
         warnings: parsedNlri.warnings
     };
@@ -1406,6 +1541,7 @@ function parseMpReachNlri(buffer, context) {
  * @returns {Object} Parsed MP_UNREACH_NLRI data
  */
 function parseMpUnreachNlri(buffer, context) {
+    if (buffer.length < 3) throw new Error('MP_UNREACH_NLRI header is truncated');
     let position = 0;
     const afi = buffer.readUInt16BE(position);
     position += 2;
@@ -1427,7 +1563,7 @@ function parseMpUnreachNlri(buffer, context) {
         afi,
         safi,
         withdrawnRoutes: parsedWithdrawnRoutes.routes,
-        valid: parsedWithdrawnRoutes.errors.length === 0,
+        valid: parsedWithdrawnRoutes.valid,
         errors: parsedWithdrawnRoutes.errors,
         warnings: parsedWithdrawnRoutes.warnings
     };

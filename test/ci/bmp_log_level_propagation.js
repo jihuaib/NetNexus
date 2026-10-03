@@ -242,27 +242,41 @@ async function testBmpAppOfflinePropagation() {
     incompatibleApp.offlinePersistenceReader = null;
     incompatibleApp.offlinePersistenceOpenPromise = null;
     const incompatibleClients = [];
+    let openError;
+    const closeOptions = [];
     incompatibleApp.createPersistenceClient = options => {
         const client = {
             options,
             async open() {
-                const error = new Error('schema incompatible');
-                error.code = 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE';
-                throw error;
+                throw openError;
             },
-            async close() {}
+            async close(options) {
+                closeOptions.push(options);
+                throw new Error('secondary close failure');
+            }
         };
         incompatibleClients.push(client);
         return client;
     };
-    await assert.rejects(
-        incompatibleApp.openOfflinePersistenceReader(),
-        error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
-    );
-    assert.equal(incompatibleClients.length, 1, 'an incompatible database must not start an in-process migrator');
-    assert.equal(incompatibleClients[0].options.readOnly, true);
-    assert.equal(incompatibleApp.offlinePersistenceReader, null);
-    assert.equal(incompatibleApp.offlinePersistenceOpenPromise, null);
+    for (const code of [
+        'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE',
+        'BMP_PERSISTENCE_SCHEMA_TOO_NEW',
+        'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED'
+    ]) {
+        openError = Object.assign(new Error('schema incompatible'), { code });
+        const previousCount = incompatibleClients.length;
+        await assert.rejects(incompatibleApp.openOfflinePersistenceReader(), error => error === openError);
+        assert.equal(
+            incompatibleClients.length,
+            previousCount + 1,
+            'schema errors must not start a writable initializer or retry internally'
+        );
+        assert.equal(incompatibleClients[previousCount].options.readOnly, true);
+        assert.equal(incompatibleClients[previousCount].options.logLevel, 'debug');
+        assert.deepEqual(closeOptions[previousCount], { suppressErrors: true });
+        assert.equal(incompatibleApp.offlinePersistenceReader, null);
+        assert.equal(incompatibleApp.offlinePersistenceOpenPromise, null);
+    }
 }
 
 async function testSystemAppHook() {

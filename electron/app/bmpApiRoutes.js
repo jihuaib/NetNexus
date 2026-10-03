@@ -5,7 +5,7 @@ const { DEFAULT_API_SETTINGS } = require('../const/apiConst');
 const BGP_ADDR_FAMILY_VALUES = new Set(Object.values(BgpConst.BGP_ADDR_FAMILY));
 const BMP_RIB_TYPE_VALUES = new Set(Object.values(BmpConst.BMP_BGP_RIB_TYPE));
 const BMP_ROUTE_STATE_VALUES = new Set(Object.values(BmpConst.BMP_ROUTE_STATE_FILTER));
-const ROUTE_KEY_MAX_LENGTH = 2048;
+const ROUTE_KEY_MAX_LENGTH = 256 * 1024;
 
 class ParameterError extends Error {
     constructor(message, data = null) {
@@ -357,6 +357,7 @@ function createBmpApiRoutes(bmpApp) {
         {
             method: 'POST',
             path: '/api/v1/bmp/routes/detail',
+            maxBodyBytes: 512 * 1024,
             handler: wrap(async ({ body }) => {
                 const payload = normalizeRouteDetailQuery(body);
                 return runBmpQuery(bmpApp, () => bmpApp.queryBgpRouteDetail(payload));
@@ -373,6 +374,7 @@ function createBmpApiRoutes(bmpApp) {
         {
             method: 'POST',
             path: '/api/v1/bmp/instances/routes/detail',
+            maxBodyBytes: 512 * 1024,
             handler: wrap(async ({ body }) => {
                 const payload = normalizeInstanceRouteDetailQuery(body);
                 return runBmpQuery(bmpApp, () => bmpApp.queryBgpInstanceRouteDetail(payload));
@@ -402,6 +404,7 @@ function createBmpApiRoutes(bmpApp) {
         {
             method: 'POST',
             path: '/api/v1/bmp/persistence/routes',
+            maxBodyBytes: 512 * 1024,
             handler: wrap(async ({ body, settings }) => {
                 const payload = normalizePersistenceQuery(body, settings, true);
                 return bmpApp.queryPersistedRoutes(payload);

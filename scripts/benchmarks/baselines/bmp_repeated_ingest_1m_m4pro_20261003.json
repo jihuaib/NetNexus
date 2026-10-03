@@ -1,0 +1,239 @@
+{
+    "label": "bmp-review-routekey-delivery",
+    "routeCount": 1000000,
+    "rounds": 3,
+    "packetRoutes": 50,
+    "attributeGroups": 100,
+    "settings": {
+        "threadCount": 1,
+        "persistenceBatchSize": 5000,
+        "persistenceFlushMs": 20,
+        "persistenceReadFenceTimeoutMs": 30000,
+        "persistenceSweepIntervalMs": 3600000,
+        "logLevel": "off"
+    },
+    "analysisEnabled": false,
+    "startedAt": "2026-10-03T04:51:09.671Z",
+    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
+    "system": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
+    },
+    "fingerprints": {
+        "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
+        "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "dc99041ad7c8874910719b12b5ae4b134711fa9ce27544750a15b76b3808126c",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+    },
+    "fixtures": {
+        "peer": {
+            "bytes": 6380000,
+            "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+        },
+        "loc-rib": {
+            "bytes": 6620000,
+            "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+        }
+    },
+    "results": [
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 0,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 21963.792,
+            "routesPerSecond": 45529,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:51:09.883Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 0,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9602.937,
+            "routesPerSecond": 104135,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:51:31.986Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23523.751,
+            "routesPerSecond": 42510,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:51:42.227Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11602.464,
+            "routesPerSecond": 86189,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:52:05.958Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23793.086,
+            "routesPerSecond": 42029,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:52:18.092Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11591.024,
+            "routesPerSecond": 86274,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:52:42.097Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 1,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 22277.999,
+            "routesPerSecond": 44887,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:52:54.231Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 1,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9658.896,
+            "routesPerSecond": 103532,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:53:16.645Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 2,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 22571.565,
+            "routesPerSecond": 44304,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:53:26.962Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 2,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9689.487,
+            "routesPerSecond": 103205,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-03T04:53:49.667Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23757.853,
+            "routesPerSecond": 42091,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:54:00.023Z"
+        },
+        {
+            "label": "bmp-review-routekey-delivery",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11573.869,
+            "routesPerSecond": 86402,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-03T04:54:23.991Z"
+        }
+    ],
+    "summary": [
+        {
+            "kind": "peer",
+            "phase": "first",
+            "medianMs": 22277.999,
+            "routesPerSecond": 44887,
+            "minMs": 21963.792,
+            "maxMs": 22571.565
+        },
+        {
+            "kind": "peer",
+            "phase": "repeat",
+            "medianMs": 9658.896,
+            "routesPerSecond": 103532,
+            "minMs": 9602.937,
+            "maxMs": 9689.487
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "first",
+            "medianMs": 23757.853,
+            "routesPerSecond": 42091,
+            "minMs": 23523.751,
+            "maxMs": 23793.086
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "medianMs": 11591.024,
+            "routesPerSecond": 86274,
+            "minMs": 11573.869,
+            "maxMs": 11602.464
+        }
+    ],
+    "finishedAt": "2026-10-03T04:54:35.902Z"
+}

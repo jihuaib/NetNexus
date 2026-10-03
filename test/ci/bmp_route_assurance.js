@@ -174,7 +174,18 @@ addSessionRoute(
         {
             afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
-            nlriDetail: { prefix: evpn, routeType: 2, routeTypeName: 'MAC/IP Advertisement' }
+            rd: '65000:1',
+            nlriDetail: {
+                prefix: evpn,
+                rd: '65000:1',
+                routeType: 2,
+                routeTypeName: 'MAC/IP Advertisement',
+                ethernetTagId: 100,
+                macLength: 48,
+                macAddress: 'aa:bb:cc:dd:ee:ff',
+                ipLength: 32,
+                ipAddress: '192.0.2.10'
+            }
         }
     )
 );
@@ -249,7 +260,12 @@ assert.deepEqual(
 const evpnOnly = buildBmpRouteAssurance(sessionMap, { query: 'evpn:mac-ip', af: 'L2VPN EVPN' });
 assert.equal(evpnOnly.summary.uniqueNlriCount, 1);
 assert.equal(evpnOnly.issues[0].prefix, evpn);
-assert.equal(evpnOnly.issues[0].routeLensQuery, evpn);
+assert.ok(evpnOnly.issues[0].routeLensQuery.startsWith('65000:1|25:70:evpn:'));
+assert.equal(
+    JSON.parse(evpnOnly.issues[0].routeLensQuery.slice(evpnOnly.issues[0].routeLensQuery.indexOf('{'))).semantic
+        .macAddress,
+    'aa:bb:cc:dd:ee:ff'
+);
 
 const bgpLsOnly = buildBmpRouteAssurance(sessionMap, { query: 'bgp-ls:Link', category: 'not-selected' });
 assert.equal(bgpLsOnly.pagination.total, 1);
@@ -405,7 +421,7 @@ const semantic = buildBmpRouteAssurance(
 );
 const qpIssue = semantic.issues.find(issue => issue.prefix.includes('DQPN'));
 const mvpnIssue = semantic.issues.find(issue => issue.prefix.startsWith('MVPN'));
-assert.equal(qpIssue.routeLensQuery, '192.0.2.0|dqpn=4660');
+assert.equal(qpIssue.routeLensQuery, 'qp:1:192.0.2.0/24;dqpn=4660/16');
 assert.ok(mvpnIssue.routeLensQuery.startsWith('mvpn:type='));
 
 console.log('BMP Route Assurance aggregation tests passed');

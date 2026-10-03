@@ -3,8 +3,10 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const { MessageChannel } = require('node:worker_threads');
+const Database = require('better-sqlite3');
 const BmpApp = require('../../electron/app/bmpApp');
 const BmpConst = require('../../electron/const/bmpConst');
+const { createTrustedBmpEvent } = require('./fixtures/bmp_trusted_renderer');
 const { getClientDatabasePath } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 
 async function assertOfflineReaderIsolation(sourceId) {
@@ -54,7 +56,8 @@ async function assertOfflineReaderIsolation(sourceId) {
         assert.equal(legacyOnlyStatus.data.ready, false);
         assert.equal(legacyOnlyStatus.data.storageMode, 'client-databases');
         assert.equal(legacyOnlyStatus.data.clientDatabaseCount, 0);
-        assert.equal(legacyOnlyStatus.data.legacyDatabaseExists, true);
+        assert.equal(Object.hasOwn(legacyOnlyStatus.data, 'legacyDatabaseExists'), false);
+        assert.equal(Object.hasOwn(legacyOnlyStatus.data, 'legacyDatabasePath'), false);
         await assert.rejects(app.queryPersistedRoutes({ sourceId }), /持久化数据库不存在/);
         assert.equal(createdOptions.length, 0, 'legacy-only storage must never open a persistence client');
 
@@ -72,36 +75,89 @@ async function assertOfflineReaderIsolation(sourceId) {
         assert.equal(createdOptions[0].readOnly, true);
         const offlineStatus = await app.queryPersistenceStatus();
         assert.equal(offlineStatus.data.clientDatabaseCount, 1);
-        assert.equal(offlineStatus.data.legacyDatabaseExists, true);
+        assert.equal(Object.hasOwn(offlineStatus.data, 'legacyDatabaseExists'), false);
+        assert.equal(Object.hasOwn(offlineStatus.data, 'legacyDatabasePath'), false);
         assert.equal(createdOptions.length, 1, 'offline queries should reuse the existing partition reader');
         await app.closeOfflinePersistenceReader();
         assert.deepEqual(closedOptions, [{ suppressErrors: true }]);
 
-        const migrationOptions = [];
+        const failedOptions = [];
+        const failedCloseOptions = [];
+        const schemaError = new Error('client schema is incompatible');
+        schemaError.code = 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED';
         app.createPersistenceClient = options => {
-            migrationOptions.push(options);
-            const needsMigration = migrationOptions.length === 1;
+            failedOptions.push(options);
             return {
                 async open() {
-                    if (needsMigration) {
-                        const error = new Error('client schema needs migration');
-                        error.code = 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED';
-                        throw error;
-                    }
+                    throw schemaError;
                 },
-                async close() {}
+                async close(options) {
+                    failedCloseOptions.push(options);
+                }
             };
         };
-        await app.openOfflinePersistenceReader();
-        assert.equal(migrationOptions.length, 3);
-        assert.equal(
-            migrationOptions.every(options => options.partitionByClient === true),
-            true
-        );
-        assert.equal(migrationOptions[0].readOnly, true);
-        assert.notEqual(migrationOptions[1].readOnly, true, 'only the partition schema initializer is writable');
-        assert.equal(migrationOptions[2].readOnly, true);
+        await assert.rejects(app.queryPersistedRoutes(query), error => error === schemaError);
+        assert.equal(failedOptions.length, 1, 'a schema-open failure does not create a writer or retry internally');
+        assert.equal(failedOptions[0].partitionByClient, true);
+        assert.equal(failedOptions[0].readOnly, true);
+        assert.deepEqual(failedCloseOptions, [{ suppressErrors: true }]);
+        assert.equal(app.offlinePersistenceReader, null);
+        assert.equal(app.offlinePersistenceOpenPromise, null);
         assert.equal(fs.readFileSync(dbPath, 'utf8'), 'legacy-database-must-not-be-read');
+        assert.equal(fs.readFileSync(clientDbPath, 'utf8'), 'client-database-fixture');
+    } finally {
+        await app.closeOfflinePersistenceReader();
+        fs.rmSync(tempDir, { recursive: true, force: true });
+    }
+}
+
+async function assertOldSchemaQueriesDoNotCreateWriter(sourceId) {
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-old-schema-app-'));
+    const dbPath = path.join(tempDir, 'bmp.sqlite3');
+    const clientDbPath = getClientDatabasePath(dbPath, sourceId);
+    fs.mkdirSync(path.dirname(clientDbPath), { recursive: true });
+    const database = new Database(clientDbPath);
+    database.exec(
+        "CREATE TABLE retained_data (value TEXT); INSERT INTO retained_data VALUES ('keep'); PRAGMA user_version = 13;"
+    );
+    database.close();
+    fs.writeFileSync(dbPath, 'shared-file-not-part-of-offline-queries');
+    const originalContents = fs.readFileSync(clientDbPath);
+    const app = Object.create(BmpApp.prototype);
+    Object.assign(app, {
+        persistenceDbPath: dbPath,
+        worker: null,
+        bmpStarting: false,
+        persistenceDatabaseDeleting: false,
+        offlinePersistenceReader: null,
+        offlinePersistenceOpenPromise: null,
+        offlinePersistenceLock: Promise.resolve(),
+        offlinePersistenceClosePromises: new Set(),
+        logLevel: 'off'
+    });
+    const createdOptions = [];
+    app.createPersistenceClient = options => {
+        createdOptions.push(options);
+        return BmpApp.prototype.createPersistenceClient.call(app, options);
+    };
+    try {
+        await assert.rejects(
+            app.queryPersistedRoutes({ sourceId, page: 1, pageSize: 10 }),
+            error => error.code === 'BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE'
+        );
+        assert.equal(createdOptions.length, 1);
+        assert.equal(createdOptions[0].readOnly, true, 'an actual v13 database is opened only by a reader');
+        assert.equal(app.offlinePersistenceReader, null);
+        assert.equal(app.offlinePersistenceOpenPromise, null);
+        assert.deepEqual(fs.readFileSync(clientDbPath), originalContents, 'offline schema errors do not change data');
+        assert.equal(fs.readFileSync(dbPath, 'utf8'), 'shared-file-not-part-of-offline-queries');
+
+        const deletion = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
+        assert.equal(deletion.status, 'success');
+        assert.equal(deletion.data.deleted, true);
+        assert.equal(fs.existsSync(clientDbPath), false, 'manual deletion still removes incompatible client databases');
+        assert.equal(fs.readFileSync(dbPath, 'utf8'), 'shared-file-not-part-of-offline-queries');
+        assert.equal(createdOptions.length, 1, 'manual deletion does not create a writer');
     } finally {
         await app.closeOfflinePersistenceReader();
         fs.rmSync(tempDir, { recursive: true, force: true });
@@ -110,6 +166,7 @@ async function assertOfflineReaderIsolation(sourceId) {
 
 async function main() {
     const sourceId = 'a'.repeat(64);
+    await assertOldSchemaQueriesDoNotCreateWriter(sourceId);
     let workerPayload = null;
     const app = Object.create(BmpApp.prototype);
     app.worker = {
@@ -123,7 +180,8 @@ async function main() {
         }
     };
 
-    const result = await app.handleDeleteClientData(null, {
+    const event = createTrustedBmpEvent(app);
+    const result = await app.handleDeleteClientData(event, {
         sourceId: ` ${sourceId} `,
         remoteIp: ' 192.0.2.10 ',
         nestedReactiveData: { rawTlvs: [] },
@@ -142,7 +200,7 @@ async function main() {
     assert.equal(result.data.deleted, true);
 
     app.worker = null;
-    const stoppedResult = await app.handleDeleteClientData(null, { sourceId, remoteIp: '192.0.2.10' });
+    const stoppedResult = await app.handleDeleteClientData(event, { sourceId, remoteIp: '192.0.2.10' });
     assert.equal(stoppedResult.status, 'error');
     assert.equal(stoppedResult.msg, '请先启动 BMP 服务后删除离线客户端');
 

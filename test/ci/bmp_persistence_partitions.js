@@ -52,7 +52,7 @@ const requiredPartitionColumns = [
     'last_sequence'
 ];
 
-assert.equal(BmpPersistenceStore.SCHEMA_VERSION, 13);
+assert.equal(BmpPersistenceStore.SCHEMA_VERSION, 14);
 assert.deepEqual(
     BMP_ROUTE_FAMILIES.map(family => family.token),
     expectedFamilyTokens

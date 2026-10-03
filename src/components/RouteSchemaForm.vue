@@ -21,9 +21,27 @@
                     :name="field.key"
                     :html-for="fieldId(field)"
                     :help="errors[field.key] || ''"
-                    :extra="field.help || ''"
                     :validate-status="errors[field.key] ? 'error' : ''"
                 >
+                    <template #label>
+                        <span class="route-schema-label">
+                            {{ field.label }}
+                            <nn-tooltip v-if="field.help" :title="field.help" placement="top">
+                                <button
+                                    type="button"
+                                    class="route-field-help-button"
+                                    :aria-label="`${field.label}说明`"
+                                    :aria-describedby="`${fieldId(field)}-help`"
+                                    @click.stop.prevent="showFieldHelp"
+                                >
+                                    <InfoCircleOutlined aria-hidden="true" />
+                                </button>
+                            </nn-tooltip>
+                            <span v-if="field.help" :id="`${fieldId(field)}-help`" class="route-field-help-description">
+                                {{ field.help }}
+                            </span>
+                        </span>
+                    </template>
                     <nn-input
                         v-if="field.type === 'input'"
                         :id="fieldId(field)"
@@ -32,6 +50,7 @@
                         :disabled="disabled || isRouteFieldDisabled(field, modelValue)"
                         :status="errors[field.key] ? 'error' : ''"
                         :data-testid="field.testId || `route-field-${field.key}`"
+                        :aria-label="field.label"
                         :aria-invalid="errors[field.key] ? 'true' : undefined"
                         @update:value="value => updateField(field.key, value)"
                     />
@@ -45,6 +64,7 @@
                         :disabled="disabled || isRouteFieldDisabled(field, modelValue)"
                         :status="errors[field.key] ? 'error' : ''"
                         :data-testid="field.testId || `route-field-${field.key}`"
+                        :aria-label="field.label"
                         :aria-invalid="errors[field.key] ? 'true' : undefined"
                         @update:value="value => updateField(field.key, value)"
                     />
@@ -89,6 +109,7 @@
 
 <script setup>
     import { computed, useId } from 'vue';
+    import { InfoCircleOutlined } from 'netnexus-ui/icons';
     import {
         isSchemaFieldDisabled as isRouteFieldDisabled,
         isSchemaFieldVisible as isRouteFieldVisible
@@ -103,6 +124,11 @@
     const emit = defineEmits(['update:modelValue']);
     const formId = useId();
     const fieldId = field => `${formId}-${field.key}`;
+    const showFieldHelp = event => {
+        const button = event.currentTarget;
+        if (document.activeElement === button) button.blur();
+        button.focus();
+    };
     const visibleSections = computed(() =>
         props.sections.filter(section => isRouteFieldVisible(section, props.modelValue))
     );
@@ -159,6 +185,48 @@
     .route-schema-field {
         min-width: 0;
         margin-bottom: 10px;
+    }
+
+    .route-schema-label {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+    }
+
+    .route-field-help-button {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: var(--nn-color-text-muted);
+        font-size: 13px;
+        cursor: help;
+    }
+
+    .route-field-help-button:hover,
+    .route-field-help-button:focus-visible {
+        color: var(--nn-color-primary);
+        background: var(--nn-color-bg-hover);
+    }
+
+    .route-field-help-button:focus-visible {
+        outline: 2px solid var(--nn-color-primary);
+        outline-offset: 1px;
+    }
+
+    .route-field-help-description {
+        position: absolute;
+        width: 1px;
+        height: 1px;
+        margin: -1px;
+        overflow: hidden;
+        clip: rect(0, 0, 0, 0);
+        white-space: nowrap;
     }
 
     .wide-field {

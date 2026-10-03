@@ -793,7 +793,8 @@ const BmpE2eController = (() => {
             BgpConst.BGP_PATH_ATTR.AS_PATH,
             Buffer.concat([
                 Buffer.from([BgpConst.BGP_AS_PATH_TYPE.AS_SEQUENCE, asns.length]),
-                Buffer.concat(asns.map(asn => u16(asn)))
+                // Loc-RIB AS_PATH carries four-octet ASNs; its reserved flags are not BMP's A flag.
+                Buffer.concat(asns.map(asn => u32(asn)))
             ])
         );
     }

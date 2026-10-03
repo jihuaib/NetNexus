@@ -4,7 +4,9 @@ const ipaddr = require('ipaddr.js');
 // v2: keys hash a fixed-order canonical string instead of sorted JSON. The
 // identity semantics are unchanged; only the bytes (and therefore key values)
 // differ from v1.
-const KEY_SCHEMA_VERSION = 2;
+// v3: EVPN RT1--RT5 use their RFC-defined key fields, excluding mutable
+// path fields (RT2 ESI/labels and RT5 ESI/Gateway/label/encoded length).
+const KEY_SCHEMA_VERSION = 3;
 const KEY_ALGORITHM = 'sha256';
 
 const AFI_IPV4 = 1;
@@ -641,6 +643,56 @@ function resolveRouteInput(input = {}) {
     };
 }
 
+function canonicalizeEvpnIdentity(nlri, route) {
+    const routeType = Number(firstDefined(nlri.routeType, route.routeType));
+    const rd = firstDefined(nlri.rdRaw, route.rdRaw, nlri.rd, route.rd, '0:0');
+    const base = { routeType, rd, ethernetTagId: nlri.ethernetTagId };
+    let fields;
+    switch (routeType) {
+        case 1:
+            fields = { ...base, esi: nlri.esi };
+            break;
+        case 2:
+            fields = {
+                ...base,
+                macLength: nlri.macLength,
+                macAddress: nlri.macAddress,
+                ipLength: nlri.ipLength,
+                ipAddress: nlri.ipAddress
+            };
+            break;
+        case 3:
+            fields = { ...base, ipLength: nlri.ipLength, originatingRouterIp: nlri.originatingRouterIp };
+            break;
+        case 4:
+            fields = {
+                routeType,
+                rd,
+                esi: nlri.esi,
+                ipLength: nlri.ipLength,
+                originatingRouterIp: nlri.originatingRouterIp
+            };
+            break;
+        case 5: {
+            const prefixLength = firstDefined(nlri.prefixLength, nlri.length, route.mask);
+            const ipPrefix = firstDefined(nlri.ipPrefix, route.ip);
+            const prefixAfi = String(ipPrefix).includes(':') ? AFI_IPV6 : AFI_IPV4;
+            const prefix = normalizeIpPrefix(ipPrefix, prefixLength, prefixAfi);
+            fields = { ...base, prefixLength: prefix.prefixLength, ipPrefix: prefix.networkText };
+            break;
+        }
+        default: {
+            // Other EVPN extensions retain their current structural identity.
+            const semantic = sanitizeComplexNlri(nlri);
+            delete semantic.rawNlri;
+            return semantic;
+        }
+    }
+    // The route type determines its key fields. ESI is a key for RT1/RT4,
+    // but not RT2/RT5; labels, GW and encoded/display lengths are path data.
+    return sanitizeComplexNlri(fields);
+}
+
 function canonicalizeNlriIdentity(input = {}) {
     const { route, nlri, afi, safi } = resolveRouteInput(input);
     const prefixValue = firstDefined(nlri.ipPrefix, nlri.prefix, route.ip, route.prefix);
@@ -661,11 +713,18 @@ function canonicalizeNlriIdentity(input = {}) {
     }
 
     if ((afi === AFI_IPV4 || afi === AFI_IPV6) && safi === SAFI_QP) {
+        const dqpn = firstDefined(nlri.dqpn, route.dqpn);
+        const dqpnBits = firstDefined(nlri.dqpnBits, route.dqpnBits);
+        const hasDqpn = dqpn !== undefined;
+        const hasDqpnBits = dqpnBits !== undefined;
+        if (hasDqpn !== hasDqpnBits) throw new Error('QP DQPN and its bit length must both be present or absent');
         return {
             kind: 'qp-prefix',
             prefix: normalizeIpPrefix(prefixValue, prefixLength, afi),
-            dqpn: normalizeInteger(firstDefined(nlri.dqpn, route.dqpn), 'DQPN', 0, Number.MAX_SAFE_INTEGER),
-            dqpnBits: normalizeInteger(firstDefined(nlri.dqpnBits, route.dqpnBits, 0), 'DQPN bits', 0, 64)
+            // A prefix-only QP NLRI has no DQPN TLV. Its null/null domain is
+            // distinct from an explicitly encoded zero-value/zero-bit DQPN.
+            dqpn: hasDqpn ? normalizeInteger(dqpn, 'DQPN', 0, Number.MAX_SAFE_INTEGER) : null,
+            dqpnBits: hasDqpn ? normalizeInteger(dqpnBits, 'DQPN bits', 0, 64) : null
         };
     }
 
@@ -673,8 +732,7 @@ function canonicalizeNlriIdentity(input = {}) {
     const rawNlri = firstDefined(nlri.rawNlri, route.rawNlri);
 
     if (afi === AFI_L2VPN && safi === SAFI_EVPN) {
-        const semantic = sanitizeComplexNlri(nlri);
-        delete semantic.rawNlri;
+        const semantic = canonicalizeEvpnIdentity(nlri, route);
         // Parsed EVPN fields are authoritative. Labels are deliberately absent because
         // a label/VNI change is a path change for the same business route identity.
         if (Object.keys(semantic).length > 0) {
@@ -726,6 +784,40 @@ function canonicalizeRouteIdentity(input = {}) {
     };
 }
 
+// Public route lookup keys carry the complete NLRI identity, not its display
+// prefix. The persistence builder can reuse its already canonicalized identity
+// here without a second normalization or hash on the ordinary IP hot path.
+function formatRouteLookupKey(canonicalIdentity, { rd, rdRaw } = {}, canonicalRouteString = null) {
+    const { afi, safi, pathId, nlri } = canonicalIdentity;
+    const rdIdentity = firstDefined(nlri.rd, nlri.semantic?.rd, rdRaw, rd, '0:0');
+    const base = `${pathId}|${rdIdentity}|`;
+    if (nlri.kind === 'ip-prefix' || nlri.kind === 'vpn-prefix') {
+        return `${base}${nlri.prefix.networkText}|${nlri.prefix.prefixLength}`;
+    }
+    if (nlri.kind === 'qp-prefix') {
+        const dqpn = nlri.dqpn === null ? 'absent' : `${nlri.dqpn}/${nlri.dqpnBits}`;
+        return `${base}qp:${afi}:${nlri.prefix.networkText}/${nlri.prefix.prefixLength};dqpn=${dqpn}`;
+    }
+    // EVPN/structured identities already serialized their semantic fields in
+    // createRouteKey(). JSON escapes control characters, so the last literal
+    // SEP is the boundary before that complete canonical semantic JSON.
+    let completeNlri;
+    if (
+        (nlri.kind === 'evpn' || nlri.kind === 'structured-nlri') &&
+        typeof canonicalRouteString === 'string' &&
+        canonicalRouteString.includes(SEP)
+    ) {
+        const semanticJson = canonicalRouteString.slice(canonicalRouteString.lastIndexOf(SEP) + 1);
+        completeNlri = `{"kind":"${nlri.kind}","semantic":${semanticJson}}`;
+    } else {
+        completeNlri = canonicalStringify(nlri);
+    }
+    // JSON escaping preserves the full identity while keeping embedded pipes
+    // from being mistaken for top-level lookup-key separators.
+    completeNlri = completeNlri.replace(/\|/g, '\\u007c');
+    return `${base}${afi}:${safi}:${nlri.kind}:${completeNlri}`;
+}
+
 function createRouteKey(input) {
     return buildKey('bmp-route', canonicalizeRouteIdentity(input));
 }
@@ -760,6 +852,7 @@ module.exports = {
     canonicalizeScopeIdentity,
     canonicalizeNlriIdentity,
     canonicalizeRouteIdentity,
+    formatRouteLookupKey,
     createSourceKey,
     createScopeKey,
     createRouteKey,

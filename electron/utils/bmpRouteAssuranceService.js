@@ -1,5 +1,6 @@
 const { performance } = require('node:perf_hooks');
 const BmpConst = require('../const/bmpConst');
+const { getComplexRouteIdentity } = require('./bmpRouteLens');
 const {
     applyBmpRouteAssuranceBootstrapMutation,
     applyBmpRouteAssuranceMutation,
@@ -35,6 +36,7 @@ const PERSISTED_NOOP_ACTIONS = new Set(['connection_open']);
 // asks the caller to invalidate and rebuild once the writer goes quiet.
 const DEFAULT_MAX_PENDING_GROUP_REFRESHES = 5000;
 const DEFAULT_GROUP_REFRESH_DELAY_MS = 200;
+const DEFAULT_GROUP_REFRESH_BATCH_SIZE = 64;
 
 // Bridges push-style chunk callbacks to the async iterable the builder
 // consumes; each push resolves once the builder has processed the chunk so
@@ -98,7 +100,8 @@ function makeGroupLocator(route, delta) {
     }
     const sourceId = route.persistentSourceId || delta?.sourceId || delta?.source?.id || null;
     const prefix = route.ip ?? route.prefix ?? route.nlriDetail?.prefix ?? null;
-    if (!sourceId || prefix === null || prefix === undefined || prefix === '') {
+    const routeLookupIdentity = getComplexRouteIdentity(route);
+    if (!sourceId || (!routeLookupIdentity && (prefix === null || prefix === undefined || prefix === ''))) {
         return null;
     }
     const afi = Number(route.afi);
@@ -109,8 +112,9 @@ function makeGroupLocator(route, delta) {
         afi: Number.isFinite(afi) ? afi : null,
         safi: Number.isFinite(safi) ? safi : null,
         rd: route.rd ?? route.nlriDetail?.rd ?? null,
-        prefix: String(prefix),
-        prefixLength: Number.isFinite(Number(prefixLength)) ? Number(prefixLength) : null
+        prefix: String(prefix ?? ''),
+        prefixLength: Number.isFinite(Number(prefixLength)) ? Number(prefixLength) : null,
+        ...(routeLookupIdentity ? { routeLookupIdentity, routeKey: route.routeKey || route.getRouteKey?.() } : {})
     };
     // Row-shaped view of the locator so it hashes to the same run key as rows.
     locator.row = {
@@ -119,7 +123,8 @@ function makeGroupLocator(route, delta) {
         safi: locator.safi ?? '',
         rd: locator.rd ?? '',
         ip: locator.prefix,
-        mask: locator.prefixLength ?? ''
+        mask: locator.prefixLength ?? '',
+        ...(routeLookupIdentity ? { routeLookupIdentity, routeKey: locator.routeKey } : {})
     };
     return locator;
 }
@@ -213,6 +218,8 @@ class BmpRouteAssuranceService {
         this.pendingGroupRefreshes = new Map();
         this.groupRefreshTimer = null;
         this.groupRefreshRunning = false;
+        this.groupRefreshPromise = null;
+        this.onRefreshed = typeof options.onRefreshed === 'function' ? options.onRefreshed : null;
         this.maxPendingGroupRefreshes = Math.max(
             1,
             Math.floor(Number(options.maxPendingGroupRefreshes)) || DEFAULT_MAX_PENDING_GROUP_REFRESHES
@@ -220,6 +227,10 @@ class BmpRouteAssuranceService {
         this.groupRefreshDelayMs = Math.max(0, Number(options.groupRefreshDelayMs) || DEFAULT_GROUP_REFRESH_DELAY_MS);
         this.groupRefreshCount = 0;
         this.groupRefreshOverflow = false;
+        this.groupRefreshBatchSize = Math.max(
+            1,
+            Math.floor(Number(options.groupRefreshBatchSize)) || DEFAULT_GROUP_REFRESH_BATCH_SIZE
+        );
     }
 
     // Streamed bootstrap: `openStream(onChunk)` must start an ordered scan
@@ -304,6 +315,10 @@ class BmpRouteAssuranceService {
                     return this.getStatus();
                 }
                 await streamPromise.catch(() => {});
+                if (shouldCancel()) {
+                    cancelStream();
+                    return this.getStatus();
+                }
                 this.lastAggregationDurationMs = performance.now() - startedAt;
                 this.aggregationCount += 1;
                 const cacheEntry = {
@@ -316,6 +331,7 @@ class BmpRouteAssuranceService {
                 this.bootstrapPromise = null;
                 this.bootstrapCacheKey = null;
                 this.scheduleGroupRefresh();
+                this.onRefreshed?.(this.getStatus());
                 return this.getStatus();
             })
             .catch(error => {
@@ -369,46 +385,64 @@ class BmpRouteAssuranceService {
             this.groupRefreshTimer = null;
             this.flushGroupRefreshes().catch(error => {
                 this.lastGroupRefreshError = error?.message || String(error);
-                this.invalidate('group-refresh-error', { prepareBootstrap: true });
             });
         }, this.groupRefreshDelayMs);
         this.groupRefreshTimer.unref?.();
     }
 
-    async flushGroupRefreshes() {
-        if (this.groupRefreshRunning || !this.groupRefreshLoader) {
-            return;
-        }
+    flushGroupRefreshes() {
+        if (this.groupRefreshPromise) return this.groupRefreshPromise;
+        if (!this.groupRefreshLoader || this.state !== 'ready' || !this.enabled) return Promise.resolve();
+        const generation = this.bootstrapGeneration;
+        // A query waits only for a bounded batch that existed when it entered.
+        // Do not make it chase new deltas from a continuously writing client.
+        const batch = Array.from(this.pendingGroupRefreshes.entries()).slice(0, this.groupRefreshBatchSize);
         this.groupRefreshRunning = true;
-        try {
-            while (this.pendingGroupRefreshes.size > 0 && this.state === 'ready' && this.enabled) {
-                const [runKey, locator] = this.pendingGroupRefreshes.entries().next().value;
-                this.pendingGroupRefreshes.delete(runKey);
-                const rows = await this.groupRefreshLoader(locator);
-                if (this.state !== 'ready' || !this.enabled) {
-                    return;
-                }
-                this.cache.forEach(cacheEntry => {
-                    if (
-                        refreshBmpRouteAssuranceStreamRun(
-                            cacheEntry.analysis,
-                            locator.row,
-                            rows,
-                            this.streamControl?.resolveContext
-                        )
-                    ) {
-                        cacheEntry.revision = this.revision;
+        let refreshed = false;
+        const refreshing = Promise.resolve()
+            .then(async () => {
+                for (const [runKey] of batch) {
+                    if (generation !== this.bootstrapGeneration || this.state !== 'ready' || !this.enabled) return;
+                    const locator = this.pendingGroupRefreshes.get(runKey);
+                    if (!locator) continue;
+                    this.pendingGroupRefreshes.delete(runKey);
+                    const rows = await this.groupRefreshLoader(locator);
+                    if (generation !== this.bootstrapGeneration || this.state !== 'ready' || !this.enabled) {
+                        return;
                     }
-                });
-                this.groupRefreshCount += 1;
-                this.incrementalUpdateCount += 1;
-            }
-        } finally {
-            this.groupRefreshRunning = false;
-            if (this.pendingGroupRefreshes.size > 0) {
-                this.scheduleGroupRefresh();
-            }
-        }
+                    this.cache.forEach(cacheEntry => {
+                        if (
+                            refreshBmpRouteAssuranceStreamRun(
+                                cacheEntry.analysis,
+                                locator.row,
+                                rows,
+                                this.streamControl?.resolveContext
+                            )
+                        ) {
+                            cacheEntry.revision = this.revision;
+                        }
+                    });
+                    refreshed = true;
+                    this.groupRefreshCount += 1;
+                    this.incrementalUpdateCount += 1;
+                }
+            })
+            .catch(error => {
+                if (generation !== this.bootstrapGeneration || !this.enabled) return;
+                this.lastGroupRefreshError = error?.message || String(error);
+                this.invalidate('group-refresh-error', { prepareBootstrap: true });
+                throw error;
+            })
+            .finally(() => {
+                if (this.groupRefreshPromise === refreshing) this.groupRefreshPromise = null;
+                this.groupRefreshRunning = false;
+                if (refreshed && generation === this.bootstrapGeneration && this.state === 'ready' && this.enabled) {
+                    this.onRefreshed?.(this.getStatus());
+                }
+                if (this.pendingGroupRefreshes.size > 0) this.scheduleGroupRefresh();
+            });
+        this.groupRefreshPromise = refreshing;
+        return refreshing;
     }
 
     getMapId(bmpSessionMap) {
@@ -476,6 +510,7 @@ class BmpRouteAssuranceService {
             cacheHit,
             dataRevision: cacheEntry.revision,
             aggregationDurationMs: cacheEntry.aggregationDurationMs,
+            refreshPending: this.groupRefreshRunning || this.pendingGroupRefreshes.size > 0,
             queryDurationMs: performance.now() - queryStartedAt
         };
         return result;
@@ -587,13 +622,15 @@ class BmpRouteAssuranceService {
     }
 
     invalidate(reason = 'data-change', options = {}) {
+        // Also invalidate reads already awaiting a group loader, not only a
+        // bootstrap scan. They must never overwrite a newer snapshot.
+        this.bootstrapGeneration += 1;
         this.pendingGroupRefreshes.clear();
         if (this.groupRefreshTimer) {
             clearTimeout(this.groupRefreshTimer);
             this.groupRefreshTimer = null;
         }
         if (this.state === 'bootstrapping') {
-            this.bootstrapGeneration += 1;
             this.bootstrapPromise = null;
             this.bootstrapCacheKey = null;
             this.pendingMutations.clear();
@@ -798,6 +835,7 @@ class BmpRouteAssuranceService {
         result.summary = {
             ...result.summary,
             cacheHit: true,
+            refreshPending: this.groupRefreshRunning || this.pendingGroupRefreshes.size > 0,
             dataRevision: cacheEntry.revision,
             aggregationDurationMs: cacheEntry.aggregationDurationMs,
             queryDurationMs: performance.now() - queryStartedAt
@@ -808,6 +846,9 @@ class BmpRouteAssuranceService {
     async queryPersistedAsync(options = {}) {
         if (this.state === 'bootstrapping' && this.bootstrapPromise) {
             await this.bootstrapPromise;
+        }
+        if (this.dataMode === 'stream' && (this.groupRefreshPromise || this.pendingGroupRefreshes.size > 0)) {
+            await this.flushGroupRefreshes();
         }
         return this.queryPersisted(options);
     }
@@ -841,6 +882,7 @@ class BmpRouteAssuranceService {
             dataRevision: this.revision,
             cacheSize: this.cache.size,
             incrementalUpdateCount: this.incrementalUpdateCount,
+            refreshPending: this.groupRefreshRunning || this.pendingGroupRefreshes.size > 0,
             progress: { ...this.bootstrapProgress },
             dataMode: this.dataMode
         };

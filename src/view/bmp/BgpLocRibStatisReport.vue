@@ -168,15 +168,39 @@
 
     const clientMatchesKey = (client, clientKey) => {
         if (!client || !clientKey) return false;
-        return getClientKey(client) === clientKey;
+        if (clientKey.startsWith('source:')) {
+            const sourceId = getClientSourceId(client) || '';
+            return `source:${String(sourceId).trim().toLowerCase()}` === clientKey;
+        }
+        return clientKey.startsWith('connection:') && `connection:${getClientTransportKey(client)}` === clientKey;
     };
 
     const isSameClient = (left, right) => {
         if (!left || !right) return false;
         const leftSourceId = getClientSourceId(left);
         const rightSourceId = getClientSourceId(right);
-        if (leftSourceId && rightSourceId) return leftSourceId === rightSourceId;
+        if (leftSourceId && rightSourceId) {
+            return String(leftSourceId).trim().toLowerCase() === String(rightSourceId).trim().toLowerCase();
+        }
         return getClientTransportKey(left) === getClientTransportKey(right);
+    };
+
+    const getClientConnectionId = client => client?.persistentConnectionId || client?.connectionId || null;
+
+    const hasCompleteClientTransport = client =>
+        [client?.localIp, client?.localPort, client?.remoteIp, client?.remotePort].every(
+            value => value !== null && value !== undefined && value !== ''
+        );
+
+    const isSameClientConnection = (left, right) => {
+        if (!isSameClient(left, right)) return false;
+        const leftConnectionId = getClientConnectionId(left);
+        const rightConnectionId = getClientConnectionId(right);
+        if (leftConnectionId && rightConnectionId) return leftConnectionId === rightConnectionId;
+        if (hasCompleteClientTransport(left) && hasCompleteClientTransport(right)) {
+            return getClientTransportKey(left) === getClientTransportKey(right);
+        }
+        return true;
     };
 
     const toPlainClient = client => {
@@ -272,6 +296,7 @@
             ...(sourceId ? { persistentSourceId: sourceId, sourceId } : {})
         };
         if (!clientMatchesKey(client, lockedClientKey.value)) return;
+        if (monitoredClient.value && !isSameClientConnection(client, monitoredClient.value)) return;
 
         const clientKey = getClientKey(client);
         const key = `${clientKey}|${getInstanceKey(data.instance)}`;
@@ -291,9 +316,10 @@
     const getEventUpdates = data => (data?.batch === true && Array.isArray(data.updates) ? data.updates : [data]);
 
     const onStatisticsReport = result => {
-        if (result.status !== 'success') return;
+        if (!pageActive || result.status !== 'success') return;
         getEventUpdates(result.data).forEach(data => {
             if (!clientMatchesKey(data?.client, lockedClientKey.value)) return;
+            if (monitoredClient.value && !isSameClientConnection(data.client, monitoredClient.value)) return;
             upsertReport(data, monitoredClient.value);
         });
     };
@@ -322,7 +348,9 @@
         if (data && !clientMatchesKey(data, lockedClientKey.value) && !isSameClient(monitoredClient.value, data)) {
             return;
         }
+        if (data && monitoredClient.value && !isSameClientConnection(data, monitoredClient.value)) return;
         clientEventRevision += 1;
+        invalidateRequests();
         markMonitoredClientOffline(data);
     };
 
@@ -330,15 +358,24 @@
         if (!client || !clientMatchesKey(client, lockedClientKey.value)) return;
         const requestId = ++statisticsRequestId;
         const requestedClientKey = lockedClientKey.value;
+        const requestedClient = toPlainClient(client);
         try {
-            const result = await window.bmpApi.getBgpInstanceStatisticsReports(toPlainClient(client));
+            const result = await window.bmpApi.getBgpInstanceStatisticsReports(requestedClient);
             if (requestId !== statisticsRequestId || !pageActive) return;
             if (lockedClientKey.value !== requestedClientKey || !clientMatchesKey(client, requestedClientKey)) return;
+            if (!isSameClientConnection(requestedClient, monitoredClient.value)) return;
             if (result.status === 'success') {
                 (result.data || []).forEach(report => upsertReport(report, client));
             }
         } catch (error) {
-            if (requestId !== statisticsRequestId) return;
+            if (
+                requestId !== statisticsRequestId ||
+                !pageActive ||
+                requestedClientKey !== lockedClientKey.value ||
+                !isSameClientConnection(requestedClient, monitoredClient.value)
+            ) {
+                return;
+            }
             console.error(error);
             notify.error('加载统计数据失败');
         }

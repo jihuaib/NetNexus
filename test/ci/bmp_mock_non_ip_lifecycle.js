@@ -7,6 +7,7 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
+const { canonicalStringify } = require('../../electron/utils/bmpPersistentRouteKey');
 const { buildScenario, parseArgs, ROUTE_HISTORY_SCENARIO } = require('../../scripts/mockBmpClient');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-mock-non-ip-lifecycle-'));
@@ -55,35 +56,72 @@ try {
             identity: ROUTE_HISTORY_SCENARIO.evpnIdentity,
             afi: BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,
-            nlriKind: 'evpn'
+            nlriKind: 'evpn',
+            canonicalNlri: {
+                kind: 'evpn',
+                semantic: {
+                    routeType: 2,
+                    rd: 'raw:0000fde800000029',
+                    ethernetTagId: 141,
+                    macLength: 48,
+                    macAddress: 'aa:bb:cc:dd:ee:29',
+                    ipLength: 32,
+                    ipAddress: 'c0000233'
+                }
+            }
         },
         {
             identity: ROUTE_HISTORY_SCENARIO.bgpLsIdentity,
             afi: BgpConst.BGP_AFI_TYPE.AFI_BGP_LS,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_BGP_LS,
-            nlriKind: 'raw-nlri'
+            nlriKind: 'raw-nlri',
+            canonicalNlri: {
+                kind: 'raw-nlri',
+                routeType: 2,
+                rd: null,
+                // Protocol/identifier, both node descriptors and link addresses.
+                rawNlriHex:
+                    '0300000000000061a9' +
+                    '01000010020000040000fdf1020300040a640001' +
+                    '01010010020000040000fe55020300040ac80001' +
+                    '010300040afa0001010400040afa0002'
+            }
         },
         {
             identity: ROUTE_HISTORY_SCENARIO.flowSpecIdentity,
             afi: BgpConst.BGP_AFI_TYPE.AFI_IPV4,
             safi: BgpConst.BGP_SAFI_TYPE.SAFI_FLOW_SPEC,
-            nlriKind: 'raw-nlri'
+            nlriKind: 'raw-nlri',
+            canonicalNlri: {
+                kind: 'raw-nlri',
+                routeType: null,
+                rd: null,
+                // Destination /24, IP protocol = TCP, destination port = 443.
+                rawNlriHex: '0118c612fd038106059101bb'
+            }
         }
     ];
 
     expectedRoutes.forEach(expected => {
-        const identity = store.db
+        const identities = store.db
             .prepare(
                 `SELECT route_pk, route_id, legacy_route_key, afi, safi, prefix, nlri_kind
                    FROM bmp_route_identities
                   WHERE prefix = @prefix`
             )
-            .get({ prefix: expected.identity });
-        assert.ok(identity, `${expected.identity} must be persisted`);
+            .all({ prefix: expected.identity });
+        assert.equal(identities.length, 1, `${expected.identity} announce/replace/withdraw must share one identity`);
+        const [identity] = identities;
         assert.equal(identity.afi, expected.afi);
         assert.equal(identity.safi, expected.safi);
         assert.equal(identity.nlri_kind, expected.nlriKind);
-        assert.ok(identity.legacy_route_key.includes(`|${expected.identity}|`));
+        const rdIdentity = expected.canonicalNlri.rd || expected.canonicalNlri.semantic?.rd || '0:0';
+        const completeNlriJson = canonicalStringify(expected.canonicalNlri).replace(/\|/g, '\\u007c');
+        assert.equal(
+            identity.legacy_route_key,
+            `0|${rdIdentity}|${expected.afi}:${expected.safi}:${expected.nlriKind}:${completeNlriJson}`,
+            'the public route key must carry the entire canonical NLRI rather than its display prefix'
+        );
         assert.equal(
             store.db
                 .prepare('SELECT COUNT(*) AS count FROM bmp_current_route_refs WHERE route_pk = @routePk')

@@ -80,7 +80,12 @@ function handleMessage(message) {
                 if (typeof store.setLogLevel === 'function') {
                     store.setLogLevel(logger.logLevel);
                 }
-                success(messageId, { ...store.getStatus(), ...getLogStatus(store) });
+                // Other writer lanes may still be upgrading their own databases.
+                // The facade requests global status only after every OPEN settles.
+                success(messageId, {
+                    ...store.getStatus({ ownedOnly: data.partitionByClient === true && data.readOnly !== true }),
+                    ...getLogStatus(store)
+                });
                 break;
             case BMP_PERSISTENCE_OP.SET_LOG_LEVEL:
                 {

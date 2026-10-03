@@ -167,6 +167,47 @@ function getRouteNlriValue(route, field) {
     return route?.[field] ?? route?.nlriDetail?.[field];
 }
 
+function getQpRouteIdentity(route) {
+    const nlri = route?.nlriDetail || {};
+    const rawPrefix = nlri.prefix ?? route?.ip ?? route?.prefix ?? '';
+    const rawLength = nlri.prefixLength ?? nlri.length ?? route?.mask ?? route?.prefixLength;
+    const length = rawLength === null || rawLength === undefined ? null : Number(rawLength);
+    let prefix = String(rawPrefix);
+    if (ipaddr.isValid(prefix) && Number.isInteger(length)) {
+        const address = ipaddr.parse(prefix);
+        const maxLength = address.kind() === 'ipv4' ? 32 : 128;
+        if (length >= 0 && length <= maxLength) prefix = normalizeNetworkAddress(address, length);
+    }
+    const dqpn = nlri.dqpn ?? route?.dqpn;
+    const bits = nlri.dqpnBits ?? route?.dqpnBits;
+    const hasDqpn = dqpn !== null && dqpn !== undefined && dqpn !== '';
+    const hasBits = bits !== null && bits !== undefined && bits !== '';
+    // A missing DQPN is not an explicitly encoded 0/0. Incomplete thin DTOs
+    // remain distinguishable as unknown; never silently supply zero bits.
+    const value = hasDqpn ? `${dqpn}/${hasBits ? bits : 'unknown'}` : 'absent';
+    return `qp:${route?.afi ?? ''}:${prefix}/${length ?? 'unknown'};dqpn=${value}`;
+}
+
+function getComplexRouteIdentity(route) {
+    const afi = Number(route?.afi);
+    const safi = Number(route?.safi);
+    // IP and QP use their existing dedicated analysis paths.
+    if ((afi === 1 || afi === 2) && [1, 2, 4, 128, 241].includes(safi)) return null;
+    const key = route?.routeKey || route?.getRouteKey?.();
+    if (typeof key !== 'string') return null;
+    const pathEnd = key.indexOf('|');
+    const rdEnd = key.indexOf('|', pathEnd + 1);
+    if (pathEnd < 0 || rdEnd < 0) return null;
+    const nlri = key.slice(rdEnd + 1);
+    const header = `${afi}:${safi}:`;
+    if (!nlri.startsWith(header)) return null;
+    const kindEnd = nlri.indexOf(':', header.length);
+    const kind = nlri.slice(header.length, kindEnd);
+    if (!['evpn', 'raw-nlri', 'structured-nlri'].includes(kind) || nlri[kindEnd + 1] !== '{') return null;
+    // Remove ADD-PATH only. RD, AF and the complete stable NLRI are retained.
+    return key.slice(pathEnd + 1);
+}
+
 function getMvpnRouteTypeName(routeType) {
     return Object.entries(BgpConst.BGP_MVPN_ROUTE_TYPE || {}).find(
         ([, value]) => Number(value) === Number(routeType)
@@ -187,6 +228,11 @@ function getBaseRouteIdentity(route) {
 }
 
 function getRouteIdentity(route) {
+    if (Number(route?.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+        return getQpRouteIdentity(route);
+    }
+    const completeIdentity = getComplexRouteIdentity(route);
+    if (completeIdentity) return completeIdentity;
     const baseIdentity = getBaseRouteIdentity(route);
     const rd = getRouteNlriValue(route, 'rd');
     const includeRd = rd && rd !== '0:0' && !normalizeText(baseIdentity).includes(normalizeText(rd));
@@ -421,6 +467,17 @@ function getIndexedCandidates(routeMap, query, getRouteKeys, prefixIndex) {
 }
 
 function routeCoreKey(routeInfo) {
+    if (Number(routeInfo?.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+        return [
+            routeInfo.afi ?? '',
+            routeInfo.safi,
+            routeInfo.rd ?? '0:0',
+            getQpRouteIdentity(routeInfo),
+            routeInfo.pathId ?? 0
+        ].join('|');
+    }
+    const completeIdentity = getComplexRouteIdentity(routeInfo);
+    if (completeIdentity) return `${completeIdentity}|pathId=${routeInfo.pathId ?? 0}`;
     const routeNetwork = getRouteNetwork(routeInfo);
     const hasIpIdentity = routeInfo?.ip !== null && routeInfo?.ip !== undefined && ipaddr.isValid(String(routeInfo.ip));
     const prefix =
@@ -1107,5 +1164,7 @@ module.exports = {
     buildBmpRouteLens,
     buildBmpRouteLensFromPersistedRoutes,
     createEmptyRouteLensResult,
+    getComplexRouteIdentity,
+    getQpRouteIdentity,
     parseRouteLensQuery
 };

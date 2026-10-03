@@ -3,9 +3,11 @@ const fs = require('fs');
 const net = require('net');
 const os = require('os');
 const path = require('path');
+const Database = require('better-sqlite3');
 
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
+const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessHost');
 const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
 const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
@@ -139,7 +141,15 @@ async function main(testOptions = {}) {
             persistenceHighWatermarkBytes: 4 * 1024 * 1024,
             persistenceLowWatermarkBytes: 2 * 1024 * 1024
         };
+        const oldSharedDatabase = new Database(dbPath);
+        oldSharedDatabase.exec(
+            `CREATE TABLE old_data(value); PRAGMA user_version = ${BmpPersistenceStore.SCHEMA_VERSION - 1}`
+        );
+        oldSharedDatabase.close();
+        fs.writeFileSync(`${dbPath}-journal`, '');
         await request(BmpConst.BMP_REQ_TYPES.START_BMP, startConfiguration);
+        assert.equal(fs.existsSync(dbPath), false, 'real BMP startup must discard the old shared database');
+        assert.equal(fs.existsSync(`${dbPath}-journal`), false, 'real BMP startup must discard old sidecars');
 
         const options = parseArgs([
             '--host',

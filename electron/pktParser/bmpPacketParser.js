@@ -407,8 +407,8 @@ function addPeerUpNodes(buffer, parent, offset, endOffset) {
     addLeafNode(parent, 'Remote Port', position, 2, buffer.readUInt16BE(position));
     position += 2;
 
-    position = addBgpPacketNode(buffer, parent, position, endOffset, 'Received BGP OPEN');
     position = addBgpPacketNode(buffer, parent, position, endOffset, 'Sent BGP OPEN');
+    position = addBgpPacketNode(buffer, parent, position, endOffset, 'Received BGP OPEN');
     return addTlvNodes(buffer, parent, position, endOffset, 'peer-up');
 }
 

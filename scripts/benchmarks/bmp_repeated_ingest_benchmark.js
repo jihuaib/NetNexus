@@ -17,7 +17,7 @@ if (!process.versions.electron) {
 
 const BmpConst = require('../../electron/const/bmpConst');
 const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessHost');
-const { builders } = require('../mockBmpClient');
+const { builders } = require(process.env.NETNEXUS_BMP_BENCH_FIXTURE_MODULE || '../mockBmpClient');
 const project = path.resolve(__dirname, '../..');
 const sleep = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 const argument = (name, fallback) =>

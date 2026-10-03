@@ -147,20 +147,32 @@ addSessionRoute(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, makeRoute(bgpSession, 
 addSessionRoute(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, makeRoute(bgpSession, '2001:db8:1::', 48, 5, {}, { afi: 2 }));
 
 const evpnIdentity = 'evpn:mac-ip:65000:1:tag=100:mac=aa:bb:cc:dd:ee:ff:ip=192.0.2.10';
-const evpnRoute = makeRoute(bgpSession, evpnIdentity, 216, 20, {}, { afi: 25, safi: 70 });
+const evpnRoute = makeRoute(bgpSession, evpnIdentity, 216, 20, {}, { afi: 25, safi: 70, rd: '65000:1' });
 evpnRoute.routeType = 2;
 evpnRoute.nlriDetail = {
     prefix: evpnIdentity,
+    rd: '65000:1',
+    ethernetTagId: 100,
+    macLength: 48,
+    macAddress: 'aa:bb:cc:dd:ee:ff',
+    ipLength: 32,
+    ipAddress: '192.0.2.10',
     routeType: 2,
     routeTypeName: 'MAC/IP Advertisement'
 };
 addSessionRoute(BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN, evpnRoute);
 
 const secondEvpnIdentity = 'evpn:mac-ip:65000:1:tag=101:mac=aa:bb:cc:dd:ee:01:ip=192.0.2.11';
-const secondEvpnRoute = makeRoute(bgpSession, secondEvpnIdentity, 216, 21, {}, { afi: 25, safi: 70 });
+const secondEvpnRoute = makeRoute(bgpSession, secondEvpnIdentity, 216, 21, {}, { afi: 25, safi: 70, rd: '65000:1' });
 secondEvpnRoute.routeType = 2;
 secondEvpnRoute.nlriDetail = {
     prefix: secondEvpnIdentity,
+    rd: '65000:1',
+    ethernetTagId: 101,
+    macLength: 48,
+    macAddress: 'aa:bb:cc:dd:ee:01',
+    ipLength: 32,
+    ipAddress: '192.0.2.11',
     routeType: 2,
     routeTypeName: 'Extended MAC/IP Advertisement Route'
 };
@@ -304,7 +316,10 @@ assert.equal(evpnExact.query.mode, 'text');
 assert.equal(evpnExact.query.normalized, evpnIdentity);
 assert.equal(evpnExact.summary.total, 1);
 assert.equal(evpnExact.stages.preIn[0].match.matchType, 'text-exact');
-assert.equal(evpnExact.stages.preIn[0].match.routeIdentity, evpnIdentity);
+assert.equal(
+    evpnExact.stages.preIn[0].match.routeIdentity,
+    evpnRoute.getRouteKey().slice(evpnRoute.getRouteKey().indexOf('|') + 1)
+);
 assert.equal(evpnExact.stages.preIn[0].match.displayPrefix, evpnIdentity);
 assert.ok(!evpnExact.stages.preIn[0].match.displayPrefix.endsWith('/216'));
 assert.equal(evpnExact.policyDiffs.inbound[0].context.prefix, evpnIdentity);
@@ -324,14 +339,17 @@ assert.ok(!bgpLsExact.stages.preIn[0].match.displayPrefix.endsWith('/88'));
 
 const bgpLsContains = buildBmpRouteLens(sessionMap, { query: 'IPv4 Prefix:203.0.113.0' });
 assert.equal(bgpLsContains.stages.preIn[0].match.matchType, 'text-contains');
-assert.equal(bgpLsContains.stages.preIn[0].match.routeIdentity, bgpLsIdentity);
+assert.equal(
+    bgpLsContains.stages.preIn[0].match.routeIdentity,
+    bgpLsRoute.getRouteKey().slice(bgpLsRoute.getRouteKey().indexOf('|') + 1)
+);
 
 const qpByDqpn = buildBmpRouteLens(sessionMap, { query: 'DQPN=4660' });
 assert.equal(qpByDqpn.query.mode, 'text');
 assert.equal(qpByDqpn.summary.total, 1);
 assert.equal(qpByDqpn.stages.preIn[0].match.matchType, 'text-exact');
 assert.equal(qpByDqpn.stages.preIn[0].match.matchedField, 'nlriDetail.dqpnLabel');
-assert.equal(qpByDqpn.stages.preIn[0].match.routeIdentity, '192.0.2.0|dqpn=4660');
+assert.equal(qpByDqpn.stages.preIn[0].match.routeIdentity, 'qp:1:192.0.2.0/24;dqpn=4660/16');
 assert.equal(qpByDqpn.stages.preIn[0].match.displayPrefix, '192.0.2.0/24 · DQPN 4660/16');
 
 const qpByBareDqpn = buildBmpRouteLens(sessionMap, { query: '4660' });
@@ -348,7 +366,10 @@ assert.equal(mvpnByType.query.mode, 'text');
 assert.equal(mvpnByType.summary.total, 1);
 assert.equal(mvpnByType.stages.preIn[0].match.matchType, 'text-exact');
 assert.equal(mvpnByType.stages.preIn[0].match.matchedField, 'mvpnRouteType');
-assert.equal(mvpnByType.stages.preIn[0].match.routeIdentity, `mvpn:type=1:intra_as_i_pmsi_ad:0x${mvpnRawIdentity}`);
+assert.equal(
+    mvpnByType.stages.preIn[0].match.routeIdentity,
+    mvpnRoute.getRouteKey().slice(mvpnRoute.getRouteKey().indexOf('|') + 1)
+);
 assert.equal(mvpnByType.stages.preIn[0].match.displayPrefix, `MVPN INTRA_AS_I_PMSI_AD · 0x${mvpnRawIdentity}`);
 
 const mvpnByRawIdentity = buildBmpRouteLens(sessionMap, { query: mvpnRawIdentity.toUpperCase() });

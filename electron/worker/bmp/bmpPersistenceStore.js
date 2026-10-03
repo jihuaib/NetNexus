@@ -5,9 +5,10 @@ const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const { getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
-const logger = require('../../log/logger');
 const { installBmpSqlTrace } = require('./bmpSqlTrace');
+const { resetDatabaseIfVersionChanged } = require('./bmpDatabaseVersionCheck');
 const { rebuildCompactNlri } = require('./bmpPersistenceMutation');
+const { normalizeRouteDistinguisher } = require('../../utils/bmpPersistentRouteKey');
 const {
     BMP_ROUTE_FAMILIES,
     BMP_ROUTE_PARTITIONS,
@@ -17,7 +18,7 @@ const {
     assertBmpRouteMatchesScope
 } = require('./bmpRoutePartitionManifest');
 
-const SCHEMA_VERSION = 13;
+const SCHEMA_VERSION = 14;
 const ROUTE_KEY_ALGORITHM = 'sha256';
 const DEFAULT_PAGE_SIZE = 100;
 const GC_KIND = Object.freeze({ IDENTITY: 1, PAYLOAD: 2, ATTRIBUTE: 3 });
@@ -45,10 +46,8 @@ function parseJson(value, fallback = null) {
     }
 }
 
-function storedNlriDetail(row) {
-    if (row.nlri_json) {
-        return parseJson(row.nlri_json, {});
-    }
+function storedNlriDetail(row, payload = null) {
+    if (payload?.nlriDetail && typeof payload.nlriDetail === 'object') return payload.nlriDetail;
     if (row.prefix === null || row.prefix === undefined) {
         return {};
     }
@@ -61,18 +60,47 @@ function storedNlriDetail(row) {
     });
 }
 
+function routeDisplaySql(partitions) {
+    const hasEvpn = partitions.some(partition => partition.familyKey === 'l2vpn-evpn');
+    if (!hasEvpn) {
+        return { hasEvpn, prefix: 'r.prefix', length: 'r.prefix_length', legacyKey: 'r.legacy_route_key' };
+    }
+    const evpnOnly = partitions.every(partition => partition.familyKey === 'l2vpn-evpn');
+    const evpn = '(r.afi = 25 AND r.safi = 70)';
+    const evpnPrefix = `COALESCE(NULLIF(json_extract(r.route_json, '$.nlriDetail.displayPrefix'), ''),
+        NULLIF(json_extract(r.route_json, '$.nlriDetail.prefix'), ''), r.prefix)`;
+    const evpnLength = `COALESCE(json_extract(r.route_json, '$.nlriDetail.length'), r.prefix_length)`;
+    const prefix = evpnOnly ? evpnPrefix : `CASE WHEN ${evpn} THEN ${evpnPrefix} ELSE r.prefix END`;
+    const length = evpnOnly ? evpnLength : `CASE WHEN ${evpn} THEN ${evpnLength} ELSE r.prefix_length END`;
+    return {
+        hasEvpn,
+        evpnOnly,
+        evpn,
+        prefix,
+        length,
+        legacyKey: 'r.legacy_route_key'
+    };
+}
+
+function routeDisplayPrefixPredicate(display, identityPredicate, pathPredicate) {
+    if (!display.hasEvpn) return identityPredicate;
+    if (display.evpnOnly) return pathPredicate;
+    return `((NOT ${display.evpn} AND (${identityPredicate})) OR (${display.evpn} AND (${pathPredicate})))`;
+}
+
 function buildStoredRouteProjection(row, options = {}) {
-    const nlriDetail = storedNlriDetail(row);
     const payload = parseJson(options.routeJson ?? row.route_json, {});
+    const nlriDetail = storedNlriDetail(row, payload);
     const attributes = parseJson(options.attrJson ?? row.attr_json, {});
     const routeTlvs = Array.isArray(payload.routeTlvs) ? payload.routeTlvs : [];
+    const evpn = Number(row.afi) === 25 && Number(row.safi) === 70;
     return {
         routeKey: row.legacy_route_key || null,
         addrFamilyType: getAddrFamilyType(Number(row.afi), Number(row.safi)),
         afi: Number(row.afi),
         safi: Number(row.safi),
-        ip: row.prefix || null,
-        mask: finiteNumber(row.prefix_length),
+        ip: (evpn && (nlriDetail?.displayPrefix || nlriDetail?.prefix)) || row.prefix || null,
+        mask: finiteNumber(evpn ? (nlriDetail?.length ?? row.prefix_length) : row.prefix_length),
         rd: row.rd || null,
         rdRaw: payload.rdRaw ?? nlriDetail?.rdRaw ?? null,
         pathId: finiteNumber(row.path_id, 0),
@@ -460,6 +488,7 @@ class BmpPersistenceStore {
         }
 
         if (!this.readOnly) {
+            resetDatabaseIfVersionChanged(this.dbPath, SCHEMA_VERSION);
             fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
         }
 
@@ -483,25 +512,27 @@ class BmpPersistenceStore {
 
             if (!this.readOnly) {
                 this.db.pragma('journal_mode = WAL');
-                // BMP data is a projection that peers re-send on reconnect, and a
-                // damaged database is rebuilt on open, so commits do not wait for
-                // the disk. A process crash loses nothing; an OS crash or power
-                // loss may lose the last seconds of writes.
-                this.db.pragma('synchronous = OFF');
+                // WAL NORMAL keeps database integrity across OS/power failures;
+                // the newest transactions may still require peer refresh.
+                this.db.pragma('synchronous = NORMAL');
                 this.db.pragma('temp_store = MEMORY');
                 // Route ingest touches ~20 B-tree indexes per mutation; keep the
                 // hot index pages resident instead of re-reading them from the
                 // OS cache on every batch.
                 this.db.pragma('cache_size = -65536');
-                this.db.pragma('wal_autocheckpoint = 2000');
+                // NORMAL synchronizes on checkpoint, not on every commit. A
+                // tiny WAL makes sustained bulk ingest repeatedly block on
+                // fsync; budget 256 MiB per client before an automatic passive
+                // checkpoint. Readers can pin older frames, as with any WAL.
+                const walCheckpointPages = Math.max(
+                    1,
+                    Math.floor((256 * 1024 * 1024) / this.db.pragma('page_size', { simple: true }))
+                );
+                this.db.pragma(`wal_autocheckpoint = ${walCheckpointPages}`);
                 this.migrate();
                 this.validateReadableSchema();
                 this.db.exec(`
-                    CREATE TEMP TABLE IF NOT EXISTS bmp_gc_candidates (
-                        kind INTEGER NOT NULL,
-                        pk INTEGER NOT NULL,
-                        PRIMARY KEY (kind, pk)
-                    ) WITHOUT ROWID
+                    CREATE TEMP TABLE bmp_gc_work (kind INTEGER, pk INTEGER, PRIMARY KEY(kind, pk)) WITHOUT ROWID;
                 `);
                 this.recoverInterruptedConnections();
                 this.prepareStatements();
@@ -511,6 +542,7 @@ class BmpPersistenceStore {
                 this.db.pragma('mmap_size = 268435456');
                 this.validateReadableSchema();
             }
+            this.db.function('bmp_normalize_rd', { deterministic: true }, value => normalizeRouteDistinguisher(value));
         } catch (error) {
             this.db.close();
             this.db = null;
@@ -569,6 +601,7 @@ class BmpPersistenceStore {
             bmp_route_identities: ['route_pk', 'route_id', 'route_key_version', 'afi', 'safi', 'nlri_flags'],
             bmp_route_payloads: ['payload_id', 'payload_hash', 'route_json'],
             bmp_route_attributes: ['attr_pk', 'attr_id', 'attr_json'],
+            bmp_gc_candidates: ['kind', 'pk'],
             bmp_ingest_batches: ['batch_id', 'created_at_ms'],
             bmp_statistics_samples: ['sample_id', 'source_id', 'report_kind', 'report_key', 'statistics_json'],
             bmp_statistics_latest: ['source_id', 'report_kind', 'report_key', 'sample_id', 'observed_at_ms']
@@ -611,12 +644,8 @@ class BmpPersistenceStore {
         }
     }
 
-    // The persisted schema is an implementation detail of this build. Whenever
-    // the stored user_version differs from SCHEMA_VERSION (older, newer, or a
-    // non-empty file without a version) the writer drops every object and
-    // recreates the schema instead of attempting a migration. BMP data is a
-    // projection of what peers re-send on reconnect, so starting empty is the
-    // supported upgrade path.
+    // Version resets happen before opening a writer. Initialize only a genuinely
+    // empty new file; a same-version but damaged schema must fail without drops.
     migrate() {
         const currentVersion = this.db.pragma('user_version', { simple: true });
         const existingObjects = this.db
@@ -628,20 +657,11 @@ class BmpPersistenceStore {
             )
             .all();
         if (currentVersion === SCHEMA_VERSION) {
-            try {
-                this.validateReadableSchema();
-                return { reset: false, previousVersion: currentVersion };
-            } catch (error) {
-                logger.warn(`BMP persistence schema ${currentVersion} is damaged (${error.message}); rebuilding`);
-            }
+            this.validateReadableSchema();
+            return { reset: false, previousVersion: currentVersion };
         }
-        const needsReset = currentVersion !== SCHEMA_VERSION || existingObjects.length > 0;
-        if (needsReset && existingObjects.length > 0) {
-            logger.warn(
-                `BMP persistence schema ${currentVersion} does not match schema ${SCHEMA_VERSION}; ` +
-                    `dropping ${existingObjects.length} existing objects and rebuilding the database`
-            );
-            this.dropAllObjects(existingObjects);
+        if (currentVersion !== 0 || existingObjects.length > 0) {
+            throw new Error('BMP database changed after version check; refusing to initialize a non-empty schema');
         }
 
         const initialize = this.db.transaction(() => {
@@ -760,6 +780,12 @@ class BmpPersistenceStore {
                     last_seen_ms INTEGER NOT NULL
                 );
 
+                CREATE TABLE bmp_gc_candidates (
+                    kind INTEGER NOT NULL,
+                    pk INTEGER NOT NULL,
+                    PRIMARY KEY (kind, pk)
+                ) WITHOUT ROWID;
+
                 CREATE TABLE bmp_route_identities (
                     route_pk INTEGER PRIMARY KEY,
                     route_id TEXT NOT NULL UNIQUE,
@@ -852,33 +878,7 @@ class BmpPersistenceStore {
             this.validateReadableSchema();
         });
         initialize.immediate();
-        if (existingObjects.length > 0) {
-            // Reclaim the space held by the dropped tables of the previous schema.
-            this.db.exec('VACUUM');
-        }
-        return { reset: existingObjects.length > 0, previousVersion: currentVersion };
-    }
-
-    dropAllObjects(existingObjects) {
-        // Foreign keys are already off for the writer; make it explicit here
-        // because SQLite would otherwise run an implicit DELETE on DROP TABLE
-        // that trips the constraints of the schema being removed.
-        this.db.pragma('foreign_keys = OFF');
-        {
-            const drop = this.db.transaction(() => {
-                const order = { trigger: 0, view: 1, index: 2, table: 3 };
-                [...existingObjects]
-                    .sort((left, right) => order[left.type] - order[right.type])
-                    .forEach(object => {
-                        if (object.type === 'index' && object.name.startsWith('sqlite_')) {
-                            return;
-                        }
-                        this.db.exec(`DROP ${object.type.toUpperCase()} IF EXISTS "${object.name}"`);
-                    });
-                this.db.pragma('user_version = 0');
-            });
-            drop.immediate();
-        }
+        return { reset: false, previousVersion: currentVersion };
     }
 
     recoverInterruptedConnections(recoveredAtMs = Date.now()) {
@@ -974,6 +974,7 @@ class BmpPersistenceStore {
                  LIMIT 1
             `),
             findSourcePk: this.db.prepare('SELECT source_pk FROM bmp_sources WHERE source_id = @sourceId LIMIT 1'),
+            findRouteIdentity: this.db.prepare('SELECT route_pk FROM bmp_route_identities WHERE route_id = @routeId'),
             findConnectionPk: this.db.prepare(
                 'SELECT connection_pk FROM bmp_connections WHERE connection_id = @connectionId LIMIT 1'
             ),
@@ -1213,26 +1214,27 @@ class BmpPersistenceStore {
             // deleted or re-pointed, the old keys are recorded here and the
             // anti-join deletes below remove the rows nothing references any more.
             addGcCandidate: this.db.prepare(
-                'INSERT OR IGNORE INTO temp.bmp_gc_candidates(kind, pk) VALUES (@kind, @pk)'
+                'INSERT OR IGNORE INTO main.bmp_gc_candidates(kind, pk) VALUES (@kind, @pk)'
             ),
-            clearGcCandidates: this.db.prepare('DELETE FROM temp.bmp_gc_candidates'),
+            clearGcCandidates: this.db.prepare(`DELETE FROM main.bmp_gc_candidates
+                WHERE (kind, pk) IN (SELECT kind, pk FROM temp.bmp_gc_work)`),
             gcAttributes: this.db.prepare(`
                 DELETE FROM bmp_route_attributes
-                 WHERE attr_pk IN (SELECT pk FROM temp.bmp_gc_candidates WHERE kind = ${GC_KIND.ATTRIBUTE})
+                 WHERE attr_pk IN (SELECT pk FROM temp.bmp_gc_work WHERE kind = ${GC_KIND.ATTRIBUTE})
                    AND NOT EXISTS (
                        SELECT 1 FROM bmp_current_route_refs c WHERE c.attr_pk = bmp_route_attributes.attr_pk
                    )
             `),
             gcPayloads: this.db.prepare(`
                 DELETE FROM bmp_route_payloads
-                 WHERE payload_id IN (SELECT pk FROM temp.bmp_gc_candidates WHERE kind = ${GC_KIND.PAYLOAD})
+                 WHERE payload_id IN (SELECT pk FROM temp.bmp_gc_work WHERE kind = ${GC_KIND.PAYLOAD})
                    AND NOT EXISTS (
                        SELECT 1 FROM bmp_current_route_refs c WHERE c.payload_id = bmp_route_payloads.payload_id
                    )
             `),
             gcIdentities: this.db.prepare(`
                 DELETE FROM bmp_route_identities
-                 WHERE route_pk IN (SELECT pk FROM temp.bmp_gc_candidates WHERE kind = ${GC_KIND.IDENTITY})
+                 WHERE route_pk IN (SELECT pk FROM temp.bmp_gc_work WHERE kind = ${GC_KIND.IDENTITY})
                    AND NOT EXISTS (
                        SELECT 1 FROM bmp_current_route_refs c WHERE c.route_pk = bmp_route_identities.route_pk
                    )
@@ -1485,12 +1487,24 @@ class BmpPersistenceStore {
     // Deletes every candidate row that is no longer referenced by any event or
     // current route, then clears the candidate set. Must run inside the same
     // transaction as the deletions that produced the candidates.
-    collectGarbage() {
+    collectGarbage(limit = Number.MAX_SAFE_INTEGER) {
+        this.db.prepare('DELETE FROM temp.bmp_gc_work').run();
+        this.db
+            .prepare(
+                `INSERT INTO temp.bmp_gc_work(kind, pk)
+            SELECT kind, pk FROM main.bmp_gc_candidates ORDER BY kind, pk LIMIT ?`
+            )
+            .run(limit);
         const attributes = this.statements.gcAttributes.run().changes;
         const payloads = this.statements.gcPayloads.run().changes;
         const identities = this.statements.gcIdentities.run().changes;
         this.statements.clearGcCandidates.run();
-        return { attributes, payloads, identities };
+        this.db.prepare('DELETE FROM temp.bmp_gc_work').run();
+        const result = { attributes, payloads, identities };
+        Object.defineProperty(result, 'hasMore', {
+            value: Boolean(this.db.prepare('SELECT 1 FROM main.bmp_gc_candidates LIMIT 1').get())
+        });
+        return result;
     }
 
     getSourceSignature(source, batchCache) {
@@ -1657,6 +1671,31 @@ class BmpPersistenceStore {
         const sequence = finiteNumber(mutation.sequence);
         if (sequence !== null) {
             if (sequence <= connectionState.lastSequence) {
+                // Bulk object prefill precedes replay detection. Persist candidates
+                // for objects that this rejected mutation never made live.
+                if (mutation.route && batchCache) {
+                    const payloadKey = batchCache.routePayloadHashes.get(mutation.route.routeJson);
+                    const rejectedRoutePk = batchCache.routeIdentities.get(mutation.route.id);
+                    const rejectedPayloadId = batchCache.routePayloads.get(payloadKey);
+                    const rejectedAttrPk = batchCache.attributes.get(mutation.route.attrId);
+                    const existingScopePk = scope
+                        ? this.statements.findScopePartition.get({ scopeId: scope.id })?.scope_pk
+                        : null;
+                    const existing =
+                        existingScopePk && rejectedRoutePk
+                            ? this.getPartitionStatements(partition).findCurrentRouteRefs.get({
+                                  scopePk: existingScopePk,
+                                  routePk: rejectedRoutePk
+                              })
+                            : null;
+                    this.addGcCandidates([
+                        {
+                            route_pk: existing ? null : rejectedRoutePk,
+                            payload_id: existing?.payload_id === rejectedPayloadId ? null : rejectedPayloadId,
+                            attr_pk: existing?.attr_pk === rejectedAttrPk ? null : rejectedAttrPk
+                        }
+                    ]);
+                }
                 const result = { applied: false, delta: null };
                 if (contextChanges?.changed) result.requiresProjectionRebuild = true;
                 return result;
@@ -1778,56 +1817,60 @@ class BmpPersistenceStore {
             }
         }
 
-        const attrPk = this.resolveAttrPk(route, eventAtMs, batchCache);
+        const isRouteUpsert = ROUTE_UPSERT_EVENTS.has(mutation.eventType);
+        const isRouteDelete = ['delete', 'withdraw', 'purge'].includes(mutation.eventType);
+        const attrPk = isRouteUpsert ? this.resolveAttrPk(route, eventAtMs, batchCache) : null;
 
         let routePk = null;
         let payloadId = null;
-        if (route) {
+        if (route && (isRouteUpsert || isRouteDelete)) {
             routePk = batchCache?.routeIdentities.get(route.id) ?? null;
             if (routePk === null) {
-                const identity = this.statements.upsertRouteIdentity.get({
-                    routeId: route.id,
-                    keyVersion: Number(route.keyVersion),
-                    legacyRouteKey: route.legacyRouteKey || null,
-                    afi: Number(route.afi),
-                    safi: Number(route.safi),
-                    pathId: Number(route.pathId || 0),
-                    rd: route.rd || null,
-                    prefix: route.prefix || null,
-                    prefixLength: finiteNumber(route.prefixLength),
-                    nlriKind: route.nlriKind || null,
-                    nlriJson: route.nlriJson ?? null,
-                    nlriFlags: Number(route.nlriFlags) || 0,
-                    eventAtMs
-                });
-                routePk = Number(identity.route_pk);
-                batchCache?.routeIdentities.set(route.id, routePk);
+                const identity = isRouteDelete
+                    ? this.statements.findRouteIdentity.get({ routeId: route.id })
+                    : this.statements.upsertRouteIdentity.get({
+                          routeId: route.id,
+                          keyVersion: Number(route.keyVersion),
+                          legacyRouteKey: route.legacyRouteKey || null,
+                          afi: Number(route.afi),
+                          safi: Number(route.safi),
+                          pathId: Number(route.pathId || 0),
+                          rd: route.rd || null,
+                          prefix: route.prefix || null,
+                          prefixLength: finiteNumber(route.prefixLength),
+                          nlriKind: route.nlriKind || null,
+                          nlriJson: route.nlriJson ?? null,
+                          nlriFlags: Number(route.nlriFlags) || 0,
+                          eventAtMs
+                      });
+                routePk = identity ? Number(identity.route_pk) : null;
+                if (routePk !== null) batchCache?.routeIdentities.set(route.id, routePk);
             }
 
-            let payloadHash = null;
-            let payloadCacheKey = batchCache?.routePayloadHashes.get(route.routeJson);
-            if (payloadCacheKey === undefined) {
-                payloadHash = sha256Buffer(route.routeJson);
-                payloadCacheKey = payloadHash.toString('hex');
-            }
-            payloadId = batchCache?.routePayloads.get(payloadCacheKey) ?? null;
-            if (payloadId === null) {
-                payloadHash = payloadHash || Buffer.from(payloadCacheKey, 'hex');
-                const payload = this.statements.upsertRoutePayload.get({
-                    payloadHash,
-                    routeJson: route.routeJson,
-                    eventAtMs
-                });
-                if (!payload) {
-                    throw new Error(`BMP route payload hash collision for route ${route.id}`);
+            if (isRouteUpsert) {
+                let payloadHash = null;
+                let payloadCacheKey = batchCache?.routePayloadHashes.get(route.routeJson);
+                if (payloadCacheKey === undefined) {
+                    payloadHash = sha256Buffer(route.routeJson);
+                    payloadCacheKey = payloadHash.toString('hex');
                 }
-                payloadId = Number(payload.payload_id);
-                batchCache?.routePayloads.set(payloadCacheKey, payloadId);
+                payloadId = batchCache?.routePayloads.get(payloadCacheKey) ?? null;
+                if (payloadId === null) {
+                    payloadHash = payloadHash || Buffer.from(payloadCacheKey, 'hex');
+                    const payload = this.statements.upsertRoutePayload.get({
+                        payloadHash,
+                        routeJson: route.routeJson,
+                        eventAtMs
+                    });
+                    if (!payload) {
+                        throw new Error(`BMP route payload hash collision for route ${route.id}`);
+                    }
+                    payloadId = Number(payload.payload_id);
+                    batchCache?.routePayloads.set(payloadCacheKey, payloadId);
+                }
             }
         }
 
-        const isRouteUpsert = ['upsert', 'announce', 'replace', 'refresh'].includes(mutation.eventType);
-        const isRouteDelete = ['delete', 'withdraw', 'purge'].includes(mutation.eventType);
         const routeStatements = partition ? this.getPartitionStatements(partition) : null;
         const cachedRefs = isRouteUpsert
             ? batchCache?.currentRouteRefs?.get(partition.partitionId)?.get(scope.id)
@@ -1900,6 +1943,15 @@ class BmpPersistenceStore {
                     }
                 }
                 const projectionChanged = routeResult.changes > 0 && !metadataOnly;
+                if (!metadataOnly && routeResult.changes === 0) {
+                    this.addGcCandidates([
+                        {
+                            route_pk: previousRow ? null : routePk,
+                            payload_id: previousRow?.payload_id === payloadId ? null : payloadId,
+                            attr_pk: previousRow?.attr_pk === attrPk ? null : attrPk
+                        }
+                    ]);
+                }
                 const classification = projectionChanged
                     ? previousRow
                         ? previousRow.attr_pk === attrPk
@@ -2094,7 +2146,7 @@ class BmpPersistenceStore {
         const attributes = new Map();
         mutations.forEach(mutation => {
             const route = mutation?.route;
-            if (!route) {
+            if (!route || !ROUTE_UPSERT_EVENTS.has(mutation.eventType)) {
                 return;
             }
             const eventAtMs = finiteNumber(mutation.eventAtMs, Date.now());
@@ -2514,6 +2566,7 @@ class BmpPersistenceStore {
         const hasValue = value => value !== undefined && value !== null && value !== '';
         if (
             hasValue(query.routeId) ||
+            hasValue(query.rd) ||
             hasValue(query.legacyRouteKey || query.routeKey) ||
             hasValue(query.prefixLength) ||
             hasValue(query.prefixExact) ||
@@ -2600,6 +2653,7 @@ class BmpPersistenceStore {
         const identityPrefixOnly =
             partitions.length > 0 &&
             partitions.every(partition => ['ipv4-unicast', 'ipv6-unicast'].includes(partition.familyKey));
+        const display = routeDisplaySql(partitions);
         const where = [];
         const params = {};
         const stateSql = this.buildRouteStateSql();
@@ -2610,12 +2664,12 @@ class BmpPersistenceStore {
             }
         };
         const routePrefixValuesSql = `(
-            lower(COALESCE(r.prefix, '')),
+            lower(COALESCE(${display.prefix}, '')),
             lower(COALESCE(json_extract(r.route_json, '$.ip'), '')),
             lower(COALESCE(json_extract(r.route_json, '$.prefix'), '')),
-            lower(COALESCE(json_extract(r.nlri_json, '$.prefix'), '')),
-            lower(COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '')),
-            lower(COALESCE(json_extract(r.nlri_json, '$.ipAddress'), ''))
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')),
+            lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), ''))
         )`;
         const exactCidrPredicate = (prefixParam, lengthParam) =>
             identityPrefixOnly
@@ -2626,7 +2680,7 @@ class BmpPersistenceStore {
                        AND candidate.prefix_length = @${lengthParam}
                 )`
                 : `(
-            (lower(COALESCE(r.prefix, '')) = @${prefixParam} AND r.prefix_length = @${lengthParam})
+            (lower(COALESCE(${display.prefix}, '')) = @${prefixParam} AND ${display.length} = @${lengthParam})
             OR (
                 lower(COALESCE(json_extract(r.route_json, '$.ip'), '')) = @${prefixParam}
                 AND COALESCE(
@@ -2636,16 +2690,16 @@ class BmpPersistenceStore {
             )
             OR (
                 (
-                    lower(COALESCE(json_extract(r.nlri_json, '$.prefix'), '')) = @${prefixParam}
-                    OR lower(COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '')) = @${prefixParam}
+                    lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '')) = @${prefixParam}
+                    OR lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '')) = @${prefixParam}
                 )
                 AND COALESCE(
-                    json_extract(r.nlri_json, '$.prefixLength'),
-                    json_extract(r.nlri_json, '$.length')
+                    json_extract(r.route_json, '$.nlriDetail.prefixLength'),
+                    json_extract(r.route_json, '$.nlriDetail.length')
                 ) = @${lengthParam}
             )
             OR (
-                lower(COALESCE(json_extract(r.nlri_json, '$.ipAddress'), '')) = @${prefixParam}
+                lower(COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '')) = @${prefixParam}
                 AND @${lengthParam} IN (32, 128)
             )
         )`;
@@ -2673,24 +2727,33 @@ class BmpPersistenceStore {
         addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
         addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
         addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
-        addFilter('r.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
+        addFilter(`${display.length} = @prefixLength`, 'prefixLength', finiteNumber(query.prefixLength));
+        this.appendRouteDistinguisherFilter(query, where, params);
         addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
         addFilter('s.scope_state = @scopeState', 'scopeState', query.scopeState);
         if (query.prefixExact !== undefined && query.prefixExact !== null && query.prefixExact !== '') {
             params.prefixExact = String(query.prefixExact);
-            where.push(`r.route_pk IN (
+            const identityPredicate = `r.route_pk IN (
                 SELECT candidate.route_pk
                   FROM bmp_route_identities candidate
                  WHERE candidate.prefix = @prefixExact
-            )`);
+            )`;
+            where.push(routeDisplayPrefixPredicate(display, identityPredicate, `${display.prefix} = @prefixExact`));
         } else if (query.prefix) {
             params.prefixStart = String(query.prefix);
             params.prefixEnd = `${params.prefixStart}\uffff`;
-            where.push(`r.route_pk IN (
+            const identityPredicate = `r.route_pk IN (
                 SELECT candidate.route_pk
                   FROM bmp_route_identities candidate
                  WHERE candidate.prefix >= @prefixStart AND candidate.prefix < @prefixEnd
-            )`);
+            )`;
+            where.push(
+                routeDisplayPrefixPredicate(
+                    display,
+                    identityPredicate,
+                    `${display.prefix} >= @prefixStart AND ${display.prefix} < @prefixEnd`
+                )
+            );
         }
         const prefixCidrs = normalizePrefixCidrs(query.prefixCidrs);
         if (prefixCidrs.length > 400) {
@@ -2710,11 +2773,10 @@ class BmpPersistenceStore {
         if (searchText) {
             params.searchText = searchText;
             where.push(`instr(lower(
-                COALESCE(r.prefix, '') || char(31) ||
-                COALESCE(r.legacy_route_key, '') || char(31) ||
+                COALESCE(${display.prefix}, '') || char(31) ||
+                COALESCE(${display.legacyKey}, '') || char(31) ||
                 COALESCE(r.route_id, '') || char(31) ||
                 COALESCE(r.route_json, '') || char(31) ||
-                COALESCE(r.nlri_json, '') || char(31) ||
                 COALESCE(route_attr.attr_json, '') || char(31) ||
                 COALESCE(s.owner_key, '') || char(31) ||
                 COALESCE(s.peer_ip, '') || char(31) ||
@@ -2730,10 +2792,9 @@ class BmpPersistenceStore {
         if (routeIdentityText) {
             params.routeIdentityText = routeIdentityText;
             where.push(`instr(lower(
-                COALESCE(r.prefix, '') || char(31) ||
-                COALESCE(r.legacy_route_key, '') || char(31) ||
+                COALESCE(${display.prefix}, '') || char(31) ||
+                COALESCE(${display.legacyKey}, '') || char(31) ||
                 COALESCE(r.route_json, '') || char(31) ||
-                COALESCE(r.nlri_json, '') || char(31) ||
                 CASE r.afi
                     WHEN 1 THEN 'ipv4'
                     WHEN 2 THEN 'ipv6'
@@ -2791,13 +2852,13 @@ class BmpPersistenceStore {
                     identityPrefixOnly
                         ? `instr(lower(COALESCE(r.prefix, '')), @prefixFilterText) > 0`
                         : `instr(lower(
-                    COALESCE(r.prefix, '') || char(31) ||
+                    COALESCE(${display.prefix}, '') || char(31) ||
                     COALESCE(json_extract(r.route_json, '$.ip'), '') || char(31) ||
                     COALESCE(json_extract(r.route_json, '$.prefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.nlri_json, '$.prefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.nlri_json, '$.ipPrefix'), '') || char(31) ||
-                    COALESCE(json_extract(r.nlri_json, '$.ipAddress'), '') || char(31) ||
-                    COALESCE(json_extract(r.nlri_json, '$.formatted'), '')
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.prefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipPrefix'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.ipAddress'), '') || char(31) ||
+                    COALESCE(json_extract(r.route_json, '$.nlriDetail.formatted'), '')
                 ), @prefixFilterText) > 0`
                 );
             }
@@ -2906,6 +2967,18 @@ class BmpPersistenceStore {
             `;
     }
 
+    appendRouteDistinguisherFilter(query, where, params) {
+        if (query.rd === undefined || query.rd === null || query.rd === '') {
+            return;
+        }
+        params.rd = normalizeRouteDistinguisher(query.rd);
+        where.push(
+            params.rd.startsWith('raw:')
+                ? `bmp_normalize_rd(COALESCE(json_extract(r.route_json, '$.rdRaw'), json_extract(r.route_json, '$.nlriDetail.rdRaw'), r.rd)) = @rd`
+                : 'bmp_normalize_rd(r.rd) = @rd'
+        );
+    }
+
     // Ordered scan for the Route Assurance matrix. Rows are emitted in chunks
     // sorted so that every path of one NLRI within one source is contiguous:
     // (source, afi, safi, rd, prefix, prefix_length, route_pk, scope_pk).
@@ -2928,6 +3001,7 @@ class BmpPersistenceStore {
             partitionQuery.safi = Number(query.safi);
         }
         const partitions = this.resolveQueryPartitions({ ...partitionQuery, sourceId: query.sourceId });
+        const display = routeDisplaySql(partitions);
         const where = [];
         const params = {};
         if (query.sourceId !== undefined && query.sourceId !== null && query.sourceId !== '') {
@@ -2942,11 +3016,49 @@ class BmpPersistenceStore {
             where.push('r.safi = @safi');
             params.safi = Number(query.safi);
         }
+        if (
+            query.routeLookupIdentity !== undefined &&
+            query.routeLookupIdentity !== null &&
+            query.routeLookupIdentity !== ''
+        ) {
+            where.push("substr(r.legacy_route_key, instr(r.legacy_route_key, '|') + 1) = @routeLookupIdentity");
+            params.routeLookupIdentity = String(query.routeLookupIdentity);
+        }
+        if (query.prefixExact !== undefined && query.prefixExact !== null && query.prefixExact !== '') {
+            params.prefixExact = String(query.prefixExact);
+            const identityPredicate = `r.route_pk IN (
+                SELECT candidate.route_pk
+                  FROM bmp_route_identities candidate
+                 WHERE candidate.prefix = @prefixExact
+            )`;
+            where.push(routeDisplayPrefixPredicate(display, identityPredicate, `${display.prefix} = @prefixExact`));
+        }
+        if (finiteNumber(query.prefixLength) !== null) {
+            where.push(`${display.length} = @prefixLength`);
+            params.prefixLength = Number(query.prefixLength);
+        }
+        this.appendRouteDistinguisherFilter(query, where, params);
         if (query.routeState && query.routeState !== 'all') {
             where.push(`${this.buildRouteStateSql()} = @routeState`);
             params.routeState = query.routeState;
         }
-        const orderSql = 'src.source_pk, r.afi, r.safi, r.rd, r.prefix, r.prefix_length, r.route_pk, r.scope_pk';
+        const complexPartitions = partitions.filter(partition =>
+            [
+                'l2vpn-evpn',
+                'ipv4-mvpn',
+                'ipv6-mvpn',
+                'ipv4-flowspec',
+                'ipv6-flowspec',
+                'bgp-ls',
+                'bgp-ls-vpn',
+                'other'
+            ].includes(partition.familyKey)
+        );
+        const prefixOrder = complexPartitions.length
+            ? `CASE WHEN r.partition_id IN (${complexPartitions.map(partition => partition.partitionId).join(',')})
+                THEN substr(r.legacy_route_key, instr(r.legacy_route_key, '|') + 1) ELSE r.prefix END`
+            : 'r.prefix';
+        const orderSql = `src.source_pk, r.afi, r.safi, r.rd, ${prefixOrder}, r.prefix_length, r.route_pk, r.scope_pk`;
         const whereSql = where.length > 0 ? `WHERE ${where.join(' AND ')}` : '';
         const currentRoutesSql = `(${buildExpandedCurrentRoutesSql(partitions)})`;
         const lean = query.lean !== false;
@@ -2985,7 +3097,7 @@ class BmpPersistenceStore {
     // Lean projection for the Route Assurance scan. Scope/source/connection
     // details are resolved once per scope, parsed attribute JSON is cached per
     // attr_pk (thousands of paths share one attribute set), empty payloads are
-    // not parsed and plain IP prefixes skip nlri_json entirely. The resulting
+    // not parsed and plain IP prefixes need no per-path NLRI JSON. The resulting
     // envelope carries exactly the fields makePersistedRouteContext() and the
     // issue rules read, so it evaluates identically to a mapRouteRow() row.
     createRouteAssuranceRowMapper() {
@@ -3068,16 +3180,17 @@ class BmpPersistenceStore {
             const scope = resolveScope(row.scope_pk);
             const afi = Number(row.afi);
             const safi = Number(row.safi);
-            const nlriDetail = storedNlriDetail(row);
             const payload = resolvePayload(row.payload_id, row.route_json);
+            const nlriDetail = storedNlriDetail(row, payload);
             const attributes = resolveAttributes(row.attr_pk, row.attr_json);
+            const evpn = afi === 25 && safi === 70;
             const route = {
                 routeKey: row.legacy_route_key || null,
                 addrFamilyType: getAddrFamilyType(afi, safi),
                 afi,
                 safi,
-                ip: row.prefix || null,
-                mask: finiteNumber(row.prefix_length),
+                ip: (evpn && (nlriDetail?.displayPrefix || nlriDetail?.prefix)) || row.prefix || null,
+                mask: finiteNumber(evpn ? (nlriDetail?.length ?? row.prefix_length) : row.prefix_length),
                 rd: row.rd || null,
                 pathId: finiteNumber(row.path_id, 0),
                 routeType: nlriDetail?.routeType ?? null,
@@ -3842,7 +3955,7 @@ class BmpPersistenceStore {
             ]) {
                 this.db
                     .prepare(
-                        `INSERT OR IGNORE INTO temp.bmp_gc_candidates(kind, pk)
+                        `INSERT OR IGNORE INTO main.bmp_gc_candidates(kind, pk)
                               SELECT ${kind}, ${column} FROM temp.bmp_stale_purge_candidates
                                WHERE ${column} IS NOT NULL`
                     )
@@ -4366,7 +4479,9 @@ class BmpPersistenceStore {
                           )
                           .run({ eventsBeforeMs, auxiliaryLimit }).changes;
             const garbage =
-                mode === 'lifecycle' ? { attributes: 0, payloads: 0, identities: 0 } : this.collectGarbage();
+                mode === 'lifecycle'
+                    ? { attributes: 0, payloads: 0, identities: 0 }
+                    : this.collectGarbage(auxiliaryLimit);
             if (mode !== 'lifecycle') {
                 // Cheap incremental statistics refresh so the planner sees the
                 // real table shapes after large ingests; no-op when nothing changed.
@@ -4391,6 +4506,7 @@ class BmpPersistenceStore {
                 nextRefreshSourceId: nextRefresh?.source_id || null,
                 effectiveLimits: { routeLimit, eventLimit, auxiliaryLimit },
                 hasMore:
+                    garbage.hasMore === true ||
                     routes >= routeLimit ||
                     statistics >= auxiliaryLimit ||
                     batches >= auxiliaryLimit ||

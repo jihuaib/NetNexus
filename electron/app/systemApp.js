@@ -85,6 +85,7 @@ class SystemApp {
             primaryWebContents,
             credentialStore: this.credentialStore,
             tcpAoSettingsLifecycleGate: this.tcpAoSettingsLifecycleGate,
+            resolveBmpMonitorContext: event => this.monitorWindowManager?.getBmpMonitorContext(event),
             closeMonitorWindows: () => this.monitorWindowManager?.closeByProtocol('bmp')
         });
         this.rpkiApp = new RpkiApp(ipc, this.programStore, {

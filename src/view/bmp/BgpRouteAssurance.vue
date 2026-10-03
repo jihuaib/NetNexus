@@ -420,6 +420,7 @@
             assuranceResult.value = normalizeResult(unwrapResponse(response));
             hasLoaded.value = true;
             lastAutoError = '';
+            if (assuranceResult.value.summary.refreshPending) scheduleRefresh(1000);
         } catch (error) {
             if (currentRequestId !== requestId) return;
             if (analysisEnabled.value && isTransientAnalysisState(error?.message)) {

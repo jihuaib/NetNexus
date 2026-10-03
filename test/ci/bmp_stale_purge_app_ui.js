@@ -7,6 +7,7 @@ const { parse: parseJavaScript } = require('@babel/parser');
 const { ref, computed } = require('vue');
 const BmpApp = require('../../electron/app/bmpApp');
 const BmpConst = require('../../electron/const/bmpConst');
+const { createTrustedBmpEvent } = require('./fixtures/bmp_trusted_renderer');
 
 function deferred() {
     let resolve;
@@ -173,9 +174,10 @@ async function verifyPage(instancePage) {
 
 async function verifyApp() {
     const app = Object.create(BmpApp.prototype);
+    const event = createTrustedBmpEvent(app);
     app.worker = null;
-    const stoppedPeer = await app.handlePurgeStaleBgpRoutes(null, {}, {}, 1, '1');
-    const stoppedInstance = await app.handlePurgeStaleBgpInstanceRoutes(null, {}, {});
+    const stoppedPeer = await app.handlePurgeStaleBgpRoutes(event, {}, {}, 1, '1');
+    const stoppedInstance = await app.handlePurgeStaleBgpInstanceRoutes(event, {}, {});
     for (const result of [stoppedPeer, stoppedInstance]) {
         assert.equal(result.status, 'error');
         assert.match(result.msg, /BMP未启动/);
@@ -193,7 +195,8 @@ async function verifyApp() {
     };
     const client = { persistentSourceId: 'a'.repeat(64) };
     const session = { persistentScopeId: 'scope-peer' };
-    const peerRequest = app.handlePurgeStaleBgpRoutes(null, client, session, 1, '2');
+    const peerRequest = app.handlePurgeStaleBgpRoutes(event, client, session, 1, '2');
+    await Promise.resolve();
     assert.deepEqual(calls[0], {
         operation: BmpConst.BMP_REQ_TYPES.PURGE_STALE_BGP_ROUTES,
         payload: { client, session, af: 1, ribType: '2' }
@@ -208,7 +211,7 @@ async function verifyApp() {
             throw new Error('SQLite故障：需要保留到前端的原因');
         }
     };
-    const failure = await app.handlePurgeStaleBgpInstanceRoutes(null, client, { persistentScopeId: 'scope-instance' });
+    const failure = await app.handlePurgeStaleBgpInstanceRoutes(event, client, { persistentScopeId: 'scope-instance' });
     assert.equal(failure.status, 'error');
     assert.equal(failure.msg, 'SQLite故障：需要保留到前端的原因');
 }

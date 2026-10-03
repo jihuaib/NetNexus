@@ -4,6 +4,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const { once } = require('node:events');
+const Database = require('better-sqlite3');
 
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpApp = require('../../electron/app/bmpApp');
@@ -16,6 +17,7 @@ const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessH
 const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
 const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
 const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
+const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 
 const workerPath = path.join(__dirname, '..', '..', 'electron', 'worker', 'bmp', 'bmpWorker.js');
 const defaultLocRibPrefix = '10.30.0.0';
@@ -226,11 +228,14 @@ async function main() {
         offlinePersistenceClosePromises: new Set(),
         logLevel: 'off'
     });
-    const legacyContents = 'legacy shared database must remain unread and unchanged';
-
     try {
-        fs.writeFileSync(dbPath, legacyContents);
+        const oldSharedDatabase = new Database(dbPath);
+        oldSharedDatabase.exec(
+            `CREATE TABLE old_data(value); PRAGMA user_version = ${BmpPersistenceStore.SCHEMA_VERSION - 1}`
+        );
+        oldSharedDatabase.close();
         firstHarness = await startWorker(dbPath, port, 'bmp-restart-seed');
+        assert.equal(fs.existsSync(dbPath), false, 'writable startup must discard a different-schema shared database');
         firstSocket = await sendScenario(port, scenario);
 
         const seededRoutes = (await getCompleteScenario(firstHarness.request)).data;
@@ -264,7 +269,7 @@ async function main() {
         firstSocket = null;
         await stopWorker(firstHarness);
 
-        assert.equal(fs.readFileSync(dbPath, 'utf8'), legacyContents);
+        assert.equal(fs.existsSync(dbPath), false);
         assert.equal(fs.existsSync(getClientDatabasePath(dbPath, sourceId)), true);
         assert.deepEqual(
             listClientDatabases(dbPath).map(database => database.sourceId),
@@ -275,7 +280,7 @@ async function main() {
         assert.equal(offlineStatus.data.storageMode, 'client-databases');
         assert.equal(offlineStatus.data.storageDirectory, getClientDatabaseDirectory(dbPath));
         assert.equal(offlineStatus.data.clientDatabaseCount, 1);
-        assert.equal(offlineStatus.data.legacyDatabaseExists, true);
+        assert.equal(Object.hasOwn(offlineStatus.data, 'legacyDatabaseExists'), false);
         const standaloneOfflineRoutes = await offlineApp.queryPersistedRoutes({
             sourceId,
             scopeId: locRibScopeId,
@@ -446,11 +451,7 @@ async function main() {
         });
         assert.equal(crashRestoredRoutes.data.total, 1);
         assert.equal(crashRestoredRoutes.data.list[0].routeState, 'stale');
-        assert.equal(
-            fs.readFileSync(dbPath, 'utf8'),
-            legacyContents,
-            'restart must never read or modify legacy storage'
-        );
+        assert.equal(fs.existsSync(dbPath), false, 'restart must not recreate the different-schema shared database');
 
         console.log(
             `BMP restart page restore regression passed: source=${sourceId.slice(0, 12)}, ` +

@@ -3,7 +3,7 @@ const ipaddr = require('ipaddr.js');
 const BmpConst = require('../const/bmpConst');
 const BgpConst = require('../const/bgpConst');
 const { getAddrFamilyType, getBgpAfiName, getBgpSafiName } = require('./bgpUtils');
-const { parseRouteLensQuery } = require('./bmpRouteLens');
+const { parseRouteLensQuery, getQpRouteIdentity, getComplexRouteIdentity } = require('./bmpRouteLens');
 
 const DEFAULT_PAGE_SIZE = 20;
 const MAX_PAGE_SIZE = 200;
@@ -57,7 +57,17 @@ const RETAINED_ROUTE_FIELDS = [
     'dqpnBits',
     ...EGRESS_COMPARE_FIELDS
 ];
-const RETAINED_NLRI_DETAIL_FIELDS = ['prefix', 'rd', 'routeType', 'routeTypeName', 'nlriTypeName', 'dqpn', 'dqpnBits'];
+const RETAINED_NLRI_DETAIL_FIELDS = [
+    'prefix',
+    'prefixLength',
+    'length',
+    'rd',
+    'routeType',
+    'routeTypeName',
+    'nlriTypeName',
+    'dqpn',
+    'dqpnBits'
+];
 
 function stableId(parts) {
     return crypto
@@ -135,6 +145,11 @@ function getMvpnRouteTypeName(routeType) {
 }
 
 function getRouteIdentity(route) {
+    if (Number(route?.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {
+        return getQpRouteIdentity(route);
+    }
+    const completeIdentity = getComplexRouteIdentity(route);
+    if (completeIdentity) return completeIdentity;
     const baseIdentity = getRouteBaseIdentity(route);
     const routeType = route?.nlriDetail?.routeType ?? route?.routeType;
     if (Number(route?.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN && routeType !== null && routeType !== undefined) {
@@ -1969,6 +1984,10 @@ function makeStreamRunKey(row, sourceIndex = null) {
     const prefixLength = route?.mask ?? route?.prefixLength ?? '';
     const rd = route?.rd ?? route?.nlriDetail?.rd ?? '';
     const sourcePart = sourceIndex ? internValue(sourceIndex, sourceId) : sourceId;
+    const completeIdentity = row?.routeLookupIdentity || route?.routeLookupIdentity || getComplexRouteIdentity(route);
+    if (completeIdentity) {
+        return `${sourcePart}\u001f${route?.afi ?? ''}\u001f${route?.safi ?? ''}\u001f${completeIdentity}`;
+    }
     return `${sourcePart}\u001f${route?.afi ?? ''}\u001f${route?.safi ?? ''}\u001f${rd}\u001f${prefix}\u001f${prefixLength}`;
 }
 
@@ -2158,6 +2177,7 @@ function classifyStreamRunFast(state, rows, resolveContext) {
         const routeType = nlriDetail?.routeType ?? route.routeType;
         const dqpn = nlriDetail?.dqpn ?? route.dqpn;
         if (
+            Number(route.safi) === BgpConst.BGP_SAFI_TYPE.SAFI_QP ||
             (routeType !== null && routeType !== undefined && routeType !== '') ||
             (dqpn !== null && dqpn !== undefined && dqpn !== '')
         ) {

@@ -427,10 +427,10 @@ function parsePeerUp(buffer, position) {
     const remotePort = buffer.readUInt16BE(position + 2);
     position += 4;
 
-    const receivedOpen = parseEmbeddedBgpPacket(buffer, position, 'Received BGP OPEN');
-    position += receivedOpen.length;
     const sentOpen = parseEmbeddedBgpPacket(buffer, position, 'Sent BGP OPEN');
     position += sentOpen.length;
+    const receivedOpen = parseEmbeddedBgpPacket(buffer, position, 'Received BGP OPEN');
+    position += receivedOpen.length;
 
     const tlvResult = parseTlvs(buffer, position, 'peer-up');
     return {

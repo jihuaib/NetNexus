@@ -199,23 +199,86 @@ async function main() {
         );
         await assert.rejects(failing, /consumer boom/);
 
+        // Exact group predicates agree with the full route query, including RD.
+        const groupQuery = {
+            sourceId: bmpSession.persistenceSourceKey.keyHex,
+            afi: 1,
+            safi: 1,
+            prefixExact: prefixes[0],
+            prefixLength: 24,
+            rd: '0:0',
+            routeState: 'all',
+            chunkSize: 1
+        };
+        const collectGroup = async query => {
+            const rows = [];
+            const summary = await reader.streamRouteAssuranceRows(query, { onChunk: chunk => rows.push(...chunk) });
+            assert.equal(summary.cancelled, false);
+            assert.equal(summary.rows, rows.length);
+            return rows;
+        };
+        const groupRows = await collectGroup(groupQuery);
+        assert.equal(groupRows.length, 4);
+        assert.deepEqual(
+            groupRows.map(row => row.persistentRouteId).sort(),
+            store
+                .queryRoutes({ ...groupQuery, pageSize: 5000 })
+                .list.map(row => row.persistentRouteId)
+                .sort()
+        );
+        assert.equal((await collectGroup({ ...groupQuery, prefixLength: 25 })).length, 0);
+        assert.equal((await collectGroup({ ...groupQuery, rd: '65000:9' })).length, 0);
+        assert.equal((await collectGroup({ ...groupQuery, sourceId: 'not-this-source' })).length, 0);
+
+        // A concurrent writer may append an Add-Path during chunk delivery, but
+        // the current stream is finite and must retain its original snapshot.
+        const appendedRoute = makeRoute(peerA, prefixes[0], PRE);
+        appendedRoute.pathId = 99;
+        appendedRoute.nlriDetail.pathId = 99;
+        let appended = false;
+        const snapshotRows = [];
+        const snapshot = await reader.streamRouteAssuranceRows(groupQuery, {
+            window: 1,
+            onChunk: chunk => {
+                snapshotRows.push(...chunk);
+                if (!appended) {
+                    appended = true;
+                    apply([
+                        buildRouteUpsertMutation(bmpSession, peerA, appendedRoute, 1, 1, PRE, {
+                            kind: 'peer',
+                            scopeState: 'ready',
+                            isNewRoute: true
+                        })
+                    ]);
+                }
+            }
+        });
+        assert.equal(snapshot.rows, 4);
+        assert.equal(
+            snapshotRows.some(row => row.pathId === 99),
+            false
+        );
+        assert.equal((await collectGroup(groupQuery)).length, 5);
+        apply([
+            buildRouteWithdrawMutation(bmpSession, peerA, appendedRoute, appendedRoute, 1, 1, PRE, { kind: 'peer' })
+        ]);
+        assert.equal((await collectGroup(groupQuery)).length, 4);
+
         // 3. Stream bootstrap must match the paged reference exactly.
         const expected = await referenceSummary();
         assert.equal(expected.categoryCounts['inbound-gap'], 1, 'peer A pre-in only prefix');
         assert.equal(expected.categoryCounts['not-selected'], 2, 'post-in prefixes with no Loc-RIB');
 
         const loadGroupRows = async locator => {
-            const result = await reader.queryRoutes({
+            return collectGroup({
                 sourceId: locator.sourceId,
                 afi: locator.afi,
                 safi: locator.safi,
                 prefixExact: locator.prefix,
                 prefixLength: locator.prefixLength,
-                routeState: 'all',
-                pageSize: 5000,
-                includeTotal: false
+                rd: locator.rd,
+                routeState: 'all'
             });
-            return result.list;
         };
         const service = new BmpRouteAssuranceService({ enabled: false, groupRefreshDelayMs: 0 });
         const progress = [];

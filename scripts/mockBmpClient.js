@@ -149,7 +149,8 @@ function asPathAttr(asns = [65000, 65100]) {
         BgpConst.BGP_PATH_ATTR.AS_PATH,
         Buffer.concat([
             Buffer.from([BgpConst.BGP_AS_PATH_TYPE.AS_SEQUENCE, asns.length]),
-            Buffer.concat(asns.map(asn => u16(asn)))
+            // BMP's A=0 describes the four-octet form of AS_PATH.
+            Buffer.concat(asns.map(asn => u32(asn)))
         ])
     );
 }
@@ -518,12 +519,12 @@ function peerUpPayload({
         ip(localAddress),
         u16(localPort),
         u16(remotePort),
-        Array.isArray(recvAddressFamilies)
-            ? bgpOpenForAddressFamilies({ routerId: peerAddress, addressFamilies: recvAddressFamilies })
-            : bgpOpenForAf({ routerId: peerAddress, afi, safi, addPathMode: recvAddPathMode }),
         Array.isArray(sendAddressFamilies)
             ? bgpOpenForAddressFamilies({ routerId, addressFamilies: sendAddressFamilies })
             : bgpOpenForAf({ routerId, afi, safi, addPathMode: sendAddPathMode }),
+        Array.isArray(recvAddressFamilies)
+            ? bgpOpenForAddressFamilies({ routerId: peerAddress, addressFamilies: recvAddressFamilies })
+            : bgpOpenForAf({ routerId: peerAddress, afi, safi, addPathMode: recvAddPathMode }),
         ...tlvs
     ]);
 }
@@ -542,12 +543,12 @@ function locRibPeerUpPayload({
         Buffer.alloc(16),
         u16(0),
         u16(0),
-        Array.isArray(recvAddressFamilies)
-            ? bgpOpenForAddressFamilies({ addressFamilies: recvAddressFamilies })
-            : bgpOpenForAf({ addPathMode: recvAddPathMode }),
         Array.isArray(sendAddressFamilies)
             ? bgpOpenForAddressFamilies({ addressFamilies: sendAddressFamilies })
             : bgpOpenForAf({ addPathMode: sendAddPathMode }),
+        Array.isArray(recvAddressFamilies)
+            ? bgpOpenForAddressFamilies({ addressFamilies: recvAddressFamilies })
+            : bgpOpenForAf({ addPathMode: recvAddPathMode }),
         tlv(BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME, Buffer.from(vrfName))
     ]);
 }

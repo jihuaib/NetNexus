@@ -1162,8 +1162,8 @@ try {
     epochCutoffStore.close();
 
     // Schema changes are not migrated. A writable open of a database whose
-    // user_version differs from SCHEMA_VERSION drops every existing object and
-    // rebuilds the schema; read-only openers keep rejecting such databases.
+    // user_version differs from SCHEMA_VERSION removes the exact database file
+    // and initializes a fresh one; read-only openers keep rejecting them.
     const legacyDbPath = path.join(tempDir, 'legacy-v8.sqlite3');
     const legacyDb = new Database(legacyDbPath);
     legacyDb.exec(`
@@ -1191,7 +1191,7 @@ try {
             .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'bmp_current_routes'")
             .get().count,
         0,
-        'a writable open must drop the objects of an older schema'
+        'a writable open must replace a different-version database with a fresh file'
     );
     assert.equal(rebuiltLegacyStore.queryRoutes({ routeState: 'all' }).total, 0);
     const rebuiltContext = makeContext();
@@ -1231,7 +1231,7 @@ try {
     assert.equal(
         rebuiltV0Store.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'sentinel'").get().count,
         0,
-        'foreign objects in an unversioned database are dropped by the rebuild'
+        'a readable unversioned database is replaced by a fresh file'
     );
     rebuiltV0Store.close();
 
@@ -1264,15 +1264,13 @@ try {
         () => new BmpPersistenceStore({ dbPath: invalidSchemaDbPath, readOnly: true }).open(),
         /missing required table bmp_statistics_latest/
     );
-    const repairedStore = new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open();
-    assert.equal(
-        repairedStore.db
-            .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'bmp_statistics_latest'")
-            .get().count,
-        1,
-        'a damaged schema is rebuilt by the writer'
+    const invalidSchemaContents = fs.readFileSync(invalidSchemaDbPath);
+    assert.throws(
+        () => new BmpPersistenceStore({ dbPath: invalidSchemaDbPath }).open(),
+        /missing required table bmp_statistics_latest/,
+        'a same-version damaged schema must fail instead of silently being rebuilt'
     );
-    repairedStore.close();
+    assert.deepEqual(fs.readFileSync(invalidSchemaDbPath), invalidSchemaContents);
 
     // Deleting a source must remove every dependent row itself: the writer
     // runs with foreign_keys = OFF, so nothing cascades from the scope rows.

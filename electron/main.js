@@ -358,10 +358,19 @@ function finishStartup() {
     }
 }
 
+function checkBmpDatabaseVersionsAtStartup() {
+    const { prepareBmpDatabaseVersions } = require('./worker/bmp/bmpDatabaseVersionCheck');
+    const BmpPersistenceStore = require('./worker/bmp/bmpPersistenceStore');
+    return prepareBmpDatabaseVersions(path.join(app.getPath('userData'), 'bmp', 'bmp.sqlite3'), {
+        expectedVersion: BmpPersistenceStore.SCHEMA_VERSION
+    });
+}
+
 async function startApplication() {
     initializeMonitorWindowManager();
 
     if (isPackagedE2e) {
+        checkBmpDatabaseVersionsAtStartup();
         createWindow();
         await mainWindow.startupLoadPromise;
         return;
@@ -375,6 +384,11 @@ async function startApplication() {
     updateSplashProgress(10, '正在加载核心组件...');
     const SystemApp = require('./app/systemApp');
     updateSplashProgress(18, '核心组件加载完成');
+
+    // Check every BMP database before registering IPC or loading a renderer.
+    // This reads schema metadata only; route ingest never runs this scan.
+    updateSplashProgress(19, '正在检查 BMP 数据库版本...');
+    checkBmpDatabaseVersionsAtStartup();
 
     updateSplashProgress(20, '正在初始化系统托盘...');
     createTray();

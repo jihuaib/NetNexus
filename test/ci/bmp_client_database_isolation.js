@@ -280,6 +280,12 @@ async function main() {
     let offline;
     try {
         testInvalidBatchIsolation(path.join(tempDir, 'invalid-batches.sqlite3'), fixtures);
+        const oldSharedDatabase = new Database(dbPath);
+        oldSharedDatabase.exec(
+            `CREATE TABLE old_data(value); PRAGMA user_version = ${BmpPersistenceStore.SCHEMA_VERSION - 1}`
+        );
+        oldSharedDatabase.close();
+        fs.writeFileSync(`${dbPath}-wal`, '');
         client = new BmpPersistenceClient({
             dbPath,
             partitionByClient: true,
@@ -288,6 +294,8 @@ async function main() {
             flushMs: 1
         });
         await client.open();
+        assert.equal(fs.existsSync(dbPath), false, 'the writer pool must discard a different-schema shared database');
+        assert.equal(fs.existsSync(`${dbPath}-wal`), false, 'the writer pool must discard old shared sidecars');
         const clientA = makeContext('database-client-a', 100, 50001);
         const clientB = makeContext('database-client-b-2', 200, 50002);
         const seedA = seed(clientA, fixtures);

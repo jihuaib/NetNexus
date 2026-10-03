@@ -412,6 +412,14 @@ class MonitorWindowManager {
         return event.sender;
     }
 
+    getBmpMonitorContext(event) {
+        const sender = this.resolveSender(event);
+        if (!sender || !event?.senderFrame || event.senderFrame !== sender.mainFrame) return null;
+        const entry = [...this.monitorWindows.values()].find(item => item.webContents === sender);
+        if (!entry || entry.context?.monitorId !== 'bmp-client' || entry.window.isDestroyed()) return null;
+        return entry.context;
+    }
+
     handleOpenMonitor(event, monitorId, options) {
         if (!this.resolveSender(event)) {
             return errorResponse('无法识别窗口来源');

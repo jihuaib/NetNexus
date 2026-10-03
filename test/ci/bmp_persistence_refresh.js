@@ -87,7 +87,7 @@ function rawRoute(store, current) {
 }
 
 function candidates(store) {
-    return store.db.prepare('SELECT kind, pk FROM temp.bmp_gc_candidates ORDER BY kind, pk').all();
+    return store.db.prepare('SELECT kind, pk FROM main.bmp_gc_candidates ORDER BY kind, pk').all();
 }
 
 function monitor(statement, name, calls) {
@@ -260,7 +260,7 @@ function semanticChanges(kind) {
             [{ kind: 3, pk: previous.attr_pk }],
             'attrs-only replacement must not GC the still-shared payload'
         );
-        store.db.exec('DELETE FROM temp.bmp_gc_candidates');
+        store.db.exec('DELETE FROM main.bmp_gc_candidates');
         previous = rawRoute(store, current);
         value.labels = '100';
         const payloadChange = apply(store, [announce(current, value)]);
@@ -270,7 +270,7 @@ function semanticChanges(kind) {
             [{ kind: 2, pk: previous.payload_id }],
             'payload-only replacement must not GC unchanged attrs'
         );
-        store.db.exec('DELETE FROM temp.bmp_gc_candidates');
+        store.db.exec('DELETE FROM main.bmp_gc_candidates');
 
         if (kind === 'peer') current.owner.advanceRibEpoch(1, 1, current.ribType);
         else current.owner.advanceRibEpoch();

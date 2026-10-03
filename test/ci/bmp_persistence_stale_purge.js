@@ -119,7 +119,7 @@ function snapshot(store) {
     ])
         result[table] = store.db.prepare(`SELECT * FROM ${table} ORDER BY 1, 2`).all();
     result.routes = store.db.prepare('SELECT * FROM bmp_current_route_refs ORDER BY scope_pk, route_pk').all();
-    result.gc = store.db.prepare('SELECT * FROM temp.bmp_gc_candidates ORDER BY kind, pk').all();
+    result.gc = store.db.prepare('SELECT * FROM main.bmp_gc_candidates ORDER BY kind, pk').all();
     return result;
 }
 

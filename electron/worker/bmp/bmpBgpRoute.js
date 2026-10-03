@@ -1,6 +1,12 @@
 const { getAddrFamilyType } = require('../../utils/bgpUtils');
 const BmpConst = require('../../const/bmpConst');
 const { DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
+const {
+    canonicalizeRouteIdentity,
+    formatRouteLookupKey,
+    normalizeIpPrefix,
+    normalizeRouteDistinguisher
+} = require('../../utils/bmpPersistentRouteKey');
 
 const DEFAULT_PATH_ID = 0;
 const DEFAULT_RD = '0:0';
@@ -394,7 +400,22 @@ class BmpBgpRoute {
     }
 
     getRouteKey() {
-        return BmpBgpRoute.makeKey(this.pathId, this.rd, this.ip, this.mask, this.rdRaw);
+        // Some in-memory callers construct a route before assigning its AF.
+        if (this.afi === null || this.safi === null) {
+            return BmpBgpRoute.makeKey(this.pathId, this.rd, this.ip, this.mask, this.rdRaw);
+        }
+        if (
+            (this.afi === 1 || this.afi === 2) &&
+            (this.safi === 1 || this.safi === 2 || this.safi === 4 || this.safi === 128)
+        ) {
+            // This API/in-memory path uses the prefix cache, never a hash or
+            // JSON. Persistence formats its already canonical identity instead.
+            const prefix = normalizeIpPrefix(this.ip, this.mask, this.afi);
+            const rdIdentity =
+                this.safi === 128 ? normalizeRouteDistinguisher(this.rdRaw || this.rd) : this.rdRaw || this.rd;
+            return BmpBgpRoute.makeKey(this.pathId, rdIdentity, prefix.networkText, prefix.prefixLength);
+        }
+        return formatRouteLookupKey(canonicalizeRouteIdentity(this), { rd: this.rd, rdRaw: this.rdRaw });
     }
 
     getAddrFamilyType() {

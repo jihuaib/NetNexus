@@ -155,12 +155,15 @@ class BmpApp {
         this.offlinePersistenceClosePromises = new Set();
         this.closeMonitorWindowsHandler =
             typeof options.closeMonitorWindows === 'function' ? options.closeMonitorWindows : null;
+        this.resolveBmpMonitorContext =
+            typeof options.resolveBmpMonitorContext === 'function' ? options.resolveBmpMonitorContext : null;
 
         this.bmpInitiationHandler = null;
         this.bmpSessionUpdateHandler = null;
         this.bmpRouteUpdateHandler = null;
         this.bmpTerminationHandler = null;
         this.bmpStatisticsReportHandler = null;
+        this.bmpRouteAssuranceUpdateHandler = null;
         this.bmpRuntimeFailureHandler = null;
 
         this.logLevel = null;
@@ -177,7 +180,7 @@ class BmpApp {
         this.registerTrustedHandler('bmp:stopBmp', this.handleStopBmp);
         this.ipcMain.handle('bmp:getClientList', this.handleGetClientList.bind(this));
         this.ipcMain.handle('bmp:getClient', this.handleGetClient.bind(this));
-        this.ipcMain.handle('bmp:deleteClientData', this.handleDeleteClientData.bind(this));
+        this.registerTrustedHandler('bmp:deleteClientData', this.handleDeleteClientData);
         this.ipcMain.handle('bmp:getRouteLens', this.handleGetRouteLens.bind(this));
         this.ipcMain.handle('bmp:getRouteAssurance', this.handleGetRouteAssurance.bind(this));
         this.ipcMain.handle('bmp:setRouteAssuranceEnabled', this.handleSetRouteAssuranceEnabled.bind(this));
@@ -196,7 +199,7 @@ class BmpApp {
         );
         this.ipcMain.handle('bmp:getPersistenceStatus', this.handleGetPersistenceStatus.bind(this));
         this.ipcMain.handle('bmp:getPersistenceDatabaseInfo', this.handleGetPersistenceDatabaseInfo.bind(this));
-        this.ipcMain.handle('bmp:deletePersistenceDatabase', this.handleDeletePersistenceDatabase.bind(this));
+        this.registerTrustedHandler('bmp:deletePersistenceDatabase', this.handleDeletePersistenceDatabase);
         this.ipcMain.handle('bmp:getPersistedRoutes', this.handleGetPersistedRoutes.bind(this));
     }
 
@@ -232,6 +235,89 @@ class BmpApp {
             return;
         }
         throw new Error('拒绝来自非应用页面的BMP请求');
+    }
+
+    getTrustedBmpMonitorClientKey(event) {
+        const sender = event?.sender;
+        const frame = event?.senderFrame;
+        const ownerWindow = sender ? this.browserWindow?.fromWebContents?.(sender) : null;
+        if (!sender || !frame || frame !== sender.mainFrame || !ownerWindow || ownerWindow.isDestroyed?.()) {
+            throw new Error('拒绝来自未知窗口的BMP清理请求');
+        }
+        if (
+            !isTrustedBmpRendererUrl(frame.url, {
+                isPackaged: this.appIsPackaged ?? app.isPackaged,
+                packagedRendererPath: this.packagedRendererPath
+            })
+        ) {
+            throw new Error('拒绝来自非应用页面的BMP清理请求');
+        }
+        const context = this.resolveBmpMonitorContext?.(event);
+        const expectedClientKey = normalizeBmpClientKey(context?.clientKey);
+        if (!expectedClientKey) throw new Error('拒绝来自未注册BMP监控窗口的清理请求');
+        return expectedClientKey;
+    }
+
+    async assertTrustedPurgeSender(event, client) {
+        if (event?.sender === this.primaryWebContents && this.primaryWebContents) {
+            this.assertTrustedSender(event);
+            return client;
+        }
+        const expectedClientKey = this.getTrustedBmpMonitorClientKey(event);
+        let requestedClientKey = null;
+        if (expectedClientKey?.startsWith('source:')) {
+            const sourceId = client?.persistentSourceId || client?.sourceId;
+            if (typeof sourceId === 'string') requestedClientKey = normalizeBmpClientKey(`source:${sourceId.trim()}`);
+        } else if (expectedClientKey?.startsWith('connection:')) {
+            requestedClientKey = normalizeBmpClientKey(
+                `connection:${[client?.localIp, client?.localPort, client?.remoteIp, client?.remotePort].join('|')}`
+            );
+        }
+        if (!expectedClientKey || requestedClientKey !== expectedClientKey) {
+            throw new Error('拒绝清理非当前BMP监控Client的数据');
+        }
+        if (expectedClientKey.startsWith('source:') || !this.worker) return client;
+
+        // A transport-bound monitor cannot authorize a caller-supplied source or
+        // connection ID merely because its endpoint fields match the window.
+        const [localIp, localPort, remoteIp, remotePort] = expectedClientKey.slice('connection:'.length).split('|');
+        const selector = { localIp, localPort: Number(localPort), remoteIp, remotePort: Number(remotePort) };
+        const result = await this.queryClient(selector);
+        if (this.getTrustedBmpMonitorClientKey(event) !== expectedClientKey) {
+            throw new Error('BMP监控窗口状态已变化，请重试');
+        }
+        const authoritativeClient = result?.status === 'success' ? result.data : null;
+        const sourceId = authoritativeClient?.persistentSourceId || authoritativeClient?.sourceId;
+        const sourceKey = typeof sourceId === 'string' ? normalizeBmpClientKey(`source:${sourceId.trim()}`) : null;
+        if (
+            !sourceKey ||
+            normalizeBmpClientKey(
+                `connection:${[
+                    authoritativeClient?.localIp,
+                    authoritativeClient?.localPort,
+                    authoritativeClient?.remoteIp,
+                    authoritativeClient?.remotePort
+                ].join('|')}`
+            ) !== expectedClientKey
+        ) {
+            throw new Error('无法确认当前BMP监控Client的身份');
+        }
+        const connectionId = authoritativeClient.persistentConnectionId || authoritativeClient.connectionId || null;
+        for (const value of [client?.persistentSourceId, client?.sourceId]) {
+            if (value && (typeof value !== 'string' || normalizeBmpClientKey(`source:${value.trim()}`) !== sourceKey)) {
+                throw new Error('拒绝清理非当前BMP监控Client的数据');
+            }
+        }
+        for (const value of [client?.persistentConnectionId, client?.connectionId, client?.persistenceConnectionId]) {
+            if (value && value !== connectionId) throw new Error('拒绝清理非当前BMP监控连接的数据');
+        }
+        return {
+            ...selector,
+            persistentSourceId: sourceKey.slice('source:'.length),
+            sourceId: sourceKey.slice('source:'.length),
+            persistentConnectionId: connectionId,
+            connectionId
+        };
     }
 
     emitDetailedMonitorUpdate(eventType, data) {
@@ -524,7 +610,7 @@ class BmpApp {
     }
 
     async openOfflinePersistenceReader() {
-        let client = this.createOfflinePersistenceReader();
+        const client = this.createOfflinePersistenceReader();
         this.offlinePersistenceReader = client;
         this.offlinePersistenceOpenPromise = client.open();
         try {
@@ -536,26 +622,7 @@ class BmpApp {
                 this.offlinePersistenceOpenPromise = null;
             }
             await client.close({ suppressErrors: true }).catch(() => {});
-            if (error.code !== 'BMP_PERSISTENCE_SCHEMA_MIGRATION_REQUIRED') {
-                throw error;
-            }
-
-            const migrator = this.createPersistenceClient({
-                dbPath: this.persistenceDbPath,
-                partitionByClient: true,
-                logLevel: this.logLevel
-            });
-            try {
-                await migrator.open();
-            } finally {
-                await migrator.close({ suppressErrors: true }).catch(() => {});
-            }
-
-            client = this.createOfflinePersistenceReader();
-            this.offlinePersistenceReader = client;
-            this.offlinePersistenceOpenPromise = client.open();
-            await this.offlinePersistenceOpenPromise;
-            return client;
+            throw error;
         }
     }
 
@@ -649,19 +716,11 @@ class BmpApp {
         const starting = Boolean(this.bmpStarting);
         const deleting = Boolean(this.persistenceDatabaseDeleting);
         const clientDatabaseCount = artifacts.filter(artifact => artifact.kind === 'database').length;
-        let legacyDatabaseExists = false;
-        try {
-            legacyDatabaseExists = fs.lstatSync(this.persistenceDbPath).isFile();
-        } catch (error) {
-            if (error.code !== 'ENOENT') throw error;
-        }
         return {
             dbPath: this.persistenceDbPath,
             storageMode: 'client-databases',
             storageDirectory: getClientDatabaseDirectory(this.persistenceDbPath),
             clientDatabaseCount,
-            legacyDatabaseExists,
-            legacyDatabasePath: legacyDatabaseExists ? this.persistenceDbPath : null,
             exists: artifacts.length > 0,
             running,
             starting,
@@ -776,8 +835,6 @@ class BmpApp {
                     storageDirectory: databaseInfo.storageDirectory,
                     clientDatabaseCount: 0,
                     clientDatabases: [],
-                    legacyDatabaseExists: databaseInfo.legacyDatabaseExists,
-                    legacyDatabasePath: databaseInfo.legacyDatabasePath,
                     running: Boolean(this.worker)
                 },
                 'BMP持久化数据库尚未创建'
@@ -787,8 +844,6 @@ class BmpApp {
         return successResponse(
             {
                 ...status,
-                legacyDatabaseExists: databaseInfo.legacyDatabaseExists,
-                legacyDatabasePath: databaseInfo.legacyDatabasePath,
                 enabled: this.worker ? this.runningPersistenceEnabled : true,
                 running: Boolean(this.worker)
             },
@@ -997,6 +1052,7 @@ class BmpApp {
                     this.eventDispatcher?.cleanup();
                     this.eventDispatcher = null;
                     this.bmpRuntimeFailureHandler = null;
+                    this.bmpRouteAssuranceUpdateHandler = null;
                 }
             });
             const activeWorker = this.worker;
@@ -1035,6 +1091,11 @@ class BmpApp {
                 this.eventDispatcher.emitToSubscribers('bmp:statisticsReport', successResponse(data.data));
             };
 
+            this.bmpRouteAssuranceUpdateHandler = event => {
+                if (this.worker !== activeWorker) return;
+                this.eventDispatcher?.emitToSubscribers('bmp:routeAssuranceInvalidated', successResponse(event.data));
+            };
+
             this.bmpRuntimeFailureHandler = failure => {
                 if (this.worker !== activeWorker) return;
                 this.bmpRuntimeFailure = normalizeRuntimeFailure(failure);
@@ -1054,6 +1115,10 @@ class BmpApp {
             );
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+            this.worker.addEventListener(
+                BmpConst.BMP_EVT_TYPES.ROUTE_ASSURANCE_UPDATE,
+                this.bmpRouteAssuranceUpdateHandler
+            );
             this.worker.addEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
 
             const result = await this.worker.sendRequest(BmpConst.BMP_REQ_TYPES.START_BMP, bmpConfigData);
@@ -1083,6 +1148,10 @@ class BmpApp {
                 );
                 worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
                 worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+                worker.removeEventListener(
+                    BmpConst.BMP_EVT_TYPES.ROUTE_ASSURANCE_UPDATE,
+                    this.bmpRouteAssuranceUpdateHandler
+                );
                 worker.removeEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
                 await worker.terminate().catch(() => {});
                 if (this.worker === worker) {
@@ -1156,6 +1225,10 @@ class BmpApp {
             );
             worker.removeEventListener(BmpConst.BMP_EVT_TYPES.TERMINATION, this.bmpTerminationHandler);
             worker.removeEventListener(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, this.bmpStatisticsReportHandler);
+            worker.removeEventListener(
+                BmpConst.BMP_EVT_TYPES.ROUTE_ASSURANCE_UPDATE,
+                this.bmpRouteAssuranceUpdateHandler
+            );
             worker.removeEventListener(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.bmpRuntimeFailureHandler);
             await worker.terminate().catch(() => {});
             if (this.worker === worker) {
@@ -1170,6 +1243,7 @@ class BmpApp {
             }
             this.bmpRuntimeFailure = null;
             this.bmpRuntimeFailureHandler = null;
+            this.bmpRouteAssuranceUpdateHandler = null;
             this.bmpStopping = false;
         }
     }
@@ -1203,8 +1277,9 @@ class BmpApp {
         }
     }
 
-    async handleDeletePersistenceDatabase() {
+    async handleDeletePersistenceDatabase(event) {
         try {
+            this.assertTrustedSender(event);
             const result = await this.deletePersistenceDatabase();
             return successResponse(result, result.deleted ? 'BMP数据库删除成功' : 'BMP数据库不存在，无需删除');
         } catch (error) {
@@ -1262,6 +1337,7 @@ class BmpApp {
     }
 
     async handleDeleteClientData(event, request = {}) {
+        this.assertTrustedSender(event);
         if (null === this.worker) {
             return errorResponse('请先启动 BMP 服务后删除离线客户端');
         }
@@ -1428,6 +1504,7 @@ class BmpApp {
     }
 
     async handlePurgeStaleBgpRoutes(event, client, session, af, ribType) {
+        client = await this.assertTrustedPurgeSender(event, client);
         if (null === this.worker) {
             return errorResponse('BMP未启动，请先启动 BMP 服务后清理过期路由');
         }
@@ -1447,6 +1524,7 @@ class BmpApp {
     }
 
     async handlePurgeStaleBgpInstanceRoutes(event, client, instance) {
+        client = await this.assertTrustedPurgeSender(event, client);
         if (null === this.worker) {
             return errorResponse('BMP未启动，请先启动 BMP 服务后清理过期路由');
         }

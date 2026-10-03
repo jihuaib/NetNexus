@@ -279,6 +279,7 @@
         removeGroupDisabled: { type: Boolean, default: false },
         exportEnabled: { type: Boolean, default: false },
         generationStates: { type: Array, default: () => [] },
+        generationStateError: { type: String, default: '' },
         errors: { type: Object, default: () => ({}) }
     });
     const emit = defineEmits([
@@ -314,9 +315,10 @@
     );
     const contextMenuHint = computed(() =>
         contextMenuKind.value === 'group'
-            ? props.removeGroupDisabled
-                ? '请启动 BGP 后刷新生成状态，再撤销或移除组。'
-                : '撤销按实际生成记录执行，配置会保留。'
+            ? props.generationStateError ||
+              (props.removeGroupDisabled
+                  ? '请启动 BGP 后刷新生成状态，再撤销或移除组。'
+                  : '撤销按实际生成记录执行，配置会保留。')
             : contextMenuKind.value === 'nlri'
               ? '管理当前组的 NLRI 节点；MP Next Hop 在 MP 编码下使用。'
               : '可重复添加属性，每个节点独立配置。'

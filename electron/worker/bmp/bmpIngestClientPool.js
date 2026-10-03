@@ -6,6 +6,7 @@ const { normalizeClientSourceId } = require('./bmpClientPersistencePaths');
 const RAW_HIGH_WATERMARK_BYTES = 1024 * 1024;
 const RAW_LOW_WATERMARK_BYTES = 512 * 1024;
 const START_TIMEOUT_MS = 15000;
+const MAX_RETAINED_BUFFER_BYTES = 64 * 1024 * 1024;
 
 // One live connection owns one parser slot until its final FIFO close has been
 // acknowledged. Socket handles stay here; only owned byte buffers cross the
@@ -28,6 +29,7 @@ class BmpIngestClientPool {
         this.closing = false;
         this.closePromise = null;
         this.openPromise = null;
+        this.maxRetainedBufferBytes = Math.max(1, Number(options.maxRetainedBufferBytes) || MAX_RETAINED_BUFFER_BYTES);
     }
 
     open() {
@@ -100,6 +102,7 @@ class BmpIngestClientPool {
             token: `bmp-client-${++this.sequence}`,
             session,
             pendingBytes: 0,
+            retainedBufferBytes: 0,
             paused: false,
             closing: false,
             closed: false,
@@ -172,16 +175,27 @@ class BmpIngestClientPool {
                 // Mutations enter the database FIFO before this request or any
                 // subsequent barrier is acknowledged to readers/shutdown.
                 this.onResult?.(record, message);
+                record.retainedBufferBytes = Math.max(0, Number(message.snapshot?.bufferedMessageBytes) || 0);
                 record.pendingBytes = Math.max(0, record.pendingBytes - callback.bytes);
                 if (record.paused && record.pendingBytes <= RAW_LOW_WATERMARK_BYTES) {
                     record.paused = false;
                     this.resume(record);
                 }
                 if (callback.op === 'close') {
+                    record.retainedBufferBytes = 0;
                     record.closed = true;
                     slot.record = null;
                     this.onClosed?.(record);
                 } else if (message.closed && !record.closing) {
+                    this.closeSession(record).catch(error => this.handleFailure(error));
+                } else if (
+                    !record.closing &&
+                    record.retainedBufferBytes > 0 &&
+                    this.slots.reduce((bytes, item) => bytes + (item.record?.retainedBufferBytes || 0), 0) >
+                        this.maxRetainedBufferBytes
+                ) {
+                    // This is a connection resource limit, not a parser/database
+                    // failure: drain only its FIFO and let other clients continue.
                     this.closeSession(record).catch(error => this.handleFailure(error));
                 }
             }
@@ -250,11 +264,14 @@ class BmpIngestClientPool {
             ingestWorkerCount: this.slots.filter(slot => slot.alive).length,
             activeClientCount: records.length,
             clientLimit: this.threadCount,
+            retainedBufferBytes: records.reduce((bytes, record) => bytes + record.retainedBufferBytes, 0),
+            retainedBufferLimitBytes: this.maxRetainedBufferBytes,
             ingestThreadIds: this.slots.filter(slot => slot.alive).map(slot => slot.threadId),
             clientThreads: records.map(record => ({
                 slot: record.index,
                 threadId: record.threadId,
                 pendingBytes: record.pendingBytes,
+                retainedBufferBytes: record.retainedBufferBytes,
                 closing: record.closing,
                 persistentConnectionId: record.session.persistenceConnectionId,
                 persistentSourceId: record.session.getPersistentSourceId?.() || null,

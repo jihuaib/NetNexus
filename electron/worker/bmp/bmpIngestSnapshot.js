@@ -7,6 +7,7 @@ const SESSION_LOCAL_FIELDS = new Set([
     'messageHandler',
     'bmpWorker',
     'ingestRecord',
+    'initializationTimer',
     'messageBuffer',
     'bgpSessionMap',
     'bgpInstanceMap'
@@ -70,6 +71,7 @@ function createIngestSnapshot(session) {
     if (!session) return null;
     const ownerLinks = new Set(['bmpSession']);
     return {
+        bufferedMessageBytes: session.bufferedMessageBytes || 0,
         session: snapshotFields(session, SESSION_LOCAL_FIELDS),
         bgpSessions: Array.from(session.bgpSessionMap || [], ([key, peer]) => [key, snapshotFields(peer, ownerLinks)]),
         bgpInstances: Array.from(session.bgpInstanceMap || [], ([key, instance]) => [
@@ -81,6 +83,7 @@ function createIngestSnapshot(session) {
 
 function applyIngestSnapshot(parentMirror, snapshot) {
     if (!parentMirror || !snapshot) return parentMirror;
+    parentMirror.ingestBufferedMessageBytes = Math.max(0, Number(snapshot.bufferedMessageBytes) || 0);
     const fields = cloneIngestValue(snapshot.session || {});
     for (const [key, value] of Object.entries(fields)) {
         if (!SESSION_LOCAL_FIELDS.has(key) && typeof parentMirror[key] !== 'function') {

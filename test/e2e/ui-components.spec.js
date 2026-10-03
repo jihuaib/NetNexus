@@ -2382,6 +2382,8 @@ test.describe('Custom UI component interactions', () => {
                 finishDelete: null,
                 info: {
                     dbPath: '/tmp/netnexus/bmp/bmp.sqlite3',
+                    legacyDatabaseExists: true,
+                    legacyDatabasePath: '/tmp/netnexus/bmp/bmp.sqlite3',
                     exists: true,
                     running: false,
                     starting: false,
@@ -2430,6 +2432,7 @@ test.describe('Custom UI component interactions', () => {
         await expect(settingsDialog.locator('.bgp-data-settings')).toBeVisible();
         await expect(bmpSettings.getByText('/tmp/netnexus/bmp/bmp.sqlite3', { exact: true })).toBeVisible();
         await expect(bmpSettings.getByText('1.50 KB', { exact: true })).toBeVisible();
+        await expect(bmpSettings.getByText('旧共享数据库已保留', { exact: true })).toHaveCount(0);
         expect(await page.evaluate(() => window.__bmpDataSettingsE2e.statusCalls)).toBe(1);
         const baselineOverlayState = await page.evaluate(() => ({
             stackSize: window.__NETNEXUS_UI_OVERLAY_STATE__.stack.length,
@@ -2441,6 +2444,7 @@ test.describe('Custom UI component interactions', () => {
         await deleteButton.click();
         let confirmDialog = page.getByRole('dialog', { name: '确认删除 BMP 数据库' });
         await expect(confirmDialog).toBeVisible();
+        await expect(confirmDialog).not.toContainText('旧共享数据库');
         await expect
             .poll(() =>
                 page.evaluate(() => ({

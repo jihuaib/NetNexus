@@ -2,7 +2,12 @@ const assert = require('node:assert/strict');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const vm = require('node:vm');
+const { parse: parseVue } = require('@vue/compiler-sfc');
+const { parse: parseJavaScript } = require('@babel/parser');
+const { ref } = require('vue');
 const BmpApp = require('../../electron/app/bmpApp');
+const { createTrustedBmpEvent } = require('./fixtures/bmp_trusted_renderer');
 const {
     getClientDatabaseDirectory,
     getClientDatabasePath
@@ -38,7 +43,53 @@ function writeArtifacts(dbPath) {
     return artifacts;
 }
 
+async function assertSettingsDeletionConfirmation() {
+    const source = fs.readFileSync(path.join(__dirname, '../../src/view/settings/BmpDataSettings.vue'), 'utf8');
+    const { descriptor, errors } = parseVue(source);
+    assert.deepEqual(errors, []);
+    assert.doesNotMatch(descriptor.template.content, /legacyDatabase|旧共享数据库|旧文件/);
+    const script = descriptor.scriptSetup.content;
+    const ast = parseJavaScript(script, { sourceType: 'module' });
+    const names = new Set(['databaseInfo', 'confirmDeleteDatabase']);
+    const declarations = ast.program.body.filter(
+        node => node.type === 'VariableDeclaration' && node.declarations.some(item => names.has(item.id.name))
+    );
+    assert.equal(declarations.length, names.size, 'load both actual settings declarations');
+    const confirmations = [];
+    let deleteCalls = 0;
+    const context = {
+        ref,
+        canDeleteDatabase: ref(false),
+        dialog: { confirm: options => confirmations.push(options) },
+        deleteDatabase: async () => {
+            deleteCalls += 1;
+        }
+    };
+    vm.runInNewContext(
+        `${declarations.map(node => script.slice(node.start, node.end)).join('\n')}
+        globalThis.settings = { databaseInfo, confirmDeleteDatabase };`,
+        context,
+        { filename: 'BmpDataSettings.vue' }
+    );
+    assert.equal(Object.hasOwn(context.settings.databaseInfo.value, 'legacyDatabaseExists'), false);
+    assert.equal(Object.hasOwn(context.settings.databaseInfo.value, 'legacyDatabasePath'), false);
+    context.settings.confirmDeleteDatabase();
+    assert.equal(confirmations.length, 0, 'unavailable database deletion does not open a dialog');
+    context.canDeleteDatabase.value = true;
+    context.settings.confirmDeleteDatabase();
+    assert.equal(confirmations.length, 1);
+    assert.equal(
+        confirmations[0].content,
+        '将永久删除全部客户端数据库中的会话、路由和统计数据，且无法恢复。是否继续？'
+    );
+    assert.equal(confirmations[0].okType, 'danger');
+    assert.equal(deleteCalls, 0, 'the confirmation does not delete before approval');
+    await confirmations[0].onOk();
+    assert.equal(deleteCalls, 1, 'approval invokes the actual bound deletion callback');
+}
+
 async function main() {
+    await assertSettingsDeletionConfirmation();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-delete-'));
     const dbPath = path.join(tempDir, 'bmp.sqlite3');
     const clientDbPath = getClientDatabasePath(dbPath, sourceId);
@@ -71,8 +122,8 @@ async function main() {
         assert.equal(initialInfo.storageMode, 'client-databases');
         assert.equal(initialInfo.storageDirectory, clientDirectory);
         assert.equal(initialInfo.clientDatabaseCount, 1);
-        assert.equal(initialInfo.legacyDatabaseExists, true);
-        assert.equal(initialInfo.legacyDatabasePath, dbPath);
+        assert.equal(Object.hasOwn(initialInfo, 'legacyDatabaseExists'), false);
+        assert.equal(Object.hasOwn(initialInfo, 'legacyDatabasePath'), false);
         assert.equal(
             initialInfo.artifacts.every(artifact => artifact.sourceId === sourceId),
             true
@@ -82,7 +133,7 @@ async function main() {
             artifacts.reduce((total, [, contents]) => total + Buffer.byteLength(contents), 0)
         );
 
-        const result = await app.handleDeletePersistenceDatabase();
+        const result = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         assert.equal(result.status, 'success');
         assert.equal(result.msg, 'BMP数据库删除成功');
         assert.equal(result.data.deleted, true);
@@ -90,7 +141,8 @@ async function main() {
         assert.deepEqual(result.data.deletedArtifacts, ['database', 'wal', 'shm', 'journal']);
         assert.equal(result.data.exists, false);
         assert.equal(result.data.clientDatabaseCount, 0);
-        assert.equal(result.data.legacyDatabaseExists, true);
+        assert.equal(Object.hasOwn(result.data, 'legacyDatabaseExists'), false);
+        assert.equal(Object.hasOwn(result.data, 'legacyDatabasePath'), false);
         assert.equal(result.data.busy, false);
         assert.equal(result.data.deleting, false);
         assert.deepEqual(closeCalls, [{ suppressErrors: true }]);
@@ -103,24 +155,28 @@ async function main() {
         assert.equal(fs.readFileSync(unknownFilePath, 'utf8'), 'unknown-file');
         assert.equal(fs.statSync(unknownDirectoryPath).isDirectory(), true);
         for (const [filePath, contents] of legacyArtifacts) {
-            assert.equal(fs.readFileSync(filePath, 'utf8'), contents, 'legacy shared artifacts must remain untouched');
+            assert.equal(
+                fs.readFileSync(filePath, 'utf8'),
+                contents,
+                'manual deletion is limited to client artifacts, separate from startup schema cleanup'
+            );
         }
 
-        const repeatedResult = await app.handleDeletePersistenceDatabase();
+        const repeatedResult = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         assert.equal(repeatedResult.status, 'success');
         assert.equal(repeatedResult.msg, 'BMP数据库不存在，无需删除');
         assert.equal(repeatedResult.data.deleted, false);
 
         fs.writeFileSync(clientDbPath, 'running-database');
         app.worker = {};
-        const runningResult = await app.handleDeletePersistenceDatabase();
+        const runningResult = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         assert.equal(runningResult.status, 'error');
         assert.equal(runningResult.msg, '请先停止 BMP 服务后再删除数据库');
         assert.equal(fs.readFileSync(clientDbPath, 'utf8'), 'running-database');
         app.worker = null;
 
         app.bmpStarting = true;
-        const startingResult = await app.handleDeletePersistenceDatabase();
+        const startingResult = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         assert.equal(startingResult.status, 'error');
         assert.equal(startingResult.msg, 'BMP 服务正在启动，请稍后重试');
         assert.equal(fs.existsSync(clientDbPath), true);
@@ -130,10 +186,10 @@ async function main() {
         app.offlinePersistenceLock = new Promise(resolve => {
             releaseExistingOperation = resolve;
         });
-        const pendingDelete = app.handleDeletePersistenceDatabase();
+        const pendingDelete = app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(app.persistenceDatabaseDeleting, true);
-        const repeatedPendingDelete = await app.handleDeletePersistenceDatabase();
+        const repeatedPendingDelete = await app.handleDeletePersistenceDatabase(createTrustedBmpEvent(app));
         assert.equal(repeatedPendingDelete.status, 'error');
         assert.equal(repeatedPendingDelete.msg, 'BMP 数据库正在删除，请勿重复操作');
         const startDuringDelete = await app.handleStartBmp({ sender: {} }, {});
@@ -143,7 +199,7 @@ async function main() {
         const pendingDeleteResult = await pendingDelete;
         assert.equal(pendingDeleteResult.status, 'success');
         assert.equal(fs.existsSync(clientDbPath), false);
-        assert.equal(fs.existsSync(dbPath), true, 'full deletion must never remove the legacy shared database');
+        assert.equal(fs.existsSync(dbPath), true, 'manual deletion does not perform startup schema cleanup');
         assert.equal(app.persistenceDatabaseDeleting, false);
 
         const closeRacePath = path.join(tempDir, 'close-race.sqlite3');
@@ -162,7 +218,7 @@ async function main() {
         };
         closeRaceApp.offlinePersistenceReader = failedReader;
         closeRaceApp.handleOfflinePersistenceFailure(failedReader, new Error('synthetic reader failure'));
-        const closeRaceDelete = closeRaceApp.handleDeletePersistenceDatabase();
+        const closeRaceDelete = closeRaceApp.handleDeletePersistenceDatabase(createTrustedBmpEvent(closeRaceApp));
         await new Promise(resolve => setImmediate(resolve));
         assert.equal(
             fs.existsSync(closeRaceClientPath),
@@ -183,7 +239,7 @@ async function main() {
         fs.writeFileSync(`${failingClientPath}-shm`, 'removable-sidecar');
         const removableArtifacts = writeArtifacts(removableClientPath);
         const failingApp = makeApp(failingPath);
-        const failedResult = await failingApp.handleDeletePersistenceDatabase();
+        const failedResult = await failingApp.handleDeletePersistenceDatabase(createTrustedBmpEvent(failingApp));
         assert.equal(failedResult.status, 'error');
         assert.match(failedResult.msg, /wal/i);
         assert.equal(
@@ -207,7 +263,7 @@ async function main() {
         fs.writeFileSync(`${orphanClientPath}-wal`, 'orphan-wal');
         const orphanApp = makeApp(orphanBasePath);
         assert.equal(orphanApp.getPersistenceDatabaseInfo().clientDatabaseCount, 0);
-        const orphanResult = await orphanApp.handleDeletePersistenceDatabase();
+        const orphanResult = await orphanApp.handleDeletePersistenceDatabase(createTrustedBmpEvent(orphanApp));
         assert.equal(orphanResult.status, 'success');
         assert.equal(orphanResult.data.deletedFileCount, 1);
         assert.equal(fs.existsSync(`${orphanClientPath}-wal`), false, 'sidecar-only client artifacts must be deleted');
@@ -218,7 +274,8 @@ async function main() {
         fs.mkdirSync(path.dirname(symlinkClientPath), { recursive: true });
         fs.writeFileSync(symlinkTargetPath, 'target-must-remain');
         fs.symlinkSync(symlinkTargetPath, symlinkClientPath);
-        const symlinkResult = await makeApp(symlinkBasePath).handleDeletePersistenceDatabase();
+        const symlinkApp = makeApp(symlinkBasePath);
+        const symlinkResult = await symlinkApp.handleDeletePersistenceDatabase(createTrustedBmpEvent(symlinkApp));
         assert.equal(symlinkResult.status, 'error');
         assert.equal(fs.readFileSync(symlinkTargetPath, 'utf8'), 'target-must-remain');
         assert.equal(fs.lstatSync(symlinkClientPath).isSymbolicLink(), true, 'legal-looking symlinks must be refused');
@@ -227,7 +284,9 @@ async function main() {
         fs.writeFileSync(legacyOnlyPath, 'legacy-only');
         const legacyOnlyApp = makeApp(legacyOnlyPath);
         assert.equal(legacyOnlyApp.getPersistenceDatabaseInfo().exists, false);
-        const legacyOnlyResult = await legacyOnlyApp.handleDeletePersistenceDatabase();
+        const legacyOnlyResult = await legacyOnlyApp.handleDeletePersistenceDatabase(
+            createTrustedBmpEvent(legacyOnlyApp)
+        );
         assert.equal(legacyOnlyResult.status, 'success');
         assert.equal(legacyOnlyResult.data.deleted, false);
         assert.equal(fs.readFileSync(legacyOnlyPath, 'utf8'), 'legacy-only');

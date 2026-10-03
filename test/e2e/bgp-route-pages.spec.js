@@ -95,6 +95,28 @@ async function openIpv4GroupMenu(page, target) {
     await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toBeVisible();
 }
 
+async function expectGeneratedCount(page, count) {
+    const generateButton = page.getByTestId('bgp-generate-ipv4-routes-button');
+    await expect(generateButton).toBeEnabled();
+    const selected = page.locator('[role="treeitem"][aria-selected="true"] .route-tree-title');
+    const previous = await selected.evaluate(element => {
+        const testId = element.dataset.testid;
+        return {
+            testId,
+            index: Array.from(document.querySelectorAll(`[data-testid="${testId}"]`)).indexOf(element)
+        };
+    });
+    if (count === 0) await expect(generateButton).toHaveText('生成本组路由');
+    await openIpv4GroupMenu(page);
+    const menu = page.getByTestId('bgp-ipv4-group-context-menu');
+    if (count > 0) await expect(menu.locator('.nn-context-menu-meta')).toHaveText(`已生成 ${count} 条`);
+    else await expect(page.getByTestId('bgp-ipv4-withdraw-group-button')).toHaveAttribute('aria-disabled', 'true');
+    await page.keyboard.press('Escape');
+    await expect(menu).toHaveCount(0);
+    // Opening the group menu should not leave a different editor selected.
+    await page.getByTestId(previous.testId).nth(previous.index).click();
+}
+
 async function ipv4GroupAction(page, action, target) {
     await openIpv4GroupMenu(page, target);
     await page.getByTestId(`bgp-ipv4-${action}-group-button`).click();
@@ -838,7 +860,7 @@ test.describe('BGP route pages', () => {
             count: '3'
         });
         expect(labelPayload.attributeRules.some(rule => rule.type === 'addPath')).toBe(false);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 6 条路由');
+        await expectGeneratedCount(page, 6);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(0);
         expect(harness.controller.state.bgp.routes.get(12)).toHaveLength(6);
         await page.getByTestId('bgp-ipv4-tree-attribute-addPath').click();
@@ -892,7 +914,7 @@ test.describe('BGP route pages', () => {
         await page.keyboard.press('Escape');
         await page.keyboard.press('Escape');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 6 条路由');
+        await expectGeneratedCount(page, 6);
         const payload = await page.evaluate(() => window.__ipv4GeneratedPayload);
         expect(payload.addressFamily).toBe(12);
         expect(payload.count).toBe('3');
@@ -928,7 +950,7 @@ test.describe('BGP route pages', () => {
         await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('5 个前缀 × 2 条路径 = 10 条路由');
         await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('203.0.113.14/32');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 10 条路由');
+        await expectGeneratedCount(page, 10);
         const payload = await page.evaluate(() => window.__ipv4GeneratedPayload);
         expect(payload.groupId).toBeTruthy();
         expect(payload.groupName).toBe('多路径组');
@@ -944,7 +966,7 @@ test.describe('BGP route pages', () => {
             ]).flat()
         );
         await page.reload();
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 10 条路由');
+        await expectGeneratedCount(page, 10);
         await page.getByTestId('bgp-ipv4-tree-attribute-addPath').click();
         await expect(page.getByTestId('bgp-ipv4-attribute-count-input')).toHaveValue('2');
     });
@@ -956,7 +978,7 @@ test.describe('BGP route pages', () => {
         await page.getByTestId('bgp-ipv4-route-mask-input').fill('32');
         await page.getByTestId('bgp-ipv4-route-count-input').fill('2');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         const firstPayload = await page.evaluate(() => window.__ipv4GeneratedPayload);
         expect(harness.controller.state.bgp.routes.get(1).map(route => `${route.ip}/${route.mask}`)).toEqual([
             '198.51.100.10/32',
@@ -975,7 +997,7 @@ test.describe('BGP route pages', () => {
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(2);
         await page.getByTestId('bgp-ipv4-route-prefix-input').fill('198.51.100.20');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(4);
     });
 
@@ -986,25 +1008,24 @@ test.describe('BGP route pages', () => {
         const groups = page.locator('.route-group-item');
         const prefixInput = page.getByTestId('bgp-ipv4-route-prefix-input');
         const countInput = page.getByTestId('bgp-ipv4-route-count-input');
-        const state = page.getByTestId('bgp-ipv4-group-generation-state');
         await prefixInput.fill('192.0.2.1');
         await page.getByTestId('bgp-ipv4-route-mask-input').fill('32');
         await countInput.fill('3');
         await generateIpv4Group(page);
-        await expect(state).toHaveText('本组已生成 3 条路由');
+        await expectGeneratedCount(page, 3);
         const firstId = (await page.evaluate(() => window.__ipv4GeneratedPayload)).groupId;
         await ipv4GroupAction(page, 'copy');
         await prefixInput.fill('198.51.100.1');
         await countInput.fill('4');
         await generateIpv4Group(page);
-        await expect(state).toHaveText('本组已生成 4 条路由');
+        await expectGeneratedCount(page, 4);
         const secondId = (await page.evaluate(() => window.__ipv4GeneratedPayload)).groupId;
         await groups.first().click();
         await prefixInput.fill('203.0.113.1');
         await countInput.fill('2');
-        await expect(state).toHaveText('本组已生成 3 条路由');
+        await expectGeneratedCount(page, 3);
         await ipv4GroupAction(page, 'withdraw');
-        await expect(state).toHaveText('本组未生成路由');
+        await expectGeneratedCount(page, 0);
         expect(harness.controller.state.bgp.routes.get(1).every(route => route.groupId === secondId)).toBe(true);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(4);
         expect(
@@ -1012,10 +1033,10 @@ test.describe('BGP route pages', () => {
         ).toEqual({ groupId: firstId });
         await expect(prefixInput).toHaveValue('203.0.113.1');
         await generateIpv4Group(page);
-        await expect(state).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         await countInput.fill('1');
         await generateIpv4Group(page);
-        await expect(state).toHaveText('本组已生成 1 条路由');
+        await expectGeneratedCount(page, 1);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(5);
         await ipv4GroupAction(page, 'remove');
         await expect(groups).toHaveCount(1);
@@ -1027,16 +1048,18 @@ test.describe('BGP route pages', () => {
         await openIpv4RoutePage(page);
         await page.getByTestId('bgp-ipv4-route-count-input').fill('2');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         await page.getByTestId('bgp-ipv4-add-group-button').click();
         await page.locator('.route-group-item').first().click();
         harness.controller.state.bgp.running = false;
         await page.evaluate(() =>
             window.__featureE2eEmit('bgp:runtimeChanged', { running: false, addressFamilies: [] })
         );
-        await expect(page.getByTestId('bgp-ipv4-group-state-error')).toContainText('请启动 BGP 后刷新');
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         await openIpv4GroupMenu(page);
+        await expect(page.getByTestId('bgp-ipv4-group-context-menu').locator('.nn-context-menu-hint')).toContainText(
+            '请启动 BGP 后刷新'
+        );
         await expect(page.getByTestId('bgp-ipv4-remove-group-button')).toHaveAttribute('aria-disabled', 'true');
         await page.keyboard.press('Escape');
         await openIpv4GroupMenu(page);
@@ -1064,21 +1087,20 @@ test.describe('BGP route pages', () => {
         await page.getByTestId('bgp-ipv4-route-mask-input').fill('32');
         await page.getByTestId('bgp-ipv4-route-count-input').fill('3');
         await generateIpv4Group(page);
-        const state = page.getByTestId('bgp-ipv4-group-generation-state');
-        await expect(state).toHaveText('本组已生成 3 条路由');
+        await expectGeneratedCount(page, 3);
         await page
             .getByTestId('bgp-ipv4-route-table')
             .getByRole('button', { name: '删除', exact: true })
             .first()
             .click();
-        await expect(state).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         await dismissNotifications(page);
         await page.getByRole('button', { name: '删除所有', exact: true }).click();
         await page
             .getByRole('dialog', { name: '确认删除', exact: true })
             .getByRole('button', { name: '确定', exact: true })
             .click();
-        await expect(state).toHaveText('本组未生成路由');
+        await expectGeneratedCount(page, 0);
         await openIpv4GroupMenu(page);
         await expect(page.getByTestId('bgp-ipv4-withdraw-group-button')).toHaveAttribute('aria-disabled', 'true');
         await page.keyboard.press('Escape');
@@ -1165,13 +1187,13 @@ test.describe('BGP route pages', () => {
         expect(added.attributeRules.find(rule => rule.type === 'med')).toMatchObject({ value: '321' });
         expect(added.attributeRules.some(rule => rule.type === 'srv6')).toBe(true);
         expect(added.nlriRules.find(rule => rule.type === 'addPath')).toMatchObject({ count: 2 });
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 4 条路由');
+        await expectGeneratedCount(page, 4);
         await removeIpv4Attribute(page, node('addPath'));
         await removeIpv4Attribute(page, node('srv6'));
         const removedOptional = await generateAndCheckPresence();
         expect(removedOptional.nlriRules.some(rule => rule.type === 'addPath')).toBe(false);
         expect(removedOptional.attributeRules.some(rule => rule.type === 'srv6')).toBe(false);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
 
         await page.locator('.route-group-item').click();
         await page.getByTestId('route-field-addressFamily').click();
@@ -1304,7 +1326,7 @@ test.describe('BGP route pages', () => {
         await page.getByTestId('bgp-ipv4-route-mask-input').fill('32');
         await count.fill('2');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 2 条路由');
+        await expectGeneratedCount(page, 2);
         const firstId = (await page.evaluate(() => window.__ipv4GeneratedPayload)).groupId;
         await page.getByTestId('bgp-ipv4-add-group-button').click();
         await page.getByTestId('bgp-ipv4-route-group-name').fill('第二组');
@@ -1312,7 +1334,7 @@ test.describe('BGP route pages', () => {
         await page.getByTestId('bgp-ipv4-route-mask-input').fill('32');
         await count.fill('3');
         await generateIpv4Group(page);
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 3 条路由');
+        await expectGeneratedCount(page, 3);
         await groups.first().click();
         await ipv4GroupAction(page, 'copy', groups.nth(1));
         await expect(groups).toHaveCount(3);
@@ -1324,7 +1346,7 @@ test.describe('BGP route pages', () => {
         await expect(groups).toHaveCount(2);
         await groups.first().click();
         await ipv4GroupAction(page, 'withdraw', groups.nth(1));
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组未生成路由');
+        await expectGeneratedCount(page, 0);
         expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(2);
         expect(harness.controller.state.bgp.routes.get(1).every(route => route.groupId === firstId)).toBe(true);
         await groups.first().click();

@@ -656,8 +656,8 @@ local function dissect_message(tvb, pinfo, tree)
             root:add(f.local_port, tvb(offset + 16, 2))
             root:add(f.remote_port, tvb(offset + 18, 2))
             offset = offset + 20
-            offset = parse_bgp_message_at(tvb, pinfo, root, offset, limit, "Received BGP OPEN")
             offset = parse_bgp_message_at(tvb, pinfo, root, offset, limit, "Sent BGP OPEN")
+            offset = parse_bgp_message_at(tvb, pinfo, root, offset, limit, "Received BGP OPEN")
             if offset < limit then
                 parse_tlvs(tvb, pinfo, root, offset, limit, "peer-up", false)
             end

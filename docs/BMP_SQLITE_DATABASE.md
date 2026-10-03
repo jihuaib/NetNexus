@@ -1,6 +1,6 @@
 # BMP SQLite 数据库说明
 
-本文档说明 NetNexus BMP 按 client 独立存储的 SQLite schema v13、固定路由分区、库内共享路由对象、整数代理键、候选驱动的对象回收、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
+本文档说明 NetNexus BMP 按 client 独立存储的 SQLite schema v14、固定路由分区、库内共享路由对象、整数代理键、持久候选驱动的对象回收、scope 计数，以及启动、写入、查询、清理和崩溃恢复行为。
 
 ## 按 client 隔离的存储布局
 
@@ -12,7 +12,7 @@ bmp/bmp.sqlite3.clients/<source_id>.sqlite3
 
 每个文件独立保存 source、connection、scope、所有地址族的路由、属性、payload 和统计数据。相同 NLRI 或相同属性出现在不同 client 时，分别在各自的文件中保存；属性去重、引用计数、回收、撤销和 epoch 清理均不跨 client。本文后续的“全库”和“全局对象”仅指某一个 client 数据库内部，整数代理键不能跨文件使用。
 
-client 归属沿用现有稳定 source identity，不采用临时 TCP 源端口或连接 UUID，因此重连复用原文件。本次不改变任何 NLRI 身份算法，也不按 IP、EVPN Route Type、FlowSpec 组件等再拆数据库；已有地址族物理分表保持不变。
+client 归属由稳定 source identity 决定，不采用临时 TCP 源端口或连接 UUID，因此同一键版本内重连复用原文件。当前稳定键版本为 3；source、scope 和 route 的键版本一起升版，EVPN 路由键按 RFC 字段修正（见 7.1）。不按 IP、EVPN Route Type、FlowSpec 组件等再拆数据库；已有地址族物理分表保持不变。不迁移旧键或保留旧 schema 兼容层。
 
 BMP 的 `threadCount` 默认是 4，范围为 1–16。它同时设置解析 worker 数和持久化 Writer 数；一个解析槽在整个连接生命周期内只服务一条 BMP 连接，因此最多同时接入 `threadCount` 条 BMP 连接。槽位已满时，新连接立即关闭，不排队等待。断线关闭操作与该连接已有的数据保持 FIFO，完成解析和会话关闭后才释放槽；重连重新占用空闲槽，但仍按稳定 source identity 复用原 client 数据库。连接上限不限制历史 client 的数量。
 
@@ -35,7 +35,7 @@ socket 接收和业务协调仍在协调线程，不是每条 TCP 连接独立�
 
 首次创建先在私有临时目录完成 schema 初始化并关闭 SQLite，再原子发布正式文件，避免读线程看到未初始化的库。每个 worker 的打开数据库缓存有上限，重新打开被驱逐的连接不会被误判为 collector 重启。
 
-删除单个 client 时清空该库的路由、属性和其它记录，但保留空文件，使已经打开的 reader 不会继续持有旧 inode。服务停止后的“删除 BMP 数据库”操作才关闭 reader 并删除所有合法 client 数据库及其 sidecar；未知文件不删除。旧共享 `bmp.sqlite3` 及其 sidecar 不读取、不迁移、不删除，设置页会提示其保留状态。
+删除单个 client 时清空该库的路由、属性和其它记录，但保留空文件，使已经打开的 reader 不会继续持有旧 inode。服务停止后的“删除 BMP 数据库”操作才关闭 reader 并删除所有合法 client 数据库及其 sidecar；未知文件和旧共享库不在此手动删除范围。应用启动时统一检查旧共享 `bmp.sqlite3` 与全部 client 库的 SQLite `user_version`：当前 schema v14 保留，不同版本删除该主库及其 `-wal`、`-shm`、`-journal`，不迁移数据。旧共享库不参与当前分库查询，设置页不再展示旧库提示。离线查询始终只读，不清理、升级或重建数据库。
 
 验证覆盖真实多 Writer 交错写入及 fence、相同 NLRI/属性的物理隔离、EVPN/FlowSpec、单 client 更新/撤销/删除、重连/EOR、分页游标、LRU 和离线恢复。另有强制 Node-fork 回归：同一进程两轮真实 BMP 启动、收路由、Route Assurance、停止和离线读取，检查正常退出码及无退出信号。此轮未做单 client 千万路由写入吞吐压测。
 
@@ -80,9 +80,9 @@ Electron `ELECTRON_RUN_AS_NODE` 的 Node-fork 兜底路径使用 JSON IPC 和 `e
 | “是哪次 TCP/BMP 连接上报的？” | `bmp_connections` |
 | “属于哪个 Peer/Loc-RIB、AFI/SAFI、RIB 阶段？” | `bmp_rib_scopes` |
 | “这个 scope 当前有没有这条路由？” | 某一张 `bmp_current_routes_*` 分区表 |
-| “前缀、RD、Path ID、复杂 NLRI 是什么？” | `bmp_route_identities` |
+| “前缀、RD、Path ID、canonical NLRI 是什么？” | `bmp_route_identities` |
 | “Next Hop、AS Path、MED、Community 是什么？” | `bmp_route_attributes` |
-| “Path Marking、Label、Route TLV 等扩展展示字段是什么？” | `bmp_route_payloads` |
+| “这条路径的完整 NLRI、Label、解析注解、Path Marking、Route TLV 是什么？” | `bmp_route_payloads`（普通 IP NLRI 可由 identity 列重建） |
 | “当前有多少 active/stale 路由？” | `bmp_scope_route_counts` + `bmp_rib_scopes` |
 
 ### 0.2 一条 current route 的关联键
@@ -102,7 +102,7 @@ bmp_rib_scopes.scope_id ──> bmp_rib_scopes.scope_pk
   └─ source_pk ──> bmp_sources.source_pk
 ```
 
-事实表（current 分区、`bmp_scope_route_counts`）只保存整数代理键；64 位 hex 的 `source_id`、`scope_id`、`attr_id` 和 UUID `connection_id` 只在各自维表里出现一次。这样每个索引条目从几十到上百字节缩到 8 字节，是 v10 写入吞吐和库体积改善的主要来源。
+事实表（current 分区、`bmp_scope_route_counts`）只保存整数代理键；64 字符 hex 的 `source_id`、`scope_id`、`attr_id` 和 UUID `connection_id` 只在各自维表里出现一次。这样每个索引条目从几十到上百字节缩到 8 字节，是 v10 写入吞吐和库体积改善的主要来源。
 
 一条 current route 的业务唯一键是：
 
@@ -120,9 +120,9 @@ bmp_rib_scopes.scope_id ──> bmp_rib_scopes.scope_pk
 | `connection_id` / `connection_pk` | 全库 | 某一次 TCP/BMP 连接 ID（UUID）及其整数键；每次重连新建 | 通常只用于诊断 |
 | `scope_id` / `scope_pk` | 全库 | 稳定的逻辑 RIB ID（hex）及其整数键；包含 source、Peer/Instance、AFI/SAFI、RIB stage | `scope_id` 是页面查询路由的首选条件 |
 | `partition_id` | 全库 manifest | 把 scope 定向到一张物理 current 分区表 | 不由外部输入自行推导 |
-| `route_pk` | 全库 | SQLite 内部短整数键，供 current/event 高效关联 identity | 不作为稳定外部 ID |
+| `route_pk` | 全库 | SQLite 内部短整数键，供 current 高效关联 identity | 不作为稳定外部 ID |
 | `route_id` | 全库 | canonical route identity 的稳定 SHA-256 ID | 可用于跨 scope 查同一 NLRI |
-| `legacy_route_key` / 返回字段 `routeKey` | 某种路由 key 规则 | 兼容旧页面和详情查询的 opaque key | 页面只应原样回传，不应自行拆解 |
+| `legacy_route_key` / 返回字段 `routeKey` | 某一 source + scope 内 | 现有列保存完整 NLRI lookup key，字段名不表示旧 key 兼容 | scope 内唯一；页面、事件匹配和详情查询原样回传，不自行拆解 |
 | `path_pk` | **仅在某一张分区表内** | current 物理行主键和稳定分页辅助键 | 跨分区时必须与 `partition_id` 一起看 |
 | `attr_id` / `attr_pk` | 全库 | canonical Path Attributes JSON 的内容哈希及其整数键 | 通常仅用于诊断 |
 | `payload_id` | 全库 | 去重扩展 payload 的内部键 | 通常仅用于诊断 |
@@ -153,7 +153,8 @@ afi/safi = 1/1
 prefix/prefix_length = 10.0.0.0/24
 rd = 0:0
 path_id = 0
-nlri_json = {"pathId":0,"prefix":"10.0.0.0","length":24,"valid":true,"rd":"0:0"}
+nlri_json = NULL
+nlri_flags = 3（读取时重建 pathId/prefix/length/rd/valid）
 ```
 
 这条路由的扩展 payload 是空对象，所以与很多普通路由共享同一行：
@@ -183,7 +184,7 @@ bmp_route_payloads.route_json = {}
 | `bmp_current_routes_peer_ipv4_unicast` | `2` = Post Adj-RIB-In | `scope-post-in`（12） | 3 | 1 | 7 |
 | `bmp_current_routes_loc_rib_ipv4_unicast` | `loc-rib` | `scope-loc-rib`（13） | 3 | 1 | 7 |
 
-因此，三个 RIB 各自保存“我当前包含 route 3”，但 NLRI JSON 和相同的 Path Attributes 不需要复制三份。
+因此，三个 RIB 各自保存“我当前包含 route 3”，但 canonical identity 和相同的 Path Attributes 不需要复制三份。复杂 NLRI 的完整解析对象属于每条路径的 payload，可保留不同邻居或阶段的 label、ESI、Gateway、原始编码和解析注解；内容完全相同的 payload 仍可去重。
 
 ### 0.5 Session 路由页的完整调用链
 
@@ -330,18 +331,18 @@ OFFSET :offset;
 
 IPv4/IPv6 Unicast 输入 `10.0.0.0/24` 时，上述条件是标准化后的**精确前缀和掩码匹配**，不是最长前缀匹配（LPM）。输入纯 IP 时按精确 IP 匹配；其他文本才按页面支持的文本规则过滤。
 
-`bmp_route_attributes` 使用 `LEFT JOIN`，因为某些 current route 观测没有可用 `attr_pk`；identity 和 payload 是 current route 的必需对象，因此使用普通 `JOIN`。Withdraw 自身只写历史 event，并在有效 connection/epoch 下删除 current row，不会作为 current row 留在该查询里。
+`bmp_route_attributes` 使用 `LEFT JOIN`，因为某些 current route 观测没有可用 `attr_pk`；identity 和 payload 是 current route 的必需对象，因此使用普通 `JOIN`。Withdraw 在有效 connection/epoch 下删除 current row，不保留历史 event，也不会作为 current row 留在该查询里。
 
 ### 0.7 SQL 行如何组装成页面路由
 
 SQL 查出一个展开行后，`buildStoredRouteProjection()` 按以下顺序组装路由：
 
 ```text
-1. identity 列 + nlri_json
-   -> afi, safi, ip, mask, rd, pathId, nlriDetail, routeKey，以及 routeType/rawNlri 默认值
+1. identity 列 + nlri_flags
+   -> afi, safi, ip, mask, rd, pathId, routeKey；普通 IP NLRI 可由拆列重建
 
 2. payload.route_json 覆盖少量扩展字段
-   -> labels, rdRaw, routeType 覆盖值、Path Marking、routeTlvs、parseStatus ...
+   -> 完整 nlriDetail（如有）、labels, rdRaw, routeType/rawNlri、Path Marking、routeTlvs、parseStatus ...
 
 3. attributes.attr_json 覆盖 BGP Path Attributes
    -> origin, asPath, nextHop, localPref, med, communities, otc, prefixSid ...
@@ -355,18 +356,18 @@ SQL 查出一个展开行后，`buildStoredRouteProjection()` 按以下顺序组
 
 | 返回/页面字段 | 数据来源 | 备注 |
 | --- | --- | --- |
-| `routeKey` | `bmp_route_identities.legacy_route_key` | 详情查询原样回传 |
-| `persistentRouteId` | `bmp_route_identities.route_id` | 稳定 canonical route ID；详情对象保留，普通列表会裁掉 |
+| `routeKey` | `bmp_route_identities.legacy_route_key` | 页面行键、事件匹配和详情查询原样回传 |
+| `persistentRouteId` | `bmp_route_identities.route_id` | 内部稳定 canonical route ID；详情对象保留，普通列表会裁掉 |
 | `persistentScopeId` | `bmp_rib_scopes.scope_id`（经 current `scope_pk` 关联） | 页面查询的逻辑 RIB 主键；详情对象保留 |
 | `persistentSourceId` | `bmp_sources.source_id`（经 scope 的 `source_pk` 关联） | 稳定上报源 ID |
 | `persistentConnectionId` | `bmp_connections.connection_id`（经 current `connection_pk` 关联） | 该 current 版本来自的连接 ID |
 | `afi` / `safi` | `bmp_route_identities` | 同时用于分区校验 |
 | `ip` / `mask` | `prefix` / `prefix_length` | 复杂 NLRI 可能为 `NULL` |
 | `rd` / `pathId` | `bmp_route_identities` | 属于 canonical route identity |
-| `rdRaw` | `nlri_json`，可由 `route_json` 覆盖 | 保留无法规范化成普通 RD 文本的原始值 |
-| `nlriDetail` | `bmp_route_identities.nlri_json` | EVPN、MVPN、BGP-LS 等详细结构 |
+| `rdRaw` | `route_json.rdRaw` 或其中 `nlriDetail.rdRaw` | 保留原始 RD 编码 |
+| `nlriDetail` | `bmp_route_payloads.route_json.nlriDetail`；普通 IP 由 identity 列及 `nlri_flags` 重建 | EVPN、MVPN、BGP-LS 等完整结构及非键注解属于当前路径，不跨 peer/stage 串用 |
 | `origin` / `asPath` / `nextHop` / `localPref` / `med` / `communities` | `bmp_route_attributes.attr_json` | 同一组属性跨路由共享 |
-| `routeType` / `rawNlri` | `bmp_route_identities.nlri_json` | 先作为 identity/NLRI 默认展示值；payload 如有同名值可覆盖 |
+| `routeType` / `rawNlri` | `bmp_route_payloads.route_json.nlriDetail` 或 payload 顶层字段 | 当前路径的 NLRI 类型/原始字节 |
 | `labels` / Path Marking / `routeTlvs` / parser 状态 | `bmp_route_payloads.route_json` | 只保存不能从 identity/attributes/state 重建的扩展字段 |
 | `ribType` / Peer / VRF | `bmp_rib_scopes` | 同一物理 Peer 的 Pre/Post 阶段是不同 scope |
 | `routeState` | current row + scope 动态计算 | 不只看 `explicit_state` |
@@ -430,11 +431,23 @@ Session/Loc-RIB **列表**不会把这个对象的所有字段发给表格；Wor
 | --- | --- | --- | --- |
 | Session 路由列表 | `scope_id + state + prefix + page` | 已知 scope，只访问 1 张 | 裁剪后的列表字段 + scope 摘要 |
 | Loc-RIB 路由列表 | `scope_id + state + prefix + page` | 已知 scope，只访问 1 张 loc-rib 分区 | 裁剪后的列表字段 + scope 摘要 |
-| 路由详情 | `scope_id + legacy_route_key` | 只访问 scope 所在的 1 张 | 完整组装对象；没有单独的 detail 表 |
+| 路由详情 | `source_id + scope_id + routeKey` | 只访问 scope 所在的 1 张 | 完整组装对象；没有单独的 detail 表 |
 | Route Lens | IP/CIDR/NLRI 查询 + state | 按 AFI/SAFI 剪枝；文本 NLRI 查询可能跨多分区 | 将同一查询的路由按五个 RIB stage 分组 |
 | Route Assurance | 全量 current 快照 + 页面筛选 | 可跨多分区分页扫描 | 五阶段漏斗和异常候选 |
 
-路由详情与列表复用同一套组装逻辑。详情查询只是把 `routeState` 设为 `all`，加上 `legacy_route_key` 精确条件并限制 `pageSize = 1`。
+路由详情与列表复用同一套组装逻辑。详情查询把 `routeState` 设为 `all`，在已校验的 source 和 scope 内按列表返回的 `routeKey` 精确匹配，并限制 `pageSize = 1`。页面、IPC 和外部 API 不需要额外的 route ID 参数。
+
+`routeKey` 表达完整 NLRI 身份，页面只负责原样回传：
+
+- 普通 IP：`pathId|RD|networkPrefix|prefixLength`，例如 `0|0:0|203.0.113.0|24`。
+- QP：`pathId|RD|qp:AFI:networkPrefix/prefixLength;dqpn=value/bits`。prefix-only 使用 `dqpn=absent`；显式零值使用 `dqpn=0/0`。相同前缀、不同 DQPN 值或位数有不同 key。
+- EVPN、FlowSpec、BGP-LS 等复杂 NLRI：`pathId|RD|AFI:SAFI:kind:canonicalNLRI`，最后一段包含完整 canonical NLRI 结构；内部 `|` 转义，避免分隔歧义。EVPN RT2 的标签、RT5 的网关等非身份载荷变化不会改变 key。
+
+详情调用若只提供路由对象而没有 `routeKey`，服务端使用其地址族和完整 NLRI 生成同一 key；复杂地址族缺少 NLRI 时明确报错，不用展示前缀猜测。64 字符数据库 ID 不作为 `routeKey` 的别名。
+
+CLI 仍使用原来的 `route-key` 参数；复杂 key 含 JSON 双引号时，将整个 key 放在单引号内原样传入，避免命令分词改变其中的引号。
+
+HTTP `routeKey` 长度上限为 256 KiB，容纳完整 raw NLRI 的十六进制 key；超过上限的输入在数据库查询前拒绝。仅 `/api/v1/bmp/routes/detail`、`/api/v1/bmp/instances/routes/detail` 和 `/api/v1/bmp/persistence/routes` 使用 512 KiB 请求体额度，其余 API 保持原 64 KiB 上限。
 
 数据库只保存 current 投影：成功 withdraw/purge 且未重新宣告的路由会从分区表删除，之后没有任何页面或 API 能再查到它。v11 起没有路由事件表，也没有“路由轨迹/事件轨迹”功能。
 
@@ -450,48 +463,51 @@ Session/Loc-RIB **列表**不会把这个对象的所有字段发给表格；Wor
 
 SQLite 是 BMP RIB 的权威数据源，不是可选的历史副本。
 
-- 完整 current RIB、路由事件和 Statistics Report 保存在 SQLite。
+- 完整 current RIB 和 Statistics Report 保存在 SQLite；不保留路由事件历史。
 - 内存只保留在线连接、协议解析上下文、scope 元数据、少量摘要和页面增量状态。
 - BGP Session、Loc-RIB Instance 和路由页面可在 BMP Worker 重启后从 SQLite 恢复。
 - 数据库无法打开或 Writer 失败时，BMP 会 fail-closed，暂停继续接收数据，避免内存状态领先于数据库。
 
 数据库基本信息：
 
-| 项目 | schema v13 的值 |
+| 项目 | schema v14 的值 |
 | --- | --- |
 | 数据库文件 | 每个 client 一个 `userData/bmp/bmp.sqlite3.clients/<source_id>.sqlite3` |
-| Schema version | `13`，保存在 `PRAGMA user_version` |
-| 稳定键 schema version | `2`（固定顺序的规范化字符串哈希，见 7.1） |
+| Schema version | `14`，保存在 `PRAGMA user_version` |
+| 稳定键 schema version | `3`（source/scope/route 一起升版；固定顺序的规范化字符串哈希及 EVPN RFC 键字段，见 7.1） |
 | 稳定键算法 | SHA-256 |
 | Journal 模式 | WAL |
 | 外键 | DDL 中声明，但连接上 `foreign_keys = OFF`（引用完整性由 Writer 保证；`PRAGMA foreign_key_check` 仍可校验） |
-| 同步级别 | `synchronous = OFF`（进程崩溃不丢数据；操作系统崩溃/断电可能丢最近几秒写入，库损坏时启动自动重建） |
+| 同步级别 | `synchronous = NORMAL`（WAL 下保持数据库一致性；操作系统崩溃/断电仍可能丢失最近已提交事务，需设备重新上报） |
 | Busy timeout | 5000 ms |
 | 临时存储 | MEMORY |
 | Writer 页缓存 | 64 MiB（`cache_size = -65536`） |
 | Reader mmap | 256 MiB（`mmap_size`，只读连接） |
-| WAL 自动 checkpoint | 2000 页 |
+| WAL 自动 checkpoint | 每 client 预算 256 MiB；按实际 `page_size` 换算页数，默认 4 KiB 页为 65,536 页 |
 
 WAL 模式运行时，数据库目录还可能存在：
 
 - `<source_id>.sqlite3-wal`：该 client 尚未 checkpoint 回主文件的已提交 WAL 页面。
 - `<source_id>.sqlite3-shm`：该 client 的 WAL 共享内存索引。
 
-## 2. Schema v13 的核心变化
+256 MiB 是自动 passive checkpoint 的触发预算，不是 WAL 文件硬上限。长读事务可 pin 住旧 WAL 页面，导致 checkpoint 无法回收全部页面；WAL 文件也可能保留已复用的空间。`NORMAL` 不在每次提交时同步 WAL，而在 checkpoint 等边界同步；正常停止另执行 passive checkpoint，不能将这项设置解释为断电后最近提交绝不丢失。
 
-v10~v13 保留 v9 的固定分区和全局对象去重，重点是为“大量邻居同时全表上报”这类写入场景瘦身：
+## 2. Schema v14 的核心变化
+
+v10~v14 保留 v9 的固定分区和库内全局对象去重，重点是为“大量邻居同时全表上报”这类写入场景瘦身并保持路径隔离：
 
 1. current route 固定拆成 `2 × 18 = 36` 张物理分区表（同 v9）。
 2. Route identity/NLRI、扩展展示 payload 和 path attributes 分开全局去重，分区表只保留当前路径状态和外键（同 v9）。
 3. `bmp_sources`、`bmp_connections`、`bmp_rib_scopes`、`bmp_route_attributes` 改为 rowid 表并暴露整数代理键 `source_pk`、`connection_pk`、`scope_pk`、`attr_pk`；current 分区和 `bmp_scope_route_counts` 只引用这些整数键，hex/UUID ID 仅在维表出现一次。
-4. 取消 `current_ref_count` / `event_ref_count` 和维护它们的 trigger。identity、payload、attributes 的回收改为“候选驱动”：删除或替换 current row 时把旧引用键记入临时候选表，sweep/清理/删除 Source 时用反连接删除已无任何引用的候选。写入热路径不再为 GC 付出任何额外 UPDATE。
+4. 取消 `current_ref_count` / `event_ref_count` 和维护它们的 trigger。identity、payload、attributes 的回收改为“候选驱动”：删除或替换 current row 时把旧引用键记入持久表 `main.bmp_gc_candidates`，与对应修改在同一事务提交；sweep/清理/删除 Source 时用反连接删除已无任何引用的候选。写入热路径不再更新每个对象的引用计数。
 5. **v11 删除了路由事件表 `bmp_route_events` 和整个路由历史/事件轨迹功能。** 数据库只保存 current RIB 投影和 Statistics Report；重放去重改由 `bmp_connections.last_sequence` 承担，current 行的版本保护改用 mutation 序号 `last_sequence`。
 6. current 分区从 6 个二级索引精简到 5 个；`bmp_route_identities` 去掉冗余的 `route_key_json` 列和一个前缀索引。
 7. Scope route counters 仍由 trigger 在事务内维护（同 v9）。
 8. **v13** 稳定键算法升为 v2：`route_id` / `scope_id` 哈希固定顺序的规范化字符串而不是排序 JSON（见 7.1）；同一路由的判定语义不变，键值不同。同时 bmpWorker 侧按邻居缓存 scope 描述符、按属性对象缓存 attr JSON/哈希、按文本缓存前缀归一化，并在批次传输时只发送一份 source/scope/connection 描述符。
 9. **v12** 去掉 `bmp_route_identities.route_identity_json`（碰撞检测只依赖 SHA-256），普通 IP 前缀的 `nlri_json` 不再落库（`nlri_json = NULL`，`nlri_flags` 记录可选键，读取时由拆列重建完全相同的对象）。
-10. **写入攒批**：一个批次内所有 identity / payload / attribute 先各用一条多行 `INSERT OR IGNORE`（每 250 行一条）写入，再用一条 `SELECT … IN (...)` 取回主键；不再对每条路由做带 `RETURNING` 的 upsert。分析未开启时 announce 也不再读取旧行的完整投影，只探测被替换的 payload/attr 主键用于回收。
-11. 版本不匹配时不迁移：Writer 打开数据库发现 `user_version` 不等于 13（更旧、更新、或未版本化但非空），会删除全部已有对象并重建空库。
+10. **写入攒批**：一个批次内 identity / payload / attribute 各按每 250 行批量预取已有主键，仅对缺失对象做多行 INSERT 并 RETURNING；不再对每条路由做单独维表 upsert。分析未开启时 announce 也不再读取旧行的完整投影，只探测被替换的 payload/attr 主键用于回收。
+11. **v14** 稳定键升为 v3，EVPN RT1–RT5 按 RFC 路由键字段生成 identity；完整 NLRI 的非键字段/解析注解移入当前路径 payload，不再从共享 identity 恢复旧 label、ESI 或 Gateway。对象 GC 候选改为持久表，maintenance 每次只处理有界工作集，重开 Writer 不丢未处理候选。
+12. 版本不匹配时不迁移：Writer 打开数据库发现 `user_version` 不等于 14（更旧、更新、或未版本化但非空），会删除全部已有对象并重建空库；read-only 连接拒绝不兼容版本。
 
 以 20 个邻居 × 2 万条路由的本机基准计，v10 相比 v9 写入吞吐约 2 倍（6.0k → 11.6k routes/s），数据库体积约 1/3（1010 MB → 351 MB）；v11 去掉事件表后见第 10 节的数据。
 
@@ -508,6 +524,7 @@ v10~v13 保留 v9 的固定分区和全局对象去重，重点是为“大量�
 | `bmp_route_attributes` | 全局去重的 BGP Path Attributes |
 | `bmp_route_identities` | 全局去重的 canonical NLRI identity |
 | `bmp_route_payloads` | 全局去重的 route 扩展展示字段 JSON；普通路由可以共享 `{}` |
+| `bmp_gc_candidates` | 与释放引用的事务一起提交的待检查对象键；跨 Writer 重开保留 |
 | `bmp_ingest_batches` | 批量写入幂等记录 |
 | `bmp_statistics_samples` | Statistics Report 历史样本 |
 | `bmp_statistics_latest` | 每个逻辑 Statistics Report 的最新样本投影 |
@@ -561,7 +578,7 @@ SQLite 还会自动创建 `sqlite_sequence`，用于记录 `bmp_statistics_sampl
 
 ### 4.2 地址族和 partition ID
 
-下表中的 `familyId`、family key 和 token 都是代码 manifest 元数据，不是 SQLite 表字段；真正持久化到 scope、current row 和 event 的只有 `partition_id`。表名也只由 manifest 在应用内解析。
+下表中的 `familyId`、family key 和 token 都是代码 manifest 元数据，不是 SQLite 表字段；真正持久化到 scope 和 current row 的只有 `partition_id`。表名也只由 manifest 在应用内解析。
 
 | `familyId` | family key | token | AFI | SAFI | peer partition | loc-rib partition |
 | ---: | --- | --- | ---: | ---: | ---: | ---: |
@@ -590,7 +607,7 @@ SQLite 还会自动创建 `sqlite_sequence`，用于记录 `bmp_statistics_sampl
 - Loc-RIB EVPN：`bmp_current_routes_loc_rib_l2vpn_evpn`
 - Peer 未知地址族：`bmp_current_routes_peer_other`
 
-`familyId` 是 manifest 中显式固定且全局唯一的稳定编号，不依赖数组顺序。当前 `partition_id` 按 `100 + familyId`（peer）或 `200 + familyId`（loc-rib）生成，并同时持久化在 scope、current route 和带 scope 的 event 中。已发布的 `familyId` 不得重编号或复用；不要从数组位置或外部输入自行推导分区，应始终使用 manifest。
+`familyId` 是 manifest 中显式固定且全局唯一的稳定编号，不依赖数组顺序。当前 `partition_id` 按 `100 + familyId`（peer）或 `200 + familyId`（loc-rib）生成，并同时持久化在 scope 和 current route 中。已发布的 `familyId` 不得重编号或复用；不要从数组位置或外部输入自行推导分区，应始终使用 manifest。
 
 ### 4.3 `other` 分区
 
@@ -686,7 +703,7 @@ DDL 里的两条 `ON DELETE CASCADE` 和其他 FK 都只是声明：Writer 连�
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `source_pk` | INTEGER PK | 数据库内部整数键；connections、scopes、events 引用它 |
+| `source_pk` | INTEGER PK | 数据库内部整数键；connections、scopes 引用它 |
 | `source_id` | TEXT NOT NULL UNIQUE | 规范化 source identity 的 SHA-256 十六进制值；对外稳定 ID |
 | `source_key_json` | TEXT NOT NULL | 键版本、算法和 keyHex |
 | `source_identity_json` | TEXT NOT NULL | 生成 source ID 的规范化身份 |
@@ -705,7 +722,7 @@ DDL 里的两条 `ON DELETE CASCADE` 和其他 FK 都只是声明：Writer 连�
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `connection_pk` | INTEGER PK | 数据库内部整数键；scopes、current 分区、counters、events 引用它 |
+| `connection_pk` | INTEGER PK | 数据库内部整数键；scopes、current 分区、counters 引用它 |
 | `connection_id` | TEXT NOT NULL UNIQUE | 单次 TCP/BMP 连接的全库 ID（UUID） |
 | `source_pk` | INTEGER NOT NULL，FK | 所属稳定 source，关联 `bmp_sources.source_pk` |
 | `connection_generation` | INTEGER NOT NULL | 应用生成的连接代次，用于新连接接管旧 scope |
@@ -741,7 +758,7 @@ source
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `scope_pk` | INTEGER PK | 数据库内部整数键；current 分区、counters、events 引用它 |
+| `scope_pk` | INTEGER PK | 数据库内部整数键；current 分区、counters 引用它 |
 | `scope_id` | TEXT NOT NULL UNIQUE | 规范化 scope identity 的 SHA-256；对外稳定 ID |
 | `source_pk` | INTEGER NOT NULL，FK | 所属 source |
 | `partition_id` | INTEGER NOT NULL | manifest 中的固定物理分区 ID |
@@ -781,7 +798,7 @@ Peer scope 的 `rib_type` 应用约定如下；Loc-RIB 是独立的 RIB 视图�
 
 `rib_type` 决定一个 peer scope 是哪个 RIB stage，但**不决定物理表**；物理表只由 `scope_kind + AFI + SAFI` 经 manifest 决定。因此同一 AF 的 Pre-In/Post-In/Pre-Out/Post-Out scope 会落在同一张 peer 分区表，用不同 `scope_id` 区分。
 
-旧版本可能留下 `rib_type = '3'`。这是历史实现曾把 BMP Peer Header 的 `A` flag 错当成独立 RIB stage 的兼容数据；它不是标准 RIB 阶段。按 RFC 7854，`A` 只说明 UPDATE 使用 legacy 2-byte 还是 4-byte `AS_PATH` 编码，与 `L`（Pre/Post-policy）及 RFC 8671 的 `O`（Adj-RIB-In/Out）正交。当前摄入只由 `L + O` 生成 `1/2/4/5`，历史页可以只读展示值 `3`，但不会把它放入标准 RIB 阶段筛选项。
+按 RFC 7854，BMP Peer Header 的 `A` 位只说明 UPDATE 使用 legacy 2-byte 还是 4-byte `AS_PATH` 编码，与 `L`（Pre/Post-policy）及 RFC 8671 的 `O`（Adj-RIB-In/Out）正交；它不是独立 RIB stage。Peer 摄入只由 `L + O` 生成 `1/2/4/5`，Loc-RIB 单独按其协议规则解析。
 
 DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_state` 状态机由应用写入逻辑保证，表本身没有对应枚举 CHECK。
 
@@ -793,10 +810,10 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `route_pk` | INTEGER PK | 数据库内部短键，供分区和 event 引用 |
+| `route_pk` | INTEGER PK | 数据库内部短键，供 current 分区引用 |
 | `route_id` | TEXT NOT NULL UNIQUE | Canonical route identity 的稳定 SHA-256 ID |
 | `route_key_version` | INTEGER NOT NULL | Route key schema version |
-| `legacy_route_key` | TEXT NULL | 兼容页面/API 的旧 route key |
+| `legacy_route_key` | TEXT NULL | 完整 NLRI lookup key；列名沿用现有结构，不表示旧 key 兼容 |
 | `afi` | INTEGER NOT NULL | Address Family Identifier，也是分区验证依据 |
 | `safi` | INTEGER NOT NULL | Subsequent Address Family Identifier，也是分区验证依据 |
 | `path_id` | INTEGER NOT NULL | ADD-PATH Path Identifier |
@@ -804,27 +821,39 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 | `prefix` | TEXT NULL | 可索引的 IP 前缀或 parser 生成的复杂 NLRI 语义标识 |
 | `prefix_length` | INTEGER NULL | IP 时是前缀长度；复杂 NLRI 时可能是协议编码长度，不能当作 CIDR Mask |
 | `nlri_kind` | TEXT NULL | `ip-prefix`、`vpn-prefix`、`evpn`、`raw-nlri` 等 |
-| `nlri_json` | TEXT NULL | 完整解析后的 NLRI；普通 IP 前缀（detail 只含 `pathId/prefix/length/rd/valid` 且与拆列一致）为 `NULL` |
+| `nlri_json` | TEXT NULL | 当前摄入写 `NULL`；完整路径 NLRI 放入 payload 的 `nlriDetail`，普通 IP 则由拆列重建 |
 | `nlri_flags` | INTEGER NOT NULL，DEFAULT `0` | `nlri_json` 为 `NULL` 时记录可选键：bit0 = `valid: true`，bit1 = 含 `rd` |
 | `first_seen_ms` | INTEGER NOT NULL | Identity 首次使用时间 |
 | `last_seen_ms` | INTEGER NOT NULL | Identity 最近使用时间；仅供诊断，不再参与 GC |
 
 页面返回的 `canonicalRouteKey`（`{schemaVersion, algorithm, keyHex}`）由 `route_key_version` 和 `route_id` 在读取时重建，不再单独存 `route_key_json`。
 
-普通 IP 的 `prefix` 在新写入时会按地址族和 `prefix_length` 规范化为网络地址文本，避免等价 IPv6
-因为零段压缩方式不同而精确查询漏项。历史查询仍会同时生成旧 v9 BMP 解析器使用的 IPv6 文本候选，
-因此升级前已经保留的 identity 不需要重建数据库才能被搜索到。
+普通 IP 的 `prefix` 按地址族和 `prefix_length` 规范化为网络地址文本，避免等价 IPv6 因零段压缩方式不同而精确查询漏项。旧 schema 不在当前版本内迁移或兼容（见第 16 节）。
 
-`route_id` 的 canonical identity 包含 AFI、SAFI、ADD-PATH `path_id` 和规范化 NLRI。v13 起哈希输入是一条固定顺序的规范化字符串（`bmp-route|2|afi|safi|pathId|kind|…`，字段间用 U+001F 分隔）：IP/VPN/QP 前缀用网络地址 hex + 长度（VPN 另加规范化 RD），FlowSpec / BGP-LS / MVPN 等带原始字节的 NLRI 用 `routeType|rd|rawNlriHex`，EVPN 和其他结构化 NLRI 仍用解析字段（排除 label/VNI、path attribute 和展示字段）的排序 JSON。同一条路由从不同邻居、不同表示形式到达得到同一个 `route_id` 的语义与 v1 完全一致，只是哈希值不同。同一个 `route_id` 在多个 peer、RIB stage 或 Loc-RIB 中出现时只保存一份 identity/NLRI JSON；相同前缀但 `path_id` 不同则是不同 identity。
+`route_id` 的 canonical identity 包含 AFI、SAFI、ADD-PATH `path_id` 和规范化 NLRI。当前哈希输入是一条固定顺序的规范化字符串（`bmp-route|3|afi|safi|pathId|kind|…`，字段间用 U+001F 分隔）：IP/VPN/QP 前缀用网络地址 hex + 长度（VPN 另加规范化 RD），FlowSpec / BGP-LS / MVPN 等带原始字节的 NLRI 用 `routeType|rd|rawNlriHex`，EVPN 和其他结构化 NLRI 用规范字段的排序 JSON。同一个 canonical route 在多个 peer、RIB stage 或 Loc-RIB 中复用 identity；相同前缀但 `path_id` 不同则是不同 identity。v3 同时用于 source、scope 的键域，三类 ID 的哈希值均不同于旧版本，不承诺跨键版本复用。
+
+QP NLRI 可以只携带前缀、没有 DQPN TLV；其 canonical identity 将 `dqpn/dqpnBits` 明确记为 `null/null`，与显式编码的 `0/0` 区分，允许两条路径分别保存和撤销。携带 DQPN 时，数值与位长必须同时存在并通过支持范围校验。
+
+EVPN RT1–RT5 的键字段按 RFC 7432 和 RFC 9136 区分：
+
+| Route Type | NLRI 键字段（此外共同包含 AFI/SAFI、Path ID） | 不参与路由键的路径字段 |
+| --- | --- | --- |
+| RT1 Ethernet Auto-Discovery | RD、ESI、Ethernet Tag ID | Label |
+| RT2 MAC/IP Advertisement | RD、Ethernet Tag ID、MAC 长度/地址、IP 长度/地址 | ESI、一个或两个 Label、编码长度 |
+| RT3 Inclusive Multicast | RD、Ethernet Tag ID、Originating Router IP 长度/地址 | 由 path attributes 补充的 Label/PMSI/封装信息 |
+| RT4 Ethernet Segment | RD、ESI、Originating Router IP 长度/地址 | 展示/解析注解 |
+| RT5 IP Prefix | RD、Ethernet Tag ID、IP Prefix 长度和规范化网络地址 | ESI、Gateway IP、Label、编码长度 |
+
+不能统一从所有 EVPN route type 删除 ESI：RT1/RT4 的 ESI 是键，RT2/RT5 的 ESI 不是键。非键字段、原始编码、Label、warnings 等保存在每条路径的 payload `nlriDetail`；它们变化时更新当前路径，不新增 canonical route identity，也不会覆盖其他 scope 的路径详情。
 
 索引：
 
 - `(prefix, prefix_length, route_pk)`：精确前缀/前缀范围反查；AFI/SAFI 由展开行或分区选择过滤，不再单独维护带 AFI/SAFI 前导列的第二个前缀索引。
-- `(legacy_route_key, route_pk)`：旧 route key 查询。
+- `(legacy_route_key, route_pk)`：当前完整 routeKey 查询，结合 source 和 scope 唯一定位路由。
 
 ### 7.2 `bmp_route_payloads`
 
-该表不是完整 route snapshot，只保存不属于 identity/NLRI、Path Attributes 或 current-state 的扩展展示字段。写入前会删除 route key、AFI/SAFI、prefix、RD、path ID、`nlriDetail` 等 identity 字段，删除可从 `bmp_route_attributes` 取得的属性字段，删除 route state、epoch 和 stale 时间等 current-state 字段，并省略空值、空集合及可重建的默认值。
+该表不是完整 route snapshot，只保存路径 NLRI 详情和无法从 identity、Path Attributes 或 current-state 重建的扩展字段。写入前删除 route key、AFI/SAFI、prefix、RD、path ID 等可重建顶层字段，删除可从 `bmp_route_attributes` 取得的属性字段，删除 route state、epoch 和 stale 时间等 current-state 字段，并省略空值、空集合及可重建的默认值。完整复杂 NLRI 及非键注解保留在 `nlriDetail`；只有普通 IP NLRI 的内容与 identity 拆列完全一致时才省略它。
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
@@ -834,7 +863,7 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 | `first_seen_ms` | INTEGER NOT NULL | Payload 首次使用时间 |
 | `last_seen_ms` | INTEGER NOT NULL | Payload 最近使用时间 |
 
-内容相同的 payload 在不同 route identity、scope、刷新和 event 之间共享一行。普通 IP prefix 路由如果没有额外展示字段，payload 就是 `{}`；所有这类 current row 和 route event 可以引用同一个 `payload_id`。
+内容相同的 payload 在不同 route identity、scope 和刷新之间共享一行。普通 IP prefix 路由如果没有额外展示字段，payload 就是 `{}`；所有这类 current row 可以引用同一个 `payload_id`。相同 canonical NLRI 在不同 peer/stage 上的 Label、Gateway、ESI 或解析注解不同时，分别引用不同 payload。
 
 ### 7.3 `bmp_route_attributes`
 
@@ -842,7 +871,7 @@ DDL 只对 `scope_kind` 声明枚举 `CHECK`。上述 `rib_type` 值和 `scope_s
 
 | 字段 | 类型和约束 | 说明 |
 | --- | --- | --- |
-| `attr_pk` | INTEGER PK | 数据库内部整数键；current 分区和 events 引用它 |
+| `attr_pk` | INTEGER PK | 数据库内部整数键；current 分区引用它 |
 | `attr_id` | TEXT NOT NULL UNIQUE | Canonical attribute JSON 的 SHA-256 ID |
 | `attr_json` | TEXT NOT NULL | 去重后的属性 JSON |
 | `first_seen_ms` | INTEGER NOT NULL | Attribute 首次使用时间 |
@@ -852,18 +881,18 @@ Identity、payload 和 attributes 分离后，route 更新属性时无需复制 
 
 当前 canonical `attr_json` 由应用写入的顶层字段是 `origin`、`asPath`、`med`、`localPref`、`communities`、`otc`、`nextHop` 和 `prefixSid`。这些是 JSON 内部字段，不是 SQLite 独立列；按 Next Hop 或 AS Path 搜索时需要解析/搜索 `attr_json`，页面读取则一次解析后覆盖到路由投影。
 
-读取 current route 或 route event 时，应用按以下来源重建 route 投影：
+读取 current route 时，应用按以下来源重建 route 投影：
 
-1. `bmp_route_identities` 的 AFI/SAFI、prefix、RD、path ID 和 `nlri_json` 构造 identity/NLRI 基础字段及默认展示值，`nlri_json` 恢复为 `nlriDetail`。
-2. `bmp_route_payloads.route_json` 叠加少量扩展展示字段；`{}` 不影响基础投影。
+1. `bmp_route_identities` 的 AFI/SAFI、prefix、RD、path ID 构造基础字段；普通 IP 的 NLRI 由拆列和 `nlri_flags` 重建。
+2. `bmp_route_payloads.route_json.nlriDetail` 提供当前路径的完整 NLRI，其他 payload 字段叠加扩展展示值；`{}` 不影响基础投影。
 3. `bmp_route_attributes.attr_json` 叠加 canonical BGP Path Attributes，再由关联到的 `bmp_route_attributes.attr_id` 恢复 `attrId`。
-4. Current-route 查询再从物理分区、scope 和 connection 补充 `routeState`、epoch、stale 原因和观察时间；event 查询则在 route 投影之外返回事件元数据。
+4. 从物理分区、scope 和 connection 补充 `routeState`、epoch、stale 原因和观察时间。
 
 ### 7.4 对象回收（候选驱动 GC）
 
 v10 起不再维护引用计数。identity、payload 和 attributes 的生命周期规则是：**只要还有任何 current row 引用它，就保留；否则可以删除。**
 
-删除或替换 current row 是唯一会让对象失去引用的途径，所以回收由这些操作驱动：
+回收由释放或未建立 current 引用的操作驱动：
 
 | 动作 | 记录的候选 |
 | --- | --- |
@@ -871,18 +900,23 @@ v10 起不再维护引用计数。identity、payload 和 attributes 的生命周
 | Announce 替换了已有 current row 的 payload/attribute | 旧的 `payload_id`、`attr_pk` |
 | Sweep 删除旧 epoch/旧连接/过期 stale 的 current row | 被删 current row 的 `route_pk`、`payload_id`、`attr_pk` |
 | 手动清理 stale 路由、删除 Source | 同上 |
+| 路由对象预填充后 mutation 被序号、connection 或 epoch 守卫拒绝 | 未成为 current 引用的预填充对象键 |
 
-候选先写入 Writer 连接的临时表 `temp.bmp_gc_candidates(kind, pk)`，然后在同一事务末尾执行三条反连接删除，例如：
+候选先写入持久表 `main.bmp_gc_candidates(kind, pk)`，与释放/拒绝引用的 mutation 在同一事务提交。`kind` 为 1（identity）、2（payload）或 3（attribute），`pk` 为对应对象的整数主键；复合主键 `(kind, pk)` 自动去重，不保存完整路由。
+
+maintenance 在事务内按 `kind, pk` 取最多 `auxiliaryLimit` 条候选放入 `temp.bmp_gc_work`，再执行三条反连接删除，例如：
 
 ```sql
 DELETE FROM bmp_route_attributes
- WHERE attr_pk IN (SELECT pk FROM temp.bmp_gc_candidates WHERE kind = 3)
+ WHERE attr_pk IN (SELECT pk FROM temp.bmp_gc_work WHERE kind = 3)
    AND NOT EXISTS (SELECT 1 FROM bmp_current_route_refs c WHERE c.attr_pk = bmp_route_attributes.attr_pk);
 ```
 
 反连接走每张分区的 `attr` / `payload` / `route` 索引，因此代价与候选数成正比，而不是与全表大小成正比。
 
-Announce/withdraw 的热路径只把键写入临时候选表，不执行反连接；真正的删除只在周期性 maintenance sweep、手动清理 stale 路由和删除 Source 时进行。候选表随 Writer 连接存在，重启后丢失的候选不会造成错误，只是对应对象要等到下一次被引用后再释放时才会被回收。
+Announce/withdraw 的热路径只把键写入持久候选表，不执行反连接；真正的删除在 maintenance sweep、手动清理 stale 路由和删除 Source 时进行。已检查的候选从主表删除，临时工作表随后清空；仍被任何 current row 引用的对象保留，将来再次释放引用时会重新登记候选。候选与对象删除在同一事务内处理，失败会一起回滚。
+
+maintenance 的 `auxiliaryLimit` 默认 5000、上限 50000，每次只检查该有界工作集；未处理候选留在主表，`hasMore` 促使后续维护继续。Writer 关闭、缓存驱逐或 collector 重启不丢候选。手动删除和单 client 清空仍在其事务内执行所需 GC，不受 maintenance 单次工作集的说明替代。
 
 ## 8. Current-route 分区表
 
@@ -914,7 +948,7 @@ UNIQUE(scope_pk, route_pk)
 
 当前 Writer 在 announce/replace/refresh upsert 时会把 `explicit_state` 写回 `active`。常见的 stale 并不是逐行把该列改成 `stale`，而是由 scope state、连接接管和 epoch 动态推导；这个字段仍保留在状态公式和 counter key 中，但不要把它误认为页面 `routeState` 的唯一来源。
 
-`(scope_pk, partition_id)` 对 scope 使用 `ON DELETE CASCADE`。删除一个 scope 会自动删除它在所属 current 分区中的行，并由分区 delete trigger 同步减少 counter。
+`(scope_pk, partition_id)` 对 scope 声明 `ON DELETE CASCADE`，但 Writer 的 `foreign_keys = OFF` 不执行该级联。应用删除 scope/source 前显式删除所属 current 分区行，分区 delete trigger 同步减少 counter。
 
 每张分区有五个二级索引：
 
@@ -1059,8 +1093,8 @@ SQLite Writer transaction
    ├─ source / connection upsert
    ├─ 解析 manifest 并 upsert scope.partition_id
    ├─ 拆分并 upsert 全局 route 对象
-   │    ├─ identity + nlri_json
-   │    ├─ 扩展展示 payload（普通路由可为 {}）
+   │    ├─ canonical identity（普通 IP NLRI 可由拆列重建）
+   │    ├─ 每路径 NLRI 详情及扩展 payload（普通路由可为 {}）
    │    └─ path attributes
    ├─ 用 connection.last_sequence 判定重放
    ├─ upsert/delete 一张 current-route 分区
@@ -1140,9 +1174,35 @@ node scripts/benchmarks/compare_bmp_repeated_ingest_benchmarks.js \
 
 这是 TCP 接收到落库的端到端结果，不是 SQL 微基准，也不包含 UI 或 Route Assurance 分析耗时。百万次 NLRI 解析、路由键生成、消息传输和逐行观察元数据持久化仍然存在，因此不代表重复上报可以完全跳过处理。EVPN、IPv4/IPv6 FlowSpec 的快路径与语义变化回退由 `test/ci/bmp_non_ip_bulk_refresh.js` 另行验证；未知 AF/SAFI 保留 raw NLRI，不宣称已经解析 VPN FlowSpec。
 
+### 13.1.2 协议与存储安全修复的百万路由门禁
+
+2026-10-03 在同一 Apple M4 Pro / macOS arm64 / Electron 22.3.27 上，将基线提交 `96fa271` 与本轮协议/存储安全修复比较。两边使用同一份合法 mock 报文（Sent OPEN 在 Received OPEN 前，BMP A=0 的 AS_PATH 为四字节 ASN），并校验报文字节 SHA-256、配置、基准脚本和运行时一致。每种 scope 100 万条路由，各执行 3 轮独立新库，以下为中位数：
+
+| Scope | 上报 | 基线 | 修复后 | 耗时下降 |
+| --- | --- | ---: | ---: | ---: |
+| Peer | 首次 | 22.988 s | 22.278 s | 3.09% |
+| Peer | 重复 | 10.034 s | 9.659 s | 3.74% |
+| Loc-RIB | 首次 | 24.814 s | 23.758 s | 4.26% |
+| Loc-RIB | 重复 | 11.972 s | 11.591 s | 3.18% |
+
+配置为 1 个解析 Worker、1 个 Writer、5000 条攒批、20 ms flush、每 UPDATE 50 条 NLRI、100 组属性，关闭 Route Assurance。计时从 loopback TCP 发送开始，到末尾独特 marker 路由实际提交；报文构造、UI 和 Route Assurance 分析耗时不计入。修复后包含 `WAL + synchronous=NORMAL`、256 MiB 自动 checkpoint 预算、持久 GC 候选、完整 `routeKey` 和协议/路径详情校验，并非单项 SQL 微基准。普通 IP lookup key 直接复用已计算的 canonical prefix；EVPN/结构化 NLRI 复用已排序的 canonical JSON，不新增第二次 hash 或排序。最终三轮测量校验核心源码哈希与交付源码一致。这组结果验证本轮修复在该可重复的百万 IPv4 路由路径中没有性能退化，不外推其他地址族、磁盘或真实设备的具体吞吐。
+
+本轮修复后的最终测量已固定为版本化基线：[bmp_repeated_ingest_1m_m4pro_20261003.json](../scripts/benchmarks/baselines/bmp_repeated_ingest_1m_m4pro_20261003.json)。文件保留全部 12 次首次/重复上报样本、四组中位数、fixture 字节数与 SHA-256、测量配置、硬件/运行时、方法及采集当时的源码指纹，仅移除个人临时数据库目录。源码指纹是历史采集信息，不会为了匹配后续源码而重写。
+
+在同一硬件/运行时、相同 fixture/configuration/基准脚本下复测后，可使用固定入口比较，不需要重新选择基线文件：
+
+```sh
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/benchmarks/bmp_repeated_ingest_benchmark.js \
+  --routes=1000000 --rounds=3 --label=candidate --output=/tmp/bmp-candidate.json
+node scripts/benchmarks/compare_bmp_repeated_ingest_baseline.js \
+  /tmp/bmp-candidate.json /tmp/bmp-baseline-comparison.json
+```
+
+固定入口委托现有比较工具，配置、报文哈希、基准脚本或运行时不一致时拒绝比较。轻量 CI `bmp_repeated_ingest_baseline.js` 只检查历史报告完整性、样本/统计一致性和比较入口，不执行百万压测，也不把四组历史耗时当作跨机器阈值或自行增加百分比门禁。后续实现优化应保留此基线；只有明确变更测量协议、fixture、配置或硬件/运行时时，才重新执行同规格三轮实测、校验源码与采集指纹，并新增带日期的基线及更新入口，不能覆盖旧样本或伪改哈希。
+
 ### 13.2 Withdraw
 
-1. Upsert/定位 route identity 和 payload。
+1. 规范化完整 NLRI，定位已有 route identity 和 current path；未知路由不新增 identity、payload 或 attributes。
 2. 只有 connection 和 epoch 仍有效时，才从目标分区删除 current row。
 3. Trigger 自动减少 scope count；被撤销路由的 identity/payload/attributes 记入 GC 候选，等待下一次 maintenance sweep 回收。
 4. 旧 connection 或错误 epoch 不删除 current row，delta 分类为 `withdraw-noop`。
@@ -1164,7 +1224,7 @@ Peer 和 Loc-RIB 的“清理过期”只作用于选定的 `source_id + scope_i
 手动清理使用 `includeDetails: false` 的轻量路径：
 
 1. 用 `bmp_scope_route_counts` 定位有效状态为 stale 的 connection/epoch/state 桶，而不是每批从 scope 的正常路由头部重新过滤。
-2. 经目标分区的 `scope_epoch` 索引选择窄引用键，放入临时候选表；不读取 payload、属性或 NLRI JSON，不构造逐路由 `routes/deltas`。
+2. 经目标分区的 `scope_epoch` 索引选择窄引用键，放入 `temp.bmp_stale_purge_candidates`；这是本批删除工作集，不是持久对象 GC 候选表。不读取 payload、属性或 NLRI JSON，不构造逐路由 `routes/deltas`。
 3. 在同一事务内重新检查物理路径、引用键和有效 stale 状态，集合式登记 GC 候选、删除 current rows。计数 trigger 仍正常执行，共享 identity/payload/attributes 仍按所有分区的实际引用回收；异常时整个批次回滚。
 4. 只返回删除数量、是否还有候选和受影响的 scopes。每个已提交批次广播 scope 刷新事件；页面通过现有节流刷新读取最新已提交数量。
 
@@ -1208,12 +1268,12 @@ Worker 默认周期性执行小批量 sweep：
 2. 根据 scope 的 `partition_id` 只访问对应 current-route 表。
 3. 分批删除旧 epoch、旧 connection 或超过 stale 保留期的路径。
 4. 清理未被 latest 引用的旧 statistics sample 和旧 ingest batch。
-5. 对累计的候选做反连接删除：仍被任何 current row 引用的候选保留，其余删除（见 7.4）。
+5. 从持久 GC 候选取有界工作集做反连接删除：仍被任何 current row 引用的对象保留，已检查的候选消费完毕，未处理候选继续保留（见 7.4）。
 
 这里有两个不同的时间口径：
 
 - Stale retention 只控制已经 stale/down 的 scope 路径老化；EOR 已确认的旧 epoch 可以立即进入清理，不必再等 24 小时。
-- `eventsBeforeMs`（沿用旧参数名）是未被 latest 引用的 statistics sample 和旧 ingest batch 的清理 cutoff；identity/payload/attributes 没有独立的时间口径，只要失去最后一个引用就会在下一次 maintenance sweep 中被回收。
+- `eventsBeforeMs`（沿用旧参数名）是未被 latest 引用的 statistics sample 和旧 ingest batch 的清理 cutoff；identity/payload/attributes 没有独立的时间口径，失去最后一个引用后由持久候选驱动，在后续有界 maintenance sweep 中回收。
 
 除默认周期 sweep 外，Worker 会为最早的 scope refresh 维护单一 deadline timer；到期清理完成后，按受影响的 `source_id/scope_id` 发送路由刷新事件，使已打开的页面重新查询 SQLite，而不是继续显示清理前的列表缓存。
 
@@ -1236,20 +1296,18 @@ Worker 默认周期性执行小批量 sweep：
 
 数据库重新打开时，遗留 `open` connection 会改为 `closed`，关闭原因为 `collector-restart`；其当前 scope 会进入 `down`。Current rows 不需要批量更新，通过 scope state 自动显示 stale。
 
-## 16. Schema v13 初始化和版本规则
+## 16. Schema v14 初始化和版本规则
 
-v13 不做任何数据迁移。Writer 打开数据库时按 `PRAGMA user_version` 判断：
+v14 不做任何数据迁移，也不维护旧稳定键兼容映射。应用在创建窗口和业务模块之前，统一检查旧共享库及全部 client 库的 `PRAGMA user_version`。这是数据库 schema 版本检查，不是应用版本号检查：
 
-| 情况 | Writer 行为 | Read-only 打开 |
+| 情况 | 应用启动检查 | 离线 Read-only 打开 |
 | --- | --- | --- |
-| `user_version = 13` 且对象完整 | 直接使用 | 直接使用 |
-| `user_version = 13` 但缺表/缺列 | 记录警告，删除全部对象后重建空库 | 报缺失对象错误 |
-| v1 到 v12 | 记录警告，删除全部对象后重建空库，随后 `VACUUM` 回收空间 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
-| `user_version = 0` 但已有业务表、索引、view 或 trigger | 同上 | `BMP_PERSISTENCE_SCHEMA_INCOMPATIBLE` |
-| 高于 v13 | 同上 | `BMP_PERSISTENCE_SCHEMA_TOO_NEW` |
-| 空库 | 初始化 | 报缺失对象错误 |
+| `user_version = 14` | 保留主库和附件 | 对象完整时直接使用；缺表/缺列则报错 |
+| 其它可读取的 `user_version` | 删除该主库及其 `-wal`、`-shm`、`-journal`，不迁移 | 版本不兼容时报错，不创建 Writer |
+| 主库不存在 | 不创建库，也不删除孤立附件 | 无客户端主库时返回数据库不存在 |
+| 无法读取主库版本，或目标不是普通文件 | 明确失败，保留文件，不猜测或递归清理 | 报错，不清理 |
 
-也就是说，BMP 启动后旧版本数据库会被原地清空并重建；SQLite 中的 current route 和 statistics 是 BMP 设备重连后会重新上报的投影，不需要人工干预。重建时先临时关闭 `foreign_keys`，避免 SQLite 在 DROP TABLE 时对旧 schema 做隐式 DELETE 校验，然后在一个事务里按 trigger → view → index → table 的顺序删除全部非内部对象，再执行正常初始化。
+启动检查只因版本不同删除已识别的数据库文件组；同版本不会因应用升级或每次启动而删除。被删除的 client 库在设备重新连接后由 Writer 创建空 v14 库，current route 和 statistics 随 BMP 设备重新上报恢复。没有离线读取触发的写入初始化或数据迁移。
 
 如需保留旧库用于审计，应在升级前停止 BMP 并备份整个 SQLite/WAL 文件组。旧 current route 和 statistics 不会自动导入。
 
@@ -1292,7 +1350,13 @@ SELECT s.scope_id, c.connection_id, count.rib_epoch, count.explicit_state, count
 
 ### 17.4 未被引用对象诊断
 
-正常情况下这三个数字应接近 0；非零表示有对象绕过 Writer 被释放，等待下一次相关删除把它们带成候选，或可人工清理。
+正常情况下这三个数字应接近 0；非零可能是已登记持久候选、等待后续 maintenance 的对象，也可能来自绕过 Writer 的手工操作。可先检查候选数并等待维护，不应仅凭短暂非零判断引用损坏：
+
+```sql
+SELECT kind, COUNT(*) AS pending_candidates
+  FROM bmp_gc_candidates
+ GROUP BY kind;
+```
 
 ```sql
 SELECT 'identity' AS kind, COUNT(*) AS unreferenced
@@ -1340,4 +1404,4 @@ SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及�
 - 最稳妥的离线备份方式是先停止 BMP，让队列 drain 并 checkpoint，再复制整个 `bmp.sqlite3.clients` 分库目录。
 - 大量删除后文件不会自动缩小；`freelist_count` 表示可复用页，是否执行 `VACUUM` 应由运维窗口和可用磁盘空间决定。
 - `bmp_current_routes_all` 是只读统一视图，不应作为写入目标。
-- v13 没有旧 schema 兼容层；Writer 发现某个 client 库的 schema 不匹配会清空并重建该文件，需要保留数据时必须在启动 BMP 之前备份。旧共享 `bmp.sqlite3` 不在此初始化流程中，仍原样保留。
+- v14 没有旧 schema 或旧稳定键兼容层；应用启动统一按 SQLite `user_version` 检查旧共享库与 client 库，同版本保留，不同版本删除主库及三个标准附件，不迁移数据。需要保留旧版本数据时必须在启动应用之前备份；离线查询不会执行清理或升级。

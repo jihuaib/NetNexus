@@ -5,6 +5,7 @@ const WorkerMessageHandler = require('../core/workerMessageHandler');
 const TcpAuthForwardingServer = require('../core/tcpAuthForwardingServer');
 const BmpSession = require('./bmpSession');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
+const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../utils/bmpPersistentRouteKey');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpInstance = require('./bmpBgpInstance');
 const BmpBgpRoute = require('./bmpBgpRoute');
@@ -19,7 +20,8 @@ const {
 const {
     MAX_RESULT_LIMIT: MAX_ROUTE_LENS_RESULT_LIMIT,
     buildBmpRouteLensFromPersistedRoutes,
-    parseRouteLensQuery
+    parseRouteLensQuery,
+    getComplexRouteIdentity
 } = require('../../utils/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
 const BmpIngestClientPool = require('./bmpIngestClientPool');
@@ -29,6 +31,7 @@ const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
 
 const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
 const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
+const CLIENT_INITIALIZATION_TIMEOUT_MS = 15000;
 const READ_FENCE_TIMED_OUT = Symbol('bmp-read-fence-timeout');
 const COMMITTED_ROUTE_EVENTS = new Set([
     'upsert',
@@ -61,11 +64,15 @@ class BmpWorker {
         this.bmpConfigData = null; // bmp配置数据
         this.bmpSessionMap = new Map(); // bmp会话map
         this.ingestPool = null;
-        this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+        this.routeAssuranceService = this.createRouteAssuranceService();
         this.routeAssuranceFilters = {};
         this.routeAssuranceRebuildTimer = null;
         this.routeAssuranceRebuildQuietMs = ROUTE_ASSURANCE_REBUILD_QUIET_MS;
         this.routeAssuranceReader = null;
+        this.routeAssuranceReaderPromise = null;
+        this.routeAssuranceReaderGeneration = 0;
+        this.routeAssuranceControlGeneration = 0;
+        this.clientInitializationTimeoutMs = CLIENT_INITIALIZATION_TIMEOUT_MS;
         this.routeUpdateAggregator = new RouteUpdateAggregator();
         this.routeUpdateFlushTimer = null;
         this.routeUpdateFlushIntervalMs = 1000;
@@ -324,6 +331,9 @@ class BmpWorker {
         if (this.routeAssuranceReader) {
             return this.routeAssuranceReader;
         }
+        if (this.routeAssuranceReaderPromise) {
+            return this.routeAssuranceReaderPromise;
+        }
         if (!this.bmpConfigData?.persistenceDbPath) {
             // No database path (e.g. a stubbed persistence layer): stream from
             // the shared reader/writer when they support it, otherwise let the
@@ -336,6 +346,7 @@ class BmpWorker {
         // The ordered scan occupies its SQLite connection for tens of seconds
         // on a large RIB; a dedicated read-only replica keeps page queries on
         // the shared reader responsive meanwhile.
+        const generation = this.routeAssuranceReaderGeneration || 0;
         const reader = this.createPersistenceClient({
             dbPath: this.bmpConfigData.persistenceDbPath,
             readOnly: true,
@@ -348,21 +359,61 @@ class BmpWorker {
                 reader.close({ suppressErrors: true }).catch(() => {});
             }
         });
-        await reader.open();
-        this.routeAssuranceReader = reader;
-        return reader;
+        const opening = Promise.resolve()
+            .then(() => reader.open())
+            .then(async () => {
+                if (generation !== (this.routeAssuranceReaderGeneration || 0) || this.bmpStopping) {
+                    throw Object.assign(new Error('路由矩阵分析初始化已取消'), {
+                        code: 'BMP_ROUTE_ASSURANCE_CANCELLED'
+                    });
+                }
+                this.routeAssuranceReader = reader;
+                return reader;
+            })
+            .catch(async error => {
+                await reader.close({ suppressErrors: true }).catch(() => {});
+                throw error;
+            })
+            .finally(() => {
+                if (this.routeAssuranceReaderPromise === opening) {
+                    this.routeAssuranceReaderPromise = null;
+                }
+            });
+        this.routeAssuranceReaderPromise = opening;
+        return opening;
     }
 
     async closeRouteAssuranceReader() {
+        this.routeAssuranceReaderGeneration = (this.routeAssuranceReaderGeneration || 0) + 1;
         const reader = this.routeAssuranceReader;
+        const opening = this.routeAssuranceReaderPromise;
         this.routeAssuranceReader = null;
+        this.routeAssuranceReaderPromise = null;
         if (reader) {
             await reader.close({ suppressErrors: true }).catch(() => {});
         }
+        // An opening reader owns its cleanup after the generation check fails.
+        await opening?.catch(() => {});
     }
 
-    async bootstrapRouteAssurance(analysisFilters = {}) {
+    createRouteAssuranceService() {
+        return new BmpRouteAssuranceService({
+            enabled: false,
+            onRefreshed: status => {
+                if (!this.bmpStopping && status.enabled) {
+                    this.messageHandler?.sendEvent(BmpConst.BMP_EVT_TYPES.ROUTE_ASSURANCE_UPDATE, { data: status });
+                }
+            }
+        });
+    }
+
+    async bootstrapRouteAssurance(analysisFilters = {}, generation = this.routeAssuranceControlGeneration || 0) {
         const reader = await this.ensureRouteAssuranceReader();
+        if (generation !== (this.routeAssuranceControlGeneration || 0) || this.bmpStopping) {
+            throw Object.assign(new Error('路由矩阵分析初始化已取消'), {
+                code: 'BMP_ROUTE_ASSURANCE_CANCELLED'
+            });
+        }
         if (!reader) {
             return this.routeAssuranceService.bootstrapFromPersistedRoutes(
                 this.createPersistedRoutePageLoader(analysisFilters),
@@ -391,22 +442,41 @@ class BmpWorker {
         }
         const query = {
             sourceId: locator.sourceId,
-            prefixExact: locator.prefix,
-            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL,
-            pageSize: 5000,
-            includeTotal: false
+            routeState: BmpConst.BMP_ROUTE_STATE_FILTER.ALL
         };
+        const routeLookupIdentity = locator.routeLookupIdentity || getComplexRouteIdentity(locator);
+        if (routeLookupIdentity) {
+            // Reuse the complete variable NLRI from routeKey across Add-Paths.
+            // Gateway/label-dependent display prefix and encoded length must
+            // not exclude another observation of the same business NLRI.
+            query.routeLookupIdentity = routeLookupIdentity;
+        } else {
+            query.prefixExact = locator.prefix;
+        }
         if (locator.afi !== null && locator.afi !== undefined) {
             query.afi = locator.afi;
         }
         if (locator.safi !== null && locator.safi !== undefined) {
             query.safi = locator.safi;
         }
-        if (locator.prefixLength !== null && locator.prefixLength !== undefined) {
+        if (!routeLookupIdentity && locator.prefixLength !== null && locator.prefixLength !== undefined) {
             query.prefixLength = locator.prefixLength;
         }
-        const result = await reader.queryRoutes(query);
-        return Array.isArray(result?.list) ? result.list : [];
+        if (locator.rd !== null && locator.rd !== undefined) {
+            query.rd = locator.rd;
+        }
+        const rows = [];
+        // One iterator holds a SQLite read snapshot for the entire NLRI. Separate
+        // page queries could otherwise keep chasing newly appended Add-Paths.
+        const summary = await reader.streamRouteAssuranceRows(query, {
+            onChunk: chunk => rows.push(...chunk)
+        });
+        if (summary?.cancelled) {
+            const error = new Error('BMP route assurance group stream was cancelled');
+            error.code = 'BMP_ROUTE_ASSURANCE_CANCELLED';
+            throw error;
+        }
+        return rows;
     }
 
     applyRouteAssuranceMutation(mutation) {
@@ -1069,6 +1139,7 @@ class BmpWorker {
 
     handleIngestResult(record, result) {
         applyIngestSnapshot(record.session, result.snapshot);
+        this.completeClientInitialization(record.session);
         const restored = new Map();
         for (const received of result.actions || []) {
             // Route mutations contain only scalar/JSON DTO fields. The parser's
@@ -1117,6 +1188,7 @@ class BmpWorker {
 
     handleIngestClosed(record) {
         const session = record.session;
+        this.clearClientInitializationTimer(session);
         const key = BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort);
         if (this.bmpSessionMap.get(key) === session) {
             this.bmpSessionMap.delete(key);
@@ -1203,6 +1275,16 @@ class BmpWorker {
             };
         }
 
+        const timeoutMs = Math.max(1, Number(this.clientInitializationTimeoutMs) || CLIENT_INITIALIZATION_TIMEOUT_MS);
+        bmpSession.initializationTimer = setTimeout(() => {
+            this.clearClientInitializationTimer(bmpSession);
+            if (bmpSession.getPersistentSourceId?.() || socket.destroyed) return;
+            logger.warn(`BMP client ${clientAddress}:${clientPort} did not initialize before the deadline`);
+            this.removeBmpSessionByKey(sessionKey, bmpSession);
+            socket.destroy();
+        }, timeoutMs);
+        bmpSession.initializationTimer.unref?.();
+
         socket.on('data', data => {
             if (this.bmpSessionMap.get(sessionKey) !== bmpSession) {
                 logger.error(`${transportLabel} Client ${clientAddress}:${clientPort} not found in bmpSessionMap`);
@@ -1210,9 +1292,11 @@ class BmpWorker {
                 return;
             }
             bmpSession.recvMsg(data);
+            this.completeClientInitialization(bmpSession);
         });
 
         const closeSession = (eventName, error = null) => {
+            this.clearClientInitializationTimer(bmpSession);
             if (error) {
                 logger.error(`${transportLabel} TCP Error from ${clientAddress}:${clientPort}: ${error.message}`);
             } else {
@@ -1223,8 +1307,24 @@ class BmpWorker {
         socket.on('end', () => closeSession('end'));
         socket.on('close', () => closeSession('close'));
         socket.on('error', error => closeSession('error', error));
-        if (Buffer.isBuffer(initialData) && initialData.length > 0) bmpSession.recvMsg(initialData);
+        if (Buffer.isBuffer(initialData) && initialData.length > 0) {
+            bmpSession.recvMsg(initialData);
+            this.completeClientInitialization(bmpSession);
+        }
         return bmpSession;
+    }
+
+    clearClientInitializationTimer(session) {
+        if (session?.initializationTimer) {
+            clearTimeout(session.initializationTimer);
+            session.initializationTimer = null;
+        }
+    }
+
+    completeClientInitialization(session) {
+        if (session?.initializationTimer && session.getPersistentSourceId?.()) {
+            this.clearClientInitializationTimer(session);
+        }
     }
 
     async startPlainTcpServers() {
@@ -1567,6 +1667,8 @@ class BmpWorker {
     shutdownBmpRuntime(options = {}) {
         if (this.bmpShutdownPromise) return this.bmpShutdownPromise;
         this.bmpStopping = true;
+        this.routeAssuranceControlGeneration = (this.routeAssuranceControlGeneration || 0) + 1;
+        this.routeAssuranceService?.setEnabled?.(false);
         this.bmpRuntimeStarted = false;
         const emitTermination = options.emitTermination !== false;
         this.bmpShutdownPromise = (async () => {
@@ -1586,7 +1688,10 @@ class BmpWorker {
             if (emitTermination) {
                 this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: null });
             }
-            this.bmpSessionMap.forEach(session => session.closeSession());
+            this.bmpSessionMap.forEach(session => {
+                this.clearClientInitializationTimer(session);
+                session.closeSession();
+            });
             let ingestError = null;
             if (this.ingestPool) {
                 try {
@@ -1913,7 +2018,7 @@ class BmpWorker {
     async getRouteAssurance(messageId, data = {}) {
         try {
             if (!this.routeAssuranceService) {
-                this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+                this.routeAssuranceService = this.createRouteAssuranceService();
             }
             if (!this.routeAssuranceService.enabled) {
                 throw new Error('路由矩阵分析未开启');
@@ -1947,20 +2052,27 @@ class BmpWorker {
     }
 
     async setRouteAssuranceEnabled(messageId, data = {}) {
+        const generation = (this.routeAssuranceControlGeneration || 0) + 1;
+        this.routeAssuranceControlGeneration = generation;
         try {
             if (!this.routeAssuranceService) {
-                this.routeAssuranceService = new BmpRouteAssuranceService({ enabled: false });
+                this.routeAssuranceService = this.createRouteAssuranceService();
             }
             const enabled = Boolean(data.enabled);
             this.routeAssuranceFilters = enabled ? { ...(data.filters || {}) } : {};
             let status;
             if (enabled) {
-                this.routeAssuranceFilters = this.getRouteAssuranceAnalysisFilters(data.filters || {});
+                const filters = this.getRouteAssuranceAnalysisFilters(data.filters || {});
+                this.routeAssuranceFilters = filters;
                 // Establish one consistency boundary before enabling incremental deltas. The
                 // paged snapshot then reads committed WAL state without chasing a continuously
                 // growing writer queue on every page.
                 await this.persistence.fence();
-                status = await this.bootstrapRouteAssurance(this.routeAssuranceFilters);
+                if (generation !== this.routeAssuranceControlGeneration || this.bmpStopping) {
+                    status = this.routeAssuranceService.getStatus();
+                } else {
+                    status = await this.bootstrapRouteAssurance(filters, generation);
+                }
             } else {
                 if (this.routeAssuranceRebuildTimer) {
                     clearTimeout(this.routeAssuranceRebuildTimer);
@@ -1969,12 +2081,23 @@ class BmpWorker {
                 status = this.routeAssuranceService.setEnabled(false);
                 await this.closeRouteAssuranceReader();
             }
+            if (generation !== this.routeAssuranceControlGeneration) {
+                status = this.routeAssuranceService.getStatus();
+            }
             this.messageHandler.sendSuccessResponse(
                 messageId,
                 status,
                 status.enabled ? '路由矩阵分析已开启' : '路由矩阵分析已关闭'
             );
         } catch (error) {
+            if (generation !== this.routeAssuranceControlGeneration || this.bmpStopping) {
+                this.messageHandler.sendSuccessResponse(
+                    messageId,
+                    this.routeAssuranceService.getStatus(),
+                    '路由矩阵状态请求已被后续操作替代'
+                );
+                return;
+            }
             logger.error(`Error setting Route Assurance state: ${error.message}`);
             this.messageHandler.sendErrorResponse(messageId, error.message);
         }
@@ -2239,13 +2362,41 @@ class BmpWorker {
         };
     }
 
-    getRouteKey(routeKey, routeInfo) {
+    getRouteKey(routeKey, routeInfo, lookup = {}) {
         if (routeKey) {
             return routeKey;
         }
 
         if (!routeInfo) {
             return '';
+        }
+        if (routeInfo.routeKey) {
+            return routeInfo.routeKey;
+        }
+
+        const family = getAfiAndSafi(routeInfo.addrFamilyType ?? lookup.addrFamilyType);
+        const afi = routeInfo.afi ?? lookup.afi ?? family.afi;
+        const safi = routeInfo.safi ?? lookup.safi ?? family.safi;
+        if (afi !== undefined && afi !== null && safi !== undefined && safi !== null) {
+            const plainIp = (Number(afi) === 1 || Number(afi) === 2) && [1, 2, 4, 128].includes(Number(safi));
+            const nlri = routeInfo.nlriDetail || routeInfo.nlri;
+            if (
+                !plainIp &&
+                (!nlri ||
+                    typeof nlri !== 'object' ||
+                    Array.isArray(nlri) ||
+                    !Object.keys(nlri).length ||
+                    nlri.valid === false)
+            ) {
+                throw new Error('复杂地址族的路由详情查询需要完整 NLRI');
+            }
+            return formatRouteLookupKey(
+                canonicalizeRouteIdentity({ afi, safi, route: routeInfo, nlri: nlri || routeInfo }),
+                {
+                    rd: routeInfo.rd,
+                    rdRaw: routeInfo.rdRaw
+                }
+            );
         }
 
         return BmpBgpRoute.makeKey(routeInfo.pathId, routeInfo.rd, routeInfo.ip, routeInfo.mask, routeInfo.rdRaw);
@@ -2441,6 +2592,11 @@ class BmpWorker {
             },
             { fence: false }
         );
+        if (Number(result?.total || 0) > 1) {
+            const error = new Error('路由键未能唯一定位 NLRI');
+            error.code = 'BMP_ROUTE_DETAIL_AMBIGUOUS';
+            throw error;
+        }
         return result?.list?.[0] || null;
     }
 
@@ -2474,7 +2630,7 @@ class BmpWorker {
             if (this.sendRouteLookupError(messageId, lookup)) {
                 return;
             }
-            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route));
+            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route, lookup));
             if (!detail) {
                 this.messageHandler.sendErrorResponse(messageId, '路由不存在');
                 return;
@@ -2518,7 +2674,7 @@ class BmpWorker {
             if (this.sendRouteLookupError(messageId, lookup)) {
                 return;
             }
-            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route));
+            const detail = await this.queryRouteDetail(lookup, this.getRouteKey(routeKey, route, lookup));
             if (!detail) {
                 this.messageHandler.sendErrorResponse(messageId, '路由不存在');
                 return;

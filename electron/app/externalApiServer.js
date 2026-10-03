@@ -123,10 +123,14 @@ class ExternalApiServer {
         return Array.from(new Set(this.routes.filter(route => route.path === pathname).map(route => route.method)));
     }
 
-    readJsonBody(req) {
+    readJsonBody(req, maxBodyBytes = this.maxBodyBytes) {
         return new Promise((resolve, reject) => {
+            if (!Number.isSafeInteger(maxBodyBytes) || maxBodyBytes < 1 || maxBodyBytes > 512 * 1024) {
+                reject(this.createError(500, 'INVALID_BODY_LIMIT', '请求体大小配置无效'));
+                return;
+            }
             const contentLength = Number(req.headers['content-length'] || 0);
-            if (contentLength > this.maxBodyBytes) {
+            if (contentLength > maxBodyBytes) {
                 reject(this.createError(413, 'REQUEST_TOO_LARGE', '请求体过大'));
                 return;
             }
@@ -135,7 +139,7 @@ class ExternalApiServer {
             req.setEncoding('utf8');
             req.on('data', chunk => {
                 rawBody += chunk;
-                if (Buffer.byteLength(rawBody, 'utf8') > this.maxBodyBytes) {
+                if (Buffer.byteLength(rawBody, 'utf8') > maxBodyBytes) {
                     reject(this.createError(413, 'REQUEST_TOO_LARGE', '请求体过大'));
                     req.destroy();
                 }
@@ -183,7 +187,7 @@ class ExternalApiServer {
                 return;
             }
 
-            const body = method === 'GET' || method === 'HEAD' ? {} : await this.readJsonBody(req);
+            const body = method === 'GET' || method === 'HEAD' ? {} : await this.readJsonBody(req, route.maxBodyBytes);
             const query = Object.fromEntries(requestUrl.searchParams.entries());
             const result = await route.handler({
                 body,

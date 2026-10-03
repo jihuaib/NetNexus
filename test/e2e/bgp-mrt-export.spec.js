@@ -152,7 +152,11 @@ test.describe('BGP MRT export', () => {
         });
         await groupMenu(page, 'ipv4', firstId);
         await page.getByTestId('bgp-ipv4-refresh-group-state-button').click();
-        await expect(page.getByTestId('bgp-ipv4-group-generation-state')).toHaveText('本组已生成 7 条路由');
+        await groupMenu(page, 'ipv4', firstId);
+        await expect(page.getByTestId('bgp-ipv4-group-context-menu').locator('.nn-context-menu-meta')).toHaveText(
+            '已生成 7 条'
+        );
+        await page.keyboard.press('Escape');
         await expect(page.getByTestId('route-field-addressFamily')).toContainText('IPv4-UNC');
         await page.getByTestId('bgp-ipv4-route-prefix-input').fill('draft is not regenerated');
         await page.getByTestId('bgp-ipv4-add-group-button').click();
