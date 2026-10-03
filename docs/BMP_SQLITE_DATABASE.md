@@ -1187,7 +1187,7 @@ node scripts/benchmarks/compare_bmp_repeated_ingest_benchmarks.js \
 
 配置为 1 个解析 Worker、1 个 Writer、5000 条攒批、20 ms flush、每 UPDATE 50 条 NLRI、100 组属性，关闭 Route Assurance。计时从 loopback TCP 发送开始，到末尾独特 marker 路由实际提交；报文构造、UI 和 Route Assurance 分析耗时不计入。修复后包含 `WAL + synchronous=NORMAL`、256 MiB 自动 checkpoint 预算、持久 GC 候选、完整 `routeKey` 和协议/路径详情校验，并非单项 SQL 微基准。普通 IP lookup key 直接复用已计算的 canonical prefix；EVPN/结构化 NLRI 复用已排序的 canonical JSON，不新增第二次 hash 或排序。最终三轮测量校验核心源码哈希与交付源码一致。这组结果验证本轮修复在该可重复的百万 IPv4 路由路径中没有性能退化，不外推其他地址族、磁盘或真实设备的具体吞吐。
 
-本轮修复后的最终测量已固定为版本化基线：[bmp_repeated_ingest_1m_m4pro_20261003.json](../scripts/benchmarks/baselines/bmp_repeated_ingest_1m_m4pro_20261003.json)。文件保留全部 12 次首次/重复上报样本、四组中位数、fixture 字节数与 SHA-256、测量配置、硬件/运行时、方法及采集当时的源码指纹，仅移除个人临时数据库目录。源码指纹是历史采集信息，不会为了匹配后续源码而重写。
+本轮修复后的最终测量已固定为版本化基线：[bmp_repeated_ingest_1m_m4pro_20261003.json](https://github.com/jihuaib/NetNexus/blob/master/scripts/benchmarks/baselines/bmp_repeated_ingest_1m_m4pro_20261003.json)。文件保留全部 12 次首次/重复上报样本、四组中位数、fixture 字节数与 SHA-256、测量配置、硬件/运行时、方法及采集当时的源码指纹，仅移除个人临时数据库目录。源码指纹是历史采集信息，不会为了匹配后续源码而重写。
 
 在同一硬件/运行时、相同 fixture/configuration/基准脚本下复测后，可使用固定入口比较，不需要重新选择基线文件：
 
