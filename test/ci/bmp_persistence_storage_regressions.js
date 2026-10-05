@@ -11,11 +11,13 @@ const ClientStore = require('../../electron/worker/bmp/bmpClientPersistenceStore
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const Route = require('../../electron/worker/bmp/bmpBgpRoute');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const { builders } = require('../../scripts/mockBmpClient');
-const { getComplexRouteIdentity } = require('../../electron/utils/bmpRouteLens');
-const { makeStreamRunKey } = require('../../electron/utils/bmpRouteAssurance');
+const { getComplexRouteIdentity } = require('../../electron/utils/bmp/bmpRouteLens');
+const { makeStreamRunKey } = require('../../electron/utils/bmp/bmpRouteAssurance');
 const {
+    buildConnectionMutation,
+    buildScopeMutation,
     buildRouteUpsertMutation,
     buildRouteWithdrawMutation
 } = require('../../electron/worker/bmp/bmpPersistenceMutation');
@@ -72,6 +74,110 @@ function replace(store, current) {
     assert.equal(count(store, 'main.bmp_gc_candidates'), 1);
 }
 
+function verifyReplayMetadata(store, includeDeltas) {
+    const current = context();
+    Object.assign(current.bmp, { sysDesc: 'old description', authProfileName: 'old profile' });
+    const old = buildConnectionMutation(current.bmp, 'connection_open', { eventAtMs: 1000 });
+    Object.assign(current.bmp, {
+        sysName: 'renamed router',
+        sysDesc: 'new description',
+        authProfileName: 'new profile',
+        localPort: 1791,
+        remotePort: 55001
+    });
+    const newer = buildConnectionMutation(current.bmp, 'connection_open', { eventAtMs: 2000 });
+    const snapshot = () => ({
+        source: store.db.prepare('SELECT * FROM bmp_sources').get(),
+        connection: store.db.prepare('SELECT * FROM bmp_connections').get()
+    });
+    store.applyBatch({ batchId: `metadata-seed-${includeDeltas}`, includeDeltas, mutations: [old, newer] });
+    const before = snapshot();
+    assert.equal(before.source.sys_name, 'renamed router');
+    assert.equal(before.source.sys_desc, 'new description');
+    assert.equal(before.connection.remote_port, 55001);
+    const replay = store.applyBatch({
+        batchId: `metadata-replay-${includeDeltas}`,
+        includeDeltas,
+        mutations: [old]
+    });
+    assert.equal(replay.applied, 0);
+    assert.equal(replay.requiresProjectionRebuild, undefined);
+    assert.deepEqual(snapshot(), before, 'a rejected sequence cannot roll back source or connection metadata');
+
+    const latest = buildConnectionMutation(current.bmp, 'connection_open', { eventAtMs: 3000 });
+    const mixed = store.applyBatch({
+        batchId: `metadata-mixed-${includeDeltas}`,
+        includeDeltas,
+        mutations: [latest, old, newer]
+    });
+    assert.equal(mixed.applied, 1);
+    assert.equal(mixed.requiresProjectionRebuild, undefined);
+    assert.equal(snapshot().source.last_seen_ms, 3000);
+    assert.equal(snapshot().connection.last_sequence, latest.sequence);
+    assert.equal(snapshot().source.sys_desc, 'new description');
+    assert.equal(snapshot().connection.remote_port, 55001);
+
+    const originalGet = store.statements.findConnectionSequence.get;
+    let sequenceReads = 0;
+    store.statements.findConnectionSequence.get = function (...args) {
+        sequenceReads += 1;
+        return originalGet.apply(this, args);
+    };
+    try {
+        const mutations = Array.from({ length: 1000 }, () => announce(current, route(current.owner, '203.0.113.0')));
+        store.applyBatch({ batchId: `metadata-hot-path-${includeDeltas}`, includeDeltas, mutations });
+        assert.equal(sequenceReads, 1, 'replay protection adds one read per connection/batch, not per route');
+    } finally {
+        store.statements.findConnectionSequence.get = originalGet;
+    }
+}
+
+function verifyBoundedManualPurgeGc(store, includeDetails, gcLimit) {
+    const current = context();
+    const mutation = announce(current, route(current.owner));
+    apply(store, [mutation]);
+    apply(store, [
+        buildScopeMutation(current.bmp, current.owner, 1, 1, 2, 'scope_close', { kind: 'peer', state: 'down' })
+    ]);
+    const insert = store.db.prepare(`INSERT INTO bmp_route_attributes(attr_id, attr_json, first_seen_ms, last_seen_ms)
+        VALUES (?, '{}', 0, 0)`);
+    store.db.transaction(() => {
+        for (let index = 0; index < 2500; index += 1) {
+            const attrPk = Number(insert.run(`purge-orphan-${index}`).lastInsertRowid);
+            store.addGcCandidates([{ attr_pk: attrPk }]);
+        }
+    })();
+    assert.equal(count(store, 'main.bmp_gc_candidates'), 2500);
+    const result = store.purgeStaleRoutes({
+        scopeId: mutation.scope.id,
+        routeLimit: 1,
+        includeDetails,
+        ...(gcLimit === undefined ? {} : { gcLimit })
+    });
+    assert.equal(result.purged, 1);
+    assert.equal(result.hasMore, false, 'GC backlog must not masquerade as more stale routes');
+    assert.equal(count(store, 'bmp_current_routes_all'), 0);
+    assert.equal(
+        count(store, 'main.bmp_gc_candidates'),
+        2503 - (gcLimit ?? 2000),
+        'manual purge uses its independent candidate budget, including references of the deleted route'
+    );
+    store.close();
+    store.open();
+    assert.ok(count(store, 'main.bmp_gc_candidates') > 0, 'unprocessed candidates survive a writer reopen');
+    while (store.sweep({ auxiliaryLimit: 1000 }).hasMore) {
+        /* maintenance drains the durable backlog in bounded passes */
+    }
+    for (const table of [
+        'main.bmp_gc_candidates',
+        'bmp_route_attributes',
+        'bmp_route_payloads',
+        'bmp_route_identities'
+    ]) {
+        assert.equal(count(store, table), 0, `${table} is reclaimed by follow-up maintenance`);
+    }
+}
+
 if (process.argv[2] === '--crash-writer') {
     const store = new Store({ dbPath: process.argv[3] }).open();
     replace(store, context());
@@ -95,6 +201,12 @@ if (process.argv[2] === '--crash-writer') {
         return store;
     };
     try {
+        for (const includeDeltas of [false, true])
+            verifyReplayMetadata(open(`metadata-replay-${includeDeltas}`), includeDeltas);
+        for (const includeDetails of [false, true]) {
+            verifyBoundedManualPurgeGc(open(`purge-default-gc-${includeDetails}`), includeDetails);
+            verifyBoundedManualPurgeGc(open(`purge-explicit-gc-${includeDetails}`), includeDetails, 7);
+        }
         // An unknown withdraw creates neither identity, payload nor attribute.
         const unknown = open('unknown');
         const current = context();

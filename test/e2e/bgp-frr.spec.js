@@ -121,8 +121,7 @@ function incrementalRouteConfig(family, index) {
 
 function configuredAddressFamilies(family) {
     if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-        // RouteIpv4 initially renders the UNC view before the test switches to
-        // labeled-unicast, so keep an empty UNC instance available as well.
+        // Keep an empty UNC instance alongside Label in this multi-family fixture.
         return [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, family.addressFamily];
     }
     return [family.addressFamily];
@@ -160,9 +159,8 @@ async function fetchAllPageRoutes(page, family) {
 
 async function startBgp(page, controller, lab, family) {
     if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-        // Display columns follow the route-workspace NLRI/attribute nodes, not
-        // the list's address-family switch. Save the Label workspace before
-        // starting BGP so its Label column is tested without regenerating routes.
+        // The independent Label page displays its default NLRI/attribute nodes.
+        // Backend route generation leaves that renderer schema unchanged.
         const groupId = 'frr-label-renderer';
         const saved = await page.evaluate(config => window.bgpApi.saveIpv4UNCRouteConfig(config), {
             addressFamily: family.addressFamily,
@@ -219,7 +217,8 @@ function rendererAttributeColumns(family) {
         types.splice(types.indexOf('nextHop'), 1);
         types.unshift('mpNextHop');
     } else if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-        types.unshift('label');
+        types.splice(types.indexOf('nextHop'), 1);
+        types.unshift('mpNextHop', 'label');
     }
     return types.map(type => {
         const definition = attributeRegistry.attributes.find(entry => entry.type === type);
@@ -278,15 +277,12 @@ async function readRendererRows(table) {
 }
 
 async function assertRendererPage(page, family, routes) {
-    await page.goto(family.pageRoute);
-    await expect(page.getByTestId(family.pageTestId)).toBeVisible();
-
-    if (family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-        await page.locator('.route-display-switch').getByText('IPv4 Label', { exact: true }).click();
-    }
+    const labeled = family.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
+    await page.goto(labeled ? '/#/bgp/route-ipv4-label' : family.pageRoute);
+    await expect(page.getByTestId(labeled ? 'bgp-route-ipv4-label-page' : family.pageTestId)).toBeVisible();
 
     await expect(page.getByText(`共 ${routes.length} 条，每页 ${PAGE_SIZE} 条`)).toBeVisible({ timeout: 30000 });
-    const table = page.getByTestId(family.tableTestId);
+    const table = page.getByTestId(labeled ? 'bgp-ipv4-label-route-table' : family.tableTestId);
     await expect(table.locator('.nn-table-thead .nn-table-cell')).toHaveText([
         '前缀',
         ...rendererAttributeColumns(family).map(definition => definition.resultColumn.title),

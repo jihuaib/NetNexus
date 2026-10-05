@@ -3,12 +3,12 @@ const fs = require('fs');
 const path = require('path');
 const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
-const { getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const { getSessionStatisticsReportIdentityParts } = require('../../utils/bmp/bmpStatistics');
 const { installBmpSqlTrace } = require('./bmpSqlTrace');
 const { resetDatabaseIfVersionChanged } = require('./bmpDatabaseVersionCheck');
 const { rebuildCompactNlri } = require('./bmpPersistenceMutation');
-const { normalizeRouteDistinguisher } = require('../../utils/bmpPersistentRouteKey');
+const { normalizeRouteDistinguisher } = require('../../utils/bmp/bmpPersistentRouteKey');
 const {
     BMP_ROUTE_FAMILIES,
     BMP_ROUTE_PARTITIONS,
@@ -21,6 +21,7 @@ const {
 const SCHEMA_VERSION = 14;
 const ROUTE_KEY_ALGORITHM = 'sha256';
 const DEFAULT_PAGE_SIZE = 100;
+const DEFAULT_MANUAL_PURGE_GC_LIMIT = 2000;
 const GC_KIND = Object.freeze({ IDENTITY: 1, PAYLOAD: 2, ATTRIBUTE: 3 });
 const ROUTE_UPSERT_EVENTS = new Set(['upsert', 'announce', 'replace', 'refresh']);
 // Rows per multi-row INSERT in prefillRouteObjectCaches (14 columns x 250 =
@@ -978,6 +979,9 @@ class BmpPersistenceStore {
             findConnectionPk: this.db.prepare(
                 'SELECT connection_pk FROM bmp_connections WHERE connection_id = @connectionId LIMIT 1'
             ),
+            findConnectionSequence: this.db.prepare(
+                'SELECT connection_pk, last_sequence FROM bmp_connections WHERE connection_id = @connectionId LIMIT 1'
+            ),
             findSourceContext: this.db.prepare(`
                 SELECT remote_ip, sys_name FROM bmp_sources WHERE source_id = @id LIMIT 1
             `),
@@ -1599,10 +1603,11 @@ class BmpPersistenceStore {
             contextChanges.changed = true;
         }
         const pk = Number(row.connection_pk);
-        if (cached && cached.pk !== pk) {
+        if (cached && cached.pk !== null && cached.pk !== pk) {
             throw new Error(`BMP connection primary key changed within batch for ${connection.id}`);
         }
         const state = cached || { pk, lastSequence: 0 };
+        state.pk = pk;
         state.lastSequence = Math.max(state.lastSequence, finiteNumber(row.last_sequence, 0));
         state.signature = signature.value;
         batchCache?.connections.set(connection.id, state);
@@ -1660,16 +1665,21 @@ class BmpPersistenceStore {
                 : resolveBmpRoutePartition({ scopeKind: scope.kind, afi: scope.afi, safi: scope.safi })
             : null;
 
-        const sourcePk = this.resolveSourcePk(source, eventAtMs, batchCache, contextChanges);
-        const connectionState = this.resolveConnection(connection, sourcePk, eventAtMs, batchCache, contextChanges);
-        const connectionPk = connectionState.pk;
-        if (contextChanges?.changed && batchCache) {
-            batchCache.requiresProjectionRebuild = true;
-        }
         // A replayed (connection, sequence) pair must be a complete no-op: the
-        // scope and route upserts below would otherwise roll newer state back.
+        // source/connection metadata must be protected along with scope/routes.
+        // Probe once per connection per batch, then share the advancing sequence
+        // with resolveConnection; this adds no per-route SQLite read.
         const sequence = finiteNumber(mutation.sequence);
         if (sequence !== null) {
+            let connectionState = batchCache?.connections.get(connection.id);
+            if (!connectionState) {
+                const row = this.statements.findConnectionSequence.get({ connectionId: connection.id });
+                connectionState = {
+                    pk: row ? Number(row.connection_pk) : null,
+                    lastSequence: finiteNumber(row?.last_sequence, 0)
+                };
+                batchCache?.connections.set(connection.id, connectionState);
+            }
             if (sequence <= connectionState.lastSequence) {
                 // Bulk object prefill precedes replay detection. Persist candidates
                 // for objects that this rejected mutation never made live.
@@ -1696,10 +1706,17 @@ class BmpPersistenceStore {
                         }
                     ]);
                 }
-                const result = { applied: false, delta: null };
-                if (contextChanges?.changed) result.requiresProjectionRebuild = true;
-                return result;
+                return { applied: false, delta: null };
             }
+        }
+
+        const sourcePk = this.resolveSourcePk(source, eventAtMs, batchCache, contextChanges);
+        const connectionState = this.resolveConnection(connection, sourcePk, eventAtMs, batchCache, contextChanges);
+        const connectionPk = connectionState.pk;
+        if (contextChanges?.changed && batchCache) {
+            batchCache.requiresProjectionRebuild = true;
+        }
+        if (sequence !== null) {
             connectionState.lastSequence = sequence;
             connectionState.dirty = true;
             if (!batchCache) {
@@ -3701,6 +3718,7 @@ class BmpPersistenceStore {
         }
 
         const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
+        const gcLimit = positiveInteger(query.gcLimit, DEFAULT_MANUAL_PURGE_GC_LIMIT, 50000);
         const where = [`${this.buildRouteStateSql()} = 'stale'`];
         const params = {};
         const addFilter = (sql, name, value) => {
@@ -3769,7 +3787,7 @@ class BmpPersistenceStore {
                 }
             });
             if (deletedRows.length > 0) {
-                this.collectGarbage();
+                this.collectGarbage(gcLimit);
             }
             return { hasMore, rows: deletedRows };
         });
@@ -3827,6 +3845,7 @@ class BmpPersistenceStore {
             throw new Error('BMP compact stale route purge does not accept a cursor');
         }
         const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
+        const gcLimit = positiveInteger(query.gcLimit, DEFAULT_MANUAL_PURGE_GC_LIMIT, 50000);
         const params = {};
         const where = [`${this.buildRouteStateSql().replace(/\br\./g, 'count.')} = 'stale'`];
         const addFilter = (sql, name, value) => {
@@ -3983,7 +4002,10 @@ class BmpPersistenceStore {
             if (purged !== Math.min(selected, routeLimit)) {
                 throw new Error('BMP compact stale route purge candidates changed before deletion');
             }
-            if (purged > 0) this.collectGarbage();
+            // Unrelated replacements/withdrawals may have left a large durable
+            // backlog. Bound GC separately from route selection/deletion and
+            // leave the remaining candidates for the maintenance sweep.
+            if (purged > 0) this.collectGarbage(gcLimit);
             this.db.prepare('DELETE FROM temp.bmp_stale_purge_candidates').run();
             return { purged, hasMore, affectedScopes, nextCursor: null };
         })();

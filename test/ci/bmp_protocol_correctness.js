@@ -1,9 +1,9 @@
 const assert = require('node:assert/strict');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
-const { parseBmpPacket } = require('../../electron/utils/bmpPacketParser');
-const { createRouteKey, KEY_SCHEMA_VERSION } = require('../../electron/utils/bmpPersistentRouteKey');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
+const { parseBmpPacket } = require('../../electron/utils/bmp/bmpPacketParser');
+const { createRouteKey, KEY_SCHEMA_VERSION } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 const { createIngestSnapshot, applyIngestSnapshot } = require('../../electron/worker/bmp/bmpIngestSnapshot');
 const { builders } = require('../../scripts/mockBmpClient');
 

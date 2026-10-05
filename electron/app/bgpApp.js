@@ -8,11 +8,11 @@ const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../wor
 const logger = require('../log/logger');
 const BgpConst = require('../const/bgpConst');
 const EventDispatcher = require('../utils/eventDispatcher');
-const { getAfiAndSafi } = require('../utils/bgpUtils');
+const { getAfiAndSafi } = require('../utils/bgp/bgpUtils');
 const { shell } = require('electron');
-const { iterateMrtRoutes } = require('../utils/routeViewsUtils');
+const { iterateMrtRoutes } = require('../utils/bgp/simulator/bgpMrtImport');
 const BgpRoute = require('../worker/bgp/bgpRoute');
-const { getMrtExportInfo, exportRouteDatabaseMrt } = require('../utils/bgpMrtExport');
+const { getMrtExportInfo, exportRouteDatabaseMrt } = require('../utils/bgp/simulator/bgpMrtExport');
 
 const BGP_DATA_DIRECTORY = 'bgp';
 const BGP_ROUTE_DATABASE_FILE = 'bgp.sqlite3';
@@ -31,6 +31,9 @@ class BgpApp {
         this.ipv4MvpnRouteConfigFileKey = 'ipv4-mvpn-route-config';
         this.ipv4QpRouteConfigFileKey = 'ipv4-qp-route-config';
         this.ipv6QpRouteConfigFileKey = 'ipv6-qp-route-config';
+        this.vpnv4RouteConfigFileKey = 'vpnv4-route-config';
+        this.vpnv6RouteConfigFileKey = 'vpnv6-route-config';
+        this.evpnRouteConfigFileKey = 'evpn-route-config';
         this.peerChangeHandler = null;
         this.store = store;
         this.eventDispatcher = null;
@@ -46,6 +49,49 @@ class BgpApp {
     }
 
     registerHandlers(ipc) {
+        for (const [name, addressFamily] of [
+            ['Vpnv4', BgpConst.BGP_ADDR_FAMILY.VPNV4],
+            ['Vpnv6', BgpConst.BGP_ADDR_FAMILY.VPNV6],
+            ['Evpn', BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN]
+        ]) {
+            ipc.handle(`bgp:save${name}RouteConfig`, async (_event, config) => {
+                try {
+                    this.saveRouteConfiguration(addressFamily, { ...config, addressFamily });
+                    return successResponse(null, '路由配置已保存');
+                } catch (error) {
+                    return errorResponse(error.message);
+                }
+            });
+            ipc.handle(`bgp:load${name}RouteConfig`, async () => {
+                try {
+                    return successResponse(this.loadRouteConfiguration(addressFamily));
+                } catch (error) {
+                    return errorResponse(error.message);
+                }
+            });
+            ipc.handle(`bgp:generate${name}Routes`, async (_event, config) => {
+                try {
+                    return await this.persistGeneratedRoutes(
+                        { ...config, addressFamily },
+                        BgpConst.BGP_REQ_TYPES.GENERATE_VPN_EVPN_ROUTES,
+                        '路由生成成功'
+                    );
+                } catch (error) {
+                    return errorResponse(error.message);
+                }
+            });
+            ipc.handle(`bgp:delete${name}Routes`, async (_event, config) => {
+                try {
+                    return await this.deleteGeneratedRoutes(
+                        { ...config, addressFamily },
+                        BgpConst.BGP_REQ_TYPES.DELETE_VPN_EVPN_ROUTES,
+                        '路由删除成功'
+                    );
+                } catch (error) {
+                    return errorResponse(error.message);
+                }
+            });
+        }
         // 配置相关
         ipc.handle('bgp:saveBgpConfig', async (event, config) => this.handleSaveBgpConfig(event, config));
         ipc.handle('bgp:loadBgpConfig', async () => this.handleLoadBgpConfig());
@@ -57,6 +103,10 @@ class BgpApp {
             this.handleSaveIpv4UNCRouteConfig(event, config)
         );
         ipc.handle('bgp:loadIpv4UNCRouteConfig', async () => this.handleLoadIpv4UNCRouteConfig());
+        ipc.handle('bgp:saveIpv4LabelRouteConfig', async (event, config) =>
+            this.handleSaveIpv4LabelRouteConfig(event, config)
+        );
+        ipc.handle('bgp:loadIpv4LabelRouteConfig', async () => this.handleLoadIpv4LabelRouteConfig());
         ipc.handle('bgp:saveIpv6UNCRouteConfig', async (event, config) =>
             this.handleSaveIpv6UNCRouteConfig(event, config)
         );
@@ -206,11 +256,7 @@ class BgpApp {
 
     async handleSaveIpv4UNCRouteConfig(event, config) {
         try {
-            const { routeWorkspace, ...routeConfig } = config;
-            // Keep reusable groups separate from the last generated route config.
-            // Route generation updates the latter through saveLastRouteConfig().
-            if (routeWorkspace) this.store.set(this.ipv4RouteWorkspaceFileKey, routeWorkspace);
-            this.store.set(this.ipv4UNCRouteConfigFileKey, routeConfig);
+            this.saveRouteConfiguration(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, config);
             return successResponse(null, 'IPv4 UNC Route配置文件保存成功');
         } catch (error) {
             logger.error('Error saving ipv4 unc route config:', error.message);
@@ -220,17 +266,35 @@ class BgpApp {
 
     async handleLoadIpv4UNCRouteConfig() {
         try {
-            const config = this.store.get(this.ipv4UNCRouteConfigFileKey);
-            const routeWorkspace = this.store.get(this.ipv4RouteWorkspaceFileKey);
-            if (!config && !routeWorkspace) {
+            const config = this.loadRouteConfiguration(BgpConst.BGP_ADDR_FAMILY.IPV4_UNC);
+            if (!config) {
                 return successResponse(null, 'IPv4 UNC Route配置文件不存在');
             }
-            return successResponse(
-                routeWorkspace ? { ...config, routeWorkspace } : config,
-                'IPv4 UNC Route配置文件加载成功'
-            );
+            return successResponse(config, 'IPv4 UNC Route配置文件加载成功');
         } catch (error) {
             logger.error('Error loading ipv4 unc route config:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleSaveIpv4LabelRouteConfig(event, config) {
+        try {
+            this.saveRouteConfiguration(BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST, config);
+            return successResponse(null, 'IPv4 Label Route配置文件保存成功');
+        } catch (error) {
+            logger.error('Error saving ipv4 label route config:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    async handleLoadIpv4LabelRouteConfig() {
+        try {
+            return successResponse(
+                this.loadRouteConfiguration(BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST),
+                'IPv4 Label Route配置文件加载成功'
+            );
+        } catch (error) {
+            logger.error('Error loading ipv4 label route config:', error.message);
             return errorResponse(error.message);
         }
     }
@@ -396,6 +460,12 @@ class BgpApp {
 
     getRouteConfigStoreKey(addressFamily) {
         switch (addressFamily) {
+            case BgpConst.BGP_ADDR_FAMILY.VPNV4:
+                return this.vpnv4RouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.VPNV6:
+                return this.vpnv6RouteConfigFileKey;
+            case BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN:
+                return this.evpnRouteConfigFileKey;
             case BgpConst.BGP_ADDR_FAMILY.IPV4_UNC:
                 return this.ipv4UNCRouteConfigFileKey;
             case BgpConst.BGP_ADDR_FAMILY.IPV6_UNC:
@@ -415,6 +485,11 @@ class BgpApp {
 
     getRouteWorkspaceStoreKey(addressFamily) {
         return {
+            [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]: 'ipv4-unc-route-workspace',
+            [BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: 'ipv4-label-route-workspace',
+            [BgpConst.BGP_ADDR_FAMILY.VPNV4]: 'vpnv4-route-workspace',
+            [BgpConst.BGP_ADDR_FAMILY.VPNV6]: 'vpnv6-route-workspace',
+            [BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN]: 'evpn-route-workspace',
             [BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]: 'ipv6-route-workspace',
             [BgpConst.BGP_ADDR_FAMILY.IPV4_QP]: 'ipv4-qp-route-workspace',
             [BgpConst.BGP_ADDR_FAMILY.IPV6_QP]: 'ipv6-qp-route-workspace',
@@ -422,16 +497,62 @@ class BgpApp {
         }[addressFamily];
     }
 
+    filterIpv4RouteWorkspace(routeWorkspace, addressFamily) {
+        if (!routeWorkspace || !Array.isArray(routeWorkspace.groups)) return null;
+        const groups = routeWorkspace.groups.filter(
+            group =>
+                group?.config &&
+                Number(group.config.addressFamily ?? BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) === Number(addressFamily)
+        );
+        return {
+            ...routeWorkspace,
+            groups,
+            activeGroupId: groups.some(group => group.id === routeWorkspace.activeGroupId)
+                ? routeWorkspace.activeGroupId
+                : (groups[0]?.id ?? null)
+        };
+    }
+
+    preserveLegacyIpv4LabelConfig() {
+        const legacyConfig = this.store.get(this.ipv4UNCRouteConfigFileKey);
+        if (
+            Number(legacyConfig?.addressFamily) === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST &&
+            this.store.get(this.ipv4LabelRouteConfigFileKey) === undefined
+        ) {
+            this.store.set(this.ipv4LabelRouteConfigFileKey, legacyConfig);
+        }
+    }
+
     saveRouteConfiguration(addressFamily, config) {
         const { routeWorkspace, ...routeConfig } = config;
         const workspaceKey = this.getRouteWorkspaceStoreKey(addressFamily);
-        if (routeWorkspace && workspaceKey) this.store.set(workspaceKey, routeWorkspace);
-        this.store.set(this.getRouteConfigStoreKey(addressFamily), routeConfig);
+        if ([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST].includes(addressFamily)) {
+            if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) this.preserveLegacyIpv4LabelConfig();
+            const workspace = this.filterIpv4RouteWorkspace(routeWorkspace, addressFamily);
+            if (workspace?.groups.length) this.store.set(workspaceKey, workspace);
+            this.store.set(this.getRouteConfigStoreKey(addressFamily), { ...routeConfig, addressFamily });
+        } else {
+            if (routeWorkspace && workspaceKey) this.store.set(workspaceKey, routeWorkspace);
+            this.store.set(this.getRouteConfigStoreKey(addressFamily), routeConfig);
+        }
     }
 
     loadRouteConfiguration(addressFamily) {
-        const config = this.store.get(this.getRouteConfigStoreKey(addressFamily));
-        const routeWorkspace = this.store.get(this.getRouteWorkspaceStoreKey(addressFamily));
+        let config = this.store.get(this.getRouteConfigStoreKey(addressFamily));
+        let routeWorkspace = this.store.get(this.getRouteWorkspaceStoreKey(addressFamily));
+        if ([BgpConst.BGP_ADDR_FAMILY.IPV4_UNC, BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST].includes(addressFamily)) {
+            // Older mixed pages could save a Label draft under the UNC flat-config key.
+            if (!config && addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
+                const legacyConfig = this.store.get(this.ipv4UNCRouteConfigFileKey);
+                if (Number(legacyConfig?.addressFamily) === addressFamily) config = legacyConfig;
+            }
+            if (config && Number(config.addressFamily ?? BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) !== addressFamily)
+                config = null;
+            routeWorkspace = this.filterIpv4RouteWorkspace(
+                routeWorkspace ?? this.store.get(this.ipv4RouteWorkspaceFileKey),
+                addressFamily
+            );
+        }
         return routeWorkspace ? { ...config, routeWorkspace } : config;
     }
 
@@ -446,6 +567,7 @@ class BgpApp {
     saveLastRouteConfig(config) {
         const key = this.getRouteConfigStoreKey(config?.addressFamily);
         if (key) {
+            if (config.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_UNC) this.preserveLegacyIpv4LabelConfig();
             this.store.set(key, config);
         }
     }

@@ -15,7 +15,11 @@ const BgpMain = () => import('../view/bgp/BgpMain.vue');
 const BgpConfig = () => import('../view/bgp/BgpConfig.vue');
 const BgpPeerConfig = () => import('../view/bgp/BgpPeerConfig.vue');
 const RouteIpv4 = () => import('../view/bgp/RouteIpv4.vue');
+const RouteIpv4Label = () => import('../view/bgp/RouteIpv4Label.vue');
 const RouteIpv6 = () => import('../view/bgp/RouteIpv6.vue');
+const RouteVpnv4 = () => import('../view/bgp/RouteVpnv4.vue');
+const RouteVpnv6 = () => import('../view/bgp/RouteVpnv6.vue');
+const RouteEvpn = () => import('../view/bgp/RouteEvpn.vue');
 const RouteMvpn = () => import('../view/bgp/RouteMvpn.vue');
 const RouteIpv4Qp = () => import('../view/bgp/RouteIpv4Qp.vue');
 const RouteIpv6Qp = () => import('../view/bgp/RouteIpv6Qp.vue');
@@ -251,6 +255,12 @@ const routes = [
                         meta: { keepAlive: true }
                     },
                     {
+                        path: 'route-ipv4-label',
+                        name: 'RouteIpv4Label',
+                        component: RouteIpv4Label,
+                        meta: { keepAlive: true }
+                    },
+                    {
                         path: 'route-ipv6',
                         name: 'RouteIpv6',
                         component: RouteIpv6,
@@ -260,6 +270,24 @@ const routes = [
                         path: 'route-mvpn',
                         name: 'RouteMvpn',
                         component: RouteMvpn,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'route-vpnv4',
+                        name: 'RouteVpnv4',
+                        component: RouteVpnv4,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'route-vpnv6',
+                        name: 'RouteVpnv6',
+                        component: RouteVpnv6,
+                        meta: { keepAlive: true }
+                    },
+                    {
+                        path: 'route-evpn',
+                        name: 'RouteEvpn',
+                        component: RouteEvpn,
                         meta: { keepAlive: true }
                     },
                     {

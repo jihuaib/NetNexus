@@ -145,8 +145,8 @@ const BmpE2eController = (() => {
     const BmpConst = require(path.join(electronRoot, 'const', 'bmpConst'));
     const BgpConst = require(path.join(electronRoot, 'const', 'bgpConst'));
     const BmpSession = require(path.join(electronRoot, 'worker', 'bmp', 'bmpSession'));
-    const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'routeUpdateAggregator'));
-    const BmpRouteAssuranceService = require(path.join(electronRoot, 'utils', 'bmpRouteAssuranceService'));
+    const RouteUpdateAggregator = require(path.join(electronRoot, 'utils', 'bmp', 'bmpRouteUpdateAggregator'));
+    const BmpRouteAssuranceService = require(path.join(electronRoot, 'utils', 'bmp', 'bmpRouteAssuranceService'));
     const persistenceStorePath = path.join(electronRoot, 'worker', 'bmp', 'bmpPersistenceStore.js');
     const persistenceElectronExecutable =
         process.env.E2E_TARGET === 'browser' ? require('electron') : findPackagedElectronExecutable();

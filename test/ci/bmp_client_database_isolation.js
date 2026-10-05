@@ -11,8 +11,8 @@ const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceCl
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const { BMP_PERSISTENCE_OP } = require('../../electron/worker/bmp/bmpPersistenceConst');
 const { getClientDatabasePath, getClientWorkerIndex } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
-const { parseEvpnNlri } = require('../../electron/utils/bgpAddressFamily/evpn');
-const { parseFlowSpecNlri } = require('../../electron/utils/bgpAddressFamily/flowSpec');
+const { parseEvpnNlri } = require('../../electron/utils/bgp/addressFamily/evpn');
+const { parseFlowSpecNlri } = require('../../electron/utils/bgp/addressFamily/flowSpec');
 const {
     buildConnectionMutation,
     buildRouteUpsertMutation,

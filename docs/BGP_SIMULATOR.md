@@ -1,6 +1,6 @@
 # BGP 模拟器
 
-BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试路由。它适合协议联调、页面验证和实验场景，覆盖 Add-Path、SRv6 SID、MVPN、QP 和自定义 BGP 属性等高级能力。
+BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试路由。它适合协议联调、页面验证和实验场景，覆盖 VPNv4、VPNv6、EVPN、Add-Path、SRv6 SID、MVPN、QP 和自定义 BGP 属性等高级能力。
 
 ## 已实现能力
 
@@ -12,6 +12,8 @@ BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试�
 - 对等体状态查看。
 - 向已建立的 IPv4 / IPv6 对等体发送原始 BGP 十六进制报文。
 - IPv4 / IPv6 单播路由生成、删除、分页查看、Add-Path 批量生成和 SRv6 SID 下发。
+- VPNv4 / VPNv6 邻居协商及带 RD、MPLS 标签的路由构造、发送和撤销。
+- EVPN 邻居协商及 Type 1–5 路由构造，支持 MPLS、VXLAN/VNI 和 SRv6 Service SID。
 - IPv4 MVPN 路由生成和删除。
 - IPv4 / IPv6 QP 路由生成和删除。
 - RouteViews MRT 文件导入。
@@ -54,6 +56,8 @@ BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试�
 
 支持配置 IPv4 / IPv6 peer，并查看 peer 状态。实际会话能否建立取决于对端地址、AS、端口、网络连通性和对端策略。
 
+VPNv4、VPNv6 和 EVPN 均可使用 IPv4 或 IPv6 TCP 邻居。在 BGP 配置和邻居配置中同时启用目标地址族；对端未声明对应 MP-BGP 能力时，该地址族显示 `No Neg`，不会发送该族路由。
+
 原始报文发送：
 
 1. 等待目标邻居状态变为 `Established`，点击该行的“发送原始报文”。
@@ -71,6 +75,8 @@ BGP 模拟器用于在本机启动 BGP 服务，配置对等体并生成测试�
 ### 路由管理
 
 IPv4 单播路由：
+
+`IPv4-UNC路由` 和 `IPv4 Label路由` 分为两个顶部 Tab，分别管理路由组、配置和列表。打开页面时，旧版混合工作区中的路由组会按地址族恢复到对应 Tab，保留组名和配置。
 
 ![BGP 路由信息](images/bgp/bgp-route.png)
 
@@ -94,7 +100,7 @@ IPv4 单播路由支持：
 - IPv4 高级配置：ADD-PATH、SRv6 和随机 AS Path 收纳到高级配置弹层，主页面保留常用基础字段，为路由表释放更多显示空间。
 - Add-Path 批量生成：开启后按 `Add-Path数量` 为同一前缀生成多条路径，列表通过 `pathId` 区分。
 - SRv6 SID：可选择固定或递增 SID，并设置 End.DT4、End.DX4、End.DT46 Endpoint 行为。
-- Label Unicast：切换到 IPv4 Label 地址族后可配置标签起始值和步长。
+- Label Unicast：在 `IPv4 Label路由` Tab 中配置标签起始值和步长；路由使用 MP-BGP 编码。RouteViews 导入位于 `IPv4-UNC路由` Tab，两页均支持 MRT 导出。
 
 IPv4 单播路由详情：
 
@@ -124,7 +130,23 @@ IPv6 单播路由详情：
 
 ![BGP IPv6 路由详情](images/bgp/bgp-route-ipv6-detail.png)
 
-IPv4 MVPN 路由：
+### VPNv4 / VPNv6 / EVPN 路由
+
+进入对应路由页，在路由组编辑器中设置 NLRI 和属性，然后生成路由。已建立并协商对应地址族的邻居会收到 `MP_REACH_NLRI`；删除单条、撤销路由组或删除全部时发送 `MP_UNREACH_NLRI`。路由组配置和已生成路由分别保存，可在重启后恢复。
+
+- VPNv4 / VPNv6：在 NLRI 下选择必选的 RD 或 MPLS Label 节点，分别配置固定值、递增、随机或值列表；这两个节点不能删除或重复添加。RD 支持 `65000:1` 或 `192.0.2.1:1`；递增和随机模式分别设置 ASN/IPv4 管理员及后半部分数值。标签范围为 `0–1048575`。前缀、掩码、数量和 IP 步长在 NLRI 路由范围中配置；不同 RD 可使用相同前缀。
+- EVPN：支持 Type 1（Ethernet A-D）、Type 2（MAC/IP）、Type 3（IMET）、Type 4（Ethernet Segment）和 Type 5（IP Prefix）。RD 在 NLRI 下配置，支持固定、递增、随机和值列表，不能删除或重复添加。编辑器按类型显示 ESI、Ethernet Tag、MAC、IP、网关和源路由器地址等字段。
+- EVPN 封装：选择 MPLS、VXLAN 或 SRv6。MPLS Label、VXLAN VNI（`0–16777215`）分别作为必选 NLRI 节点，支持四种生成方式；Type 2 可添加可选的第二个标签/VNI。切换封装或 Route Type 后仅保留适用节点。VXLAN 自动附加对应 Encapsulation 扩展团体，Type 3 自动附加 Ingress Replication PMSI Tunnel 属性。
+- SRv6：Type 1/2 使用 L2 Service SID，Type 3 使用 L2 SID / End.DT2M，Type 5 使用 L3 Service SID；带 IP 的 Type 2 可追加 L3 SID。SID 支持固定、递增和值列表，必选节点不能删除。按 [RFC 9252](https://www.rfc-editor.org/rfc/rfc9252.html#section-6) 编码 Prefix-SID 属性，二层和三层 SID 聚合在同一个属性中。Type 4 不携带转发标签、VNI 或 SID。
+- SRv6 当前使用完整 SID，转置长度和偏移均为 `0`，Argument Length 为 `0`；SID 结构之外的尾位须为零。Type 1 per-ES（Ethernet Tag `4294967295`）使用 Local Bias：SID `::` / End.DT2M、IPv4 格式 RD（后半部分非零）及非零 ESI。非零 ESI Filtering ARG 和 SID 转置暂不支持；结构约束遵循 [RFC 9819](https://www.rfc-editor.org/rfc/rfc9819.html)。
+- Type 1 per-ES 的 MPLS Label / VXLAN VNI 固定为 `0`，RD 使用 IPv4 管理员且后半部分非零，ESI 不能全零。Type 4 使用 IPv4 格式 RD（如 `192.0.2.1:1`）和 ES-Import RT。ESI Type 1/2/3 可自动推导 ES-Import；其他 ESI 类型需填写 6 字节值（如 `02:00:00:00:00:01`）。Type 5 的 ESI 和 Gateway IP 不能同时非零。
+- 属性树默认包含 RT 和 MP Next Hop，可设置 AS Path、Community、扩展团体和自定义属性。数量按类型递增前缀、MAC、Tag 或源路由器地址；MP Next Hop 可使用本地地址或显式配置。
+
+VPNv6 下一跳使用 8 字节全零 RD 加 IPv6 地址；IPv4 下一跳转换为 IPv4-mapped IPv6。VPNv4 使用 IPv6 下一跳时，双方需启用对应地址族的 Extended Next Hop Encoding 能力；未协商时保留本地路由，但不向该邻居发送。EVPN SRv6 的 MP Next Hop 必须使用 IPv6 地址；IPv4 TCP 邻居可通过固定 IPv6 下一跳发送。当前这三个地址族不支持 Add-Path，VPNv4 / VPNv6 不支持 SRv6 属性节点。
+
+BGP 路由数据库 schema 6 自动升级到 schema 7，保留既有路由和路由组，并增加 EVPN NLRI 字段存储。更早的主版本仍需按应用提示处理数据库版本兼容性。
+
+### IPv4 MVPN 路由
 
 ![BGP MVPN 路由信息](images/bgp/bgp-route-mvpn.png)
 
@@ -182,8 +204,12 @@ IPv6 QP 路由详情：
 
 当前路由页面：
 
-- IPv4 单播。
+- IPv4-UNC 单播。
+- IPv4 Label。
 - IPv6 单播。
+- VPNv4。
+- VPNv6。
+- EVPN。
 - IPv4 MVPN。
 - IPv4 QP。
 - IPv6 QP。
@@ -230,4 +256,4 @@ A: 检查本地服务是否启动、peer 地址和 AS 是否匹配、端口是�
 A: 进入对应地址族路由页面，使用列表和详情查看。
 
 **Q: 是否支持所有 BGP 地址族？**  
-A: 地址族范围以当前页面列出的 IPv4/IPv6 单播、IPv4 MVPN、IPv4/IPv6 QP 为准。
+A: 地址族范围以当前页面列出的 IPv4/IPv6 单播、VPNv4、VPNv6、EVPN Type 1–5、IPv4 MVPN、IPv4/IPv6 QP 为准。

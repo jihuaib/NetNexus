@@ -11,8 +11,8 @@ const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const { buildScope, buildRouteUpsertMutation } = require('../../electron/worker/bmp/bmpPersistenceMutation');
-const { decodeExtendedPeerFlagsValue } = require('../../electron/utils/bmpUtils');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { decodeExtendedPeerFlagsValue } = require('../../electron/utils/bmp/bmpUtils');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 
 const persistenceTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-v4-parser-'));
 const persistenceStores = new Set();
@@ -2180,7 +2180,11 @@ invalidPeerDownNotificationCases.forEach((testCase, index) => {
         route.ribType
     );
     assert.equal(retained.length, 1, `${testCase.name} must not hard-delete peer routes`);
-    assert.equal(retained[0].routeState, BmpConst.BMP_ROUTE_STATE.STALE);
+    assert.equal(
+        retained[0].routeState,
+        BmpConst.BMP_ROUTE_STATE.ACTIVE,
+        `${testCase.name} must not mutate a peer scope`
+    );
 });
 
 const { session: addPathSession } = makeSession();

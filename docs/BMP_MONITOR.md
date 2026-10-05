@@ -258,6 +258,8 @@ Session 和 Loc-RIB 的详情入口都来自 current route。路由成功 withdr
 | 查询 / 刷新 | 重新加载指定客户端的 Session Statistics Report。 |
 | 详情 | 打开单条 Statistics Report 详情，查看统计项和 TLV。 |
 
+会话统计和 Loc-RIB 统计共用与 Session / Instance 详情一致的弹窗布局，分为“统计概览”“统计明细”“TLV 扩展”和“原始数据”。概览展示报告身份、RIB、BMP 连接和更新时间；统计明细保留每项独立数值，不将不同类型的计数相加。新报告到达时当前详情同步更新，切换页签或 Client 后自动关闭；完整 JSON 只在进入“原始数据”时展开。
+
 Session 统计详情：
 
 ![BMP Session 统计详情](images/bmp/bmp-session-statis-detail.png)

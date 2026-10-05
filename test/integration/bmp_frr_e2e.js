@@ -25,7 +25,7 @@ if (!process.versions.electron) {
 }
 
 const BmpConst = require('../../electron/const/bmpConst');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
 const {
     FRR_BMP_ADDRESS_FAMILIES,
     FrrBmpLab,

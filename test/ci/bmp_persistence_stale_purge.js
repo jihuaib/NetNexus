@@ -7,8 +7,8 @@ const ClientStore = require('../../electron/worker/bmp/bmpClientPersistenceStore
 const Peer = require('../../electron/worker/bmp/bmpBgpSession');
 const Instance = require('../../electron/worker/bmp/bmpBgpInstance');
 const Route = require('../../electron/worker/bmp/bmpBgpRoute');
-const { parseEvpnNlri } = require('../../electron/utils/bgpAddressFamily/evpn');
-const { parseFlowSpecNlri } = require('../../electron/utils/bgpAddressFamily/flowSpec');
+const { parseEvpnNlri } = require('../../electron/utils/bgp/addressFamily/evpn');
+const { parseFlowSpecNlri } = require('../../electron/utils/bgp/addressFamily/flowSpec');
 const {
     buildConnectionMutation,
     buildRouteUpsertMutation

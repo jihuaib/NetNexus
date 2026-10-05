@@ -2,7 +2,7 @@
 
 const net = require('net');
 const BgpConst = require('../electron/const/bgpConst');
-const { parseBgpPacket, getBgpPacketSummary } = require('../electron/utils/bgpPacketParser');
+const { parseBgpPacket, getBgpPacketSummary } = require('../electron/utils/bgp/bgpPacketParser');
 
 const DEFAULT_OPTIONS = {
     host: '127.0.0.1',

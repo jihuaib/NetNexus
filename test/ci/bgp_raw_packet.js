@@ -9,7 +9,7 @@ const BgpSession = require('../../electron/worker/bgp/bgpSession');
 const BgpWorker = require('../../electron/worker/bgp/bgpWorker');
 const BgpApp = require('../../electron/app/bgpApp');
 const WorkerMessageHandler = require('../../electron/worker/core/workerMessageHandler');
-const { parseBgpRawPacket } = require('../../electron/utils/bgpRawPacket');
+const { parseBgpRawPacket } = require('../../electron/utils/bgp/bgpRawPacket');
 
 const STATE = BgpConst.BGP_PEER_STATE;
 const TYPE = BgpConst.BGP_PACKET_TYPE;

@@ -5,8 +5,12 @@
             <nn-tabs v-model:active-key="activeTabKey" @change="handleTabChange">
                 <nn-tab-pane key="bgp-config" tab="BGP配置" />
                 <nn-tab-pane key="bgp-peer-config" tab="邻居配置" />
-                <nn-tab-pane key="route-ipv4" tab="IPv4路由" />
+                <nn-tab-pane key="route-ipv4" tab="IPv4-UNC路由" />
+                <nn-tab-pane key="route-ipv4-label" tab="IPv4 Label路由" />
                 <nn-tab-pane key="route-ipv6" tab="IPv6路由" />
+                <nn-tab-pane key="route-vpnv4" tab="VPNv4路由" />
+                <nn-tab-pane key="route-vpnv6" tab="VPNv6路由" />
+                <nn-tab-pane key="route-evpn" tab="EVPN路由" />
                 <nn-tab-pane key="route-mvpn" tab="MVPN路由" />
                 <nn-tab-pane key="route-ipv4-qp" tab="IPv4 QP路由" />
                 <nn-tab-pane key="route-ipv6-qp" tab="IPv6 QP路由" />
@@ -39,7 +43,11 @@
         'bgp-config',
         'bgp-peer-config',
         'route-ipv4',
+        'route-ipv4-label',
         'route-ipv6',
+        'route-vpnv4',
+        'route-vpnv6',
+        'route-evpn',
         'route-mvpn',
         'route-ipv4-qp',
         'route-ipv6-qp'

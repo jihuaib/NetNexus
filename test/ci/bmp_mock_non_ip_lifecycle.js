@@ -7,7 +7,7 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
-const { canonicalStringify } = require('../../electron/utils/bmpPersistentRouteKey');
+const { canonicalStringify } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 const { buildScenario, parseArgs, ROUTE_HISTORY_SCENARIO } = require('../../scripts/mockBmpClient');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-mock-non-ip-lifecycle-'));

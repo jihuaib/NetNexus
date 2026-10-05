@@ -12,7 +12,7 @@ const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpClientPersistenceStore = require('../../electron/worker/bmp/bmpClientPersistenceStore');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const { builders } = require('../../scripts/mockBmpClient');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 const {

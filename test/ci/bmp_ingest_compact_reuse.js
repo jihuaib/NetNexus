@@ -8,7 +8,7 @@ const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpIngestClientPool = require('../../electron/worker/bmp/bmpIngestClientPool');
 const { createIngestSnapshot } = require('../../electron/worker/bmp/bmpIngestSnapshot');
-const { createSourceKey } = require('../../electron/utils/bmpPersistentRouteKey');
+const { createSourceKey } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 const {
     buildSource,
     buildConnectionMutation,

@@ -77,6 +77,7 @@
                                 <nn-form-item label="Addr Family" name="addressFamily">
                                     <nn-select
                                         v-model:value="ipv4PeerConfigData.addressFamily"
+                                        data-testid="bgp-ipv4-peer-address-family-select"
                                         mode="multiple"
                                         style="width: 100%"
                                         :options="addressFamilyOptions"
@@ -206,6 +207,7 @@
                                 <nn-form-item label="Addr Family" name="addressFamilyIpv6">
                                     <nn-select
                                         v-model:value="ipv6PeerConfigData.addressFamilyIpv6"
+                                        data-testid="bgp-ipv6-peer-address-family-select"
                                         mode="multiple"
                                         style="width: 100%"
                                         :options="addressFamilyOptionsIpv6"
@@ -292,6 +294,60 @@
                 <nn-card title="邻居信息" class="bgp-peer-info-card">
                     <div class="bgp-peer-info-content">
                         <nn-tabs v-model:active-key="activePeerInfoTabKey" class="bgp-peer-info-tabs">
+                            <nn-tab-pane
+                                v-for="family in vpnEvpnPeerTabs"
+                                :key="family.family"
+                                :tab="`${family.label}邻居`"
+                            >
+                                <div class="bgp-peer-info-header">
+                                    <UnorderedListOutlined />
+                                    <span class="bgp-peer-info-header-text">{{ family.label }}邻居列表</span>
+                                    <nn-tag v-if="family.peers.length > 0" color="blue">
+                                        {{ family.peers.length }}
+                                    </nn-tag>
+                                </div>
+                                <nn-table
+                                    :data-testid="`bgp-${family.label.toLowerCase()}-peer-table`"
+                                    :columns="PeerInfoColumns"
+                                    :data-source="family.peers"
+                                    :row-key="
+                                        record => `${record.vrfIndex || 0}-${record.peerIp}-${record.addressFamily}`
+                                    "
+                                    :pagination="{
+                                        pageSize: 20,
+                                        showSizeChanger: false,
+                                        position: ['bottomCenter'],
+                                        showTotal: total => '共 ' + total + ' 条，每页 20 条'
+                                    }"
+                                    :scroll="{ y: '100%' }"
+                                    size="small"
+                                    class="bgp-peer-table"
+                                >
+                                    <template #bodyCell="{ column, record }">
+                                        <template v-if="column.key === 'action'">
+                                            <nn-space size="small">
+                                                <nn-button
+                                                    size="small"
+                                                    :disabled="record.peerState !== 'Established'"
+                                                    data-testid="bgp-raw-packet-open"
+                                                    @click="openRawPacket(record)"
+                                                >
+                                                    发送原始报文
+                                                </nn-button>
+                                                <nn-button
+                                                    type="primary"
+                                                    danger
+                                                    size="small"
+                                                    @click="deletePeer(record)"
+                                                >
+                                                    <template #icon><DeleteOutlined /></template>
+                                                    删除
+                                                </nn-button>
+                                            </nn-space>
+                                        </template>
+                                    </template>
+                                </nn-table>
+                            </nn-tab-pane>
                             <nn-tab-pane :key="BGP_ADDR_FAMILY.IPV4_UNC" tab="IPv4-UNC邻居">
                                 <div class="bgp-peer-info-header">
                                     <UnorderedListOutlined />
@@ -732,12 +788,11 @@
     import BgpRawPacketModal from '../../components/BgpRawPacketModal.vue';
 
     import EventBus from '../../utils/eventBus';
+    import { FormValidator, validatePacketData } from '../../utils/validationCommon';
     import {
-        FormValidator,
         createBgpPeerIpv4ConfigValidationRules,
-        createBgpPeerIpv6ConfigValidationRules,
-        validatePacketData
-    } from '../../utils/validationCommon';
+        createBgpPeerIpv6ConfigValidationRules
+    } from '../../utils/bgp/validationRules';
 
     defineOptions({
         name: 'BgpPeerConfig'
@@ -814,6 +869,9 @@
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC, disabled: true },
         { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC },
+        { label: 'VPNv4', value: BGP_ADDR_FAMILY.VPNV4 },
+        { label: 'VPNv6', value: BGP_ADDR_FAMILY.VPNV6 },
+        { label: 'EVPN', value: BGP_ADDR_FAMILY.L2VPN_EVPN },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },
         { label: 'IPv4-QP', value: BGP_ADDR_FAMILY.IPV4_QP },
@@ -824,6 +882,9 @@
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC },
         { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC, disabled: true },
+        { label: 'VPNv4', value: BGP_ADDR_FAMILY.VPNV4 },
+        { label: 'VPNv6', value: BGP_ADDR_FAMILY.VPNV6 },
+        { label: 'EVPN', value: BGP_ADDR_FAMILY.L2VPN_EVPN },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },
         { label: 'IPv4-QP', value: BGP_ADDR_FAMILY.IPV4_QP },
@@ -1097,6 +1158,26 @@
     const ipv6MvpnPeerList = ref([]);
     const ipv4QpPeerList = ref([]);
     const ipv6QpPeerList = ref([]);
+    const vpnv4PeerList = ref([]);
+    const vpnv6PeerList = ref([]);
+    const evpnPeerList = ref([]);
+    const peerListByFamily = {
+        [BGP_ADDR_FAMILY.IPV4_UNC]: ipv4UncPeerList,
+        [BGP_ADDR_FAMILY.IPV6_UNC]: ipv6UncPeerList,
+        [BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: ipv4LabelPeerList,
+        [BGP_ADDR_FAMILY.IPV4_MVPN]: ipv4MvpnPeerList,
+        [BGP_ADDR_FAMILY.IPV6_MVPN]: ipv6MvpnPeerList,
+        [BGP_ADDR_FAMILY.IPV4_QP]: ipv4QpPeerList,
+        [BGP_ADDR_FAMILY.IPV6_QP]: ipv6QpPeerList,
+        [BGP_ADDR_FAMILY.VPNV4]: vpnv4PeerList,
+        [BGP_ADDR_FAMILY.VPNV6]: vpnv6PeerList,
+        [BGP_ADDR_FAMILY.L2VPN_EVPN]: evpnPeerList
+    };
+    const vpnEvpnPeerTabs = computed(() => [
+        { family: BGP_ADDR_FAMILY.VPNV4, label: 'VPNv4', peers: vpnv4PeerList.value },
+        { family: BGP_ADDR_FAMILY.VPNV6, label: 'VPNv6', peers: vpnv6PeerList.value },
+        { family: BGP_ADDR_FAMILY.L2VPN_EVPN, label: 'EVPN', peers: evpnPeerList.value }
+    ]);
     const peerLists = [
         ipv4UncPeerList,
         ipv6UncPeerList,
@@ -1104,7 +1185,10 @@
         ipv4MvpnPeerList,
         ipv6MvpnPeerList,
         ipv4QpPeerList,
-        ipv6QpPeerList
+        ipv6QpPeerList,
+        vpnv4PeerList,
+        vpnv6PeerList,
+        evpnPeerList
     ];
     const rawPacketVisible = ref(false);
     const rawPacketTarget = ref(null);
@@ -1201,71 +1285,12 @@
     const onPeerChange = result => {
         const data = result.data;
         if (result.status === 'success') {
-            // 根据地址族类型更新对应的表格数据
-            if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_UNC) {
-                const index = ipv4UncPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv4UncPeerList.value[index] = { ...ipv4UncPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV6_UNC) {
-                const index = ipv6UncPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv6UncPeerList.value[index] = { ...ipv6UncPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
-                const index = ipv4LabelPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv4LabelPeerList.value[index] = { ...ipv4LabelPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_MVPN) {
-                const index = ipv4MvpnPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv4MvpnPeerList.value[index] = { ...ipv4MvpnPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV6_MVPN) {
-                const index = ipv6MvpnPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv6MvpnPeerList.value[index] = { ...ipv6MvpnPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV4_QP) {
-                const index = ipv4QpPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv4QpPeerList.value[index] = { ...ipv4QpPeerList.value[index], ...data };
-                }
-            } else if (data.addressFamily === BGP_ADDR_FAMILY.IPV6_QP) {
-                const index = ipv6QpPeerList.value.findIndex(
-                    peer =>
-                        `${peer.vrfIndex || ''}-${peer.peerIp || ''}-${peer.addressFamily || ''}` ===
-                        `${data.vrfIndex || ''}-${data.peerIp || ''}-${data.addressFamily || ''}`
-                );
-                if (index !== -1) {
-                    ipv6QpPeerList.value[index] = { ...ipv6QpPeerList.value[index], ...data };
-                }
-            }
+            const list = peerListByFamily[Number(data.addressFamily)];
+            if (!list) return;
+            const index = list.value.findIndex(
+                peer => peer.peerIp === data.peerIp && (peer.vrfIndex || 0) === (data.vrfIndex || 0)
+            );
+            if (index !== -1) list.value[index] = { ...list.value[index], ...data };
         } else {
             notify.error(data.msg);
         }
@@ -1297,40 +1322,9 @@
         }
         if (requestId !== peerInfoRequestId) return;
         if (peerInfo.status === 'success') {
-            // 处理 IPv4-UNC 邻居信息
-            ipv4UncPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_UNC])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_UNC]]
-                : [];
-
-            // 处理 IPv6-UNC 邻居信息
-            ipv6UncPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV6_UNC])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV6_UNC]]
-                : [];
-
-            // 处理 IPv4 Label 邻居信息
-            ipv4LabelPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]]
-                : [];
-
-            // 处理 IPv4-MVPN 邻居信息
-            ipv4MvpnPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_MVPN])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_MVPN]]
-                : [];
-
-            // 处理 IPv6-MVPN 邻居信息
-            ipv6MvpnPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV6_MVPN])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV6_MVPN]]
-                : [];
-
-            // 处理 IPv4-QP 邻居信息
-            ipv4QpPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV4_QP])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV4_QP]]
-                : [];
-
-            // 处理 IPv6-QP 邻居信息
-            ipv6QpPeerList.value = Array.isArray(peerInfo.data[BGP_ADDR_FAMILY.IPV6_QP])
-                ? [...peerInfo.data[BGP_ADDR_FAMILY.IPV6_QP]]
-                : [];
+            Object.entries(peerListByFamily).forEach(([addressFamily, list]) => {
+                list.value = Array.isArray(peerInfo.data[addressFamily]) ? [...peerInfo.data[addressFamily]] : [];
+            });
         } else {
             console.error(peerInfo.msg || 'Peer信息查询失败');
             clearPeerInfo();

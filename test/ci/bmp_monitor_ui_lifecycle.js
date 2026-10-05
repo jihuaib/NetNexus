@@ -4,7 +4,7 @@ const path = require('node:path');
 const vm = require('node:vm');
 const { parse: parseVue } = require('@vue/compiler-sfc');
 const { parse: parseJavaScript } = require('@babel/parser');
-const { ref, computed } = require('vue');
+const { ref, computed, reactive } = require('vue');
 
 function deferred() {
     let resolve;
@@ -38,9 +38,11 @@ function loadPage(file, api, exportedNames, props = {}) {
     const context = {
         ref,
         computed,
+        reactive,
         defineOptions() {},
         defineProps: () => props,
         useRoute: () => route,
+        useRouter: () => ({ push() {} }),
         onActivated: callback => hooks.activated.push(callback),
         onMounted: callback => hooks.mounted.push(callback),
         onDeactivated: callback => hooks.deactivated.push(callback),
@@ -53,6 +55,7 @@ function loadPage(file, api, exportedNames, props = {}) {
         EyeOutlined: {},
         RouteOutlined: {},
         SearchOutlined: {},
+        SafetyOutlined: {},
         EventBus: {
             on: (type, _page, callback) => listeners.set(type, callback),
             off: type => listeners.delete(type)
@@ -294,10 +297,106 @@ async function verifyTransportBoundStatistics() {
     page.deactivatePage();
 }
 
+async function verifyAssuranceActivationAndRefresh() {
+    const requests = [];
+    const page = loadPage(
+        'BgpRouteAssurance.vue',
+        {
+            getRouteAssurance: options => {
+                const pending = deferred();
+                requests.push({ options, ...pending });
+                return pending.promise;
+            },
+            setRouteAssuranceEnabled: async () => success(null)
+        },
+        ['analysisEnabled', 'assuranceResult', 'loading', 'loadAssurance', 'scheduleRefresh']
+    );
+    const activate = () => page.hooks.activated[0]();
+    const deactivate = () => page.hooks.deactivated[0]();
+    const runTimer = () => {
+        assert.equal(page.timers.size, 1);
+        const [id, timer] = [...page.timers][0];
+        page.timers.delete(id);
+        timer.callback();
+    };
+    page.analysisEnabled.value = true;
+    activate();
+    activate();
+    assert.equal(requests.length, 1, 'duplicate activation must not duplicate analysis reads');
+    deactivate();
+    requests[0].resolve(success({ generatedAt: 'obsolete', summary: { refreshPending: true } }));
+    await flush();
+    assert.notEqual(page.assuranceResult.value.generatedAt, 'obsolete');
+    assert.equal(page.loading.value, false);
+    assert.equal(page.timers.size, 0, 'a late pending response must not resurrect background polling');
+    await page.loadAssurance();
+    page.scheduleRefresh();
+    assert.equal(requests.length, 1);
+    assert.equal(page.timers.size, 0);
+
+    activate();
+    requests[1].resolve(success({ generatedAt: 'current' }));
+    await flush();
+    page.scheduleRefresh();
+    const firstTimer = [...page.timers.keys()][0];
+    for (let index = 0; index < 20; index += 1) page.scheduleRefresh();
+    assert.equal([...page.timers.keys()][0], firstTimer, 'continuous invalidations cannot postpone the refresh');
+    runTimer();
+    assert.equal(requests.length, 3);
+    for (let index = 0; index < 20; index += 1) page.scheduleRefresh();
+    assert.equal(page.timers.size, 0, 'updates during a live query coalesce without concurrent automatic reads');
+    requests[2].resolve(success({ generatedAt: 'updated', summary: { refreshPending: true } }));
+    await flush();
+    assert.equal(page.timers.size, 1, 'one follow-up serves both new invalidations and pending backend work');
+    runTimer();
+    deactivate();
+    requests[3].reject(new Error('obsolete IPC failure'));
+    await flush();
+    assert.equal(page.notifications.length, 0, 'inactive analysis requests cannot report obsolete errors');
+    assert.equal(page.timers.size, 0);
+}
+
+async function verifyLensRefreshCoalescing() {
+    const requests = [];
+    const page = loadPage(
+        'BgpRouteLens.vue',
+        {
+            getRouteLens: () => {
+                const pending = deferred();
+                requests.push(pending);
+                return pending.promise;
+            }
+        },
+        ['routeQuery', 'searchRoute', 'scheduleRefresh']
+    );
+    page.hooks.activated[0]();
+    page.routeQuery.value = '203.0.113.1';
+    page.searchRoute();
+    requests[0].resolve(success({ generatedAt: 'initial' }));
+    await flush();
+    page.scheduleRefresh();
+    const firstTimer = [...page.timers.keys()][0];
+    for (let index = 0; index < 20; index += 1) page.scheduleRefresh();
+    assert.equal([...page.timers.keys()][0], firstTimer);
+    const timer = page.timers.get(firstTimer);
+    page.timers.delete(firstTimer);
+    timer.callback();
+    for (let index = 0; index < 20; index += 1) page.scheduleRefresh();
+    assert.equal(page.timers.size, 0);
+    assert.equal(requests.length, 2);
+    requests[1].resolve(success({ generatedAt: 'updated' }));
+    await flush();
+    assert.equal(page.timers.size, 1, 'one follow-up covers invalidations received during the query');
+    page.hooks.deactivated[0]();
+    assert.equal(page.timers.size, 0);
+}
+
 async function main() {
     await verifyLocRibStatistics();
     await verifyTransportBoundStatistics();
     await verifyRouteLensActivation();
+    await verifyAssuranceActivationAndRefresh();
+    await verifyLensRefreshCoalescing();
     console.log('BMP monitor UI connection/activation lifecycle tests passed');
 }
 main().catch(error => {

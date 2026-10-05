@@ -1,5 +1,5 @@
 const crypto = require('crypto');
-const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgpAttributeRegistry');
+const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgp/bgpAttributeRegistry');
 const { normalizeExtendedCommunities } = require('../../../shared/bgpExtendedCommunities');
 
 function normalizeString(value) {
@@ -47,6 +47,14 @@ function canonicalizeAttr(attr = {}) {
     if (Object.prototype.hasOwnProperty.call(attr, 'extendedCommunities')) {
         canonical.extendedCommunities = normalizeExtendedCommunities(attr.extendedCommunities);
     }
+    if (Object.prototype.hasOwnProperty.call(attr, 'srv6Services')) {
+        canonical.srv6Services = attr.srv6Services.map(service => ({
+            serviceType: service.serviceType,
+            sid: normalizeString(service.sid),
+            endpointBehavior: normalizeNumber(service.endpointBehavior, null),
+            sidStructure: { ...service.sidStructure }
+        }));
+    }
     // MRT can contain both the global and link-local IPv6 next hop. Keep the
     // full encoded pair while the route's mpNextHop remains its display address.
     if (attr.mrtMpNextHopBytes !== undefined) {
@@ -67,7 +75,7 @@ function canonicalizeAttr(attr = {}) {
                           ? [...entry.value]
                           : entry.value
             };
-            if (entry.type === 'srv6') {
+            if (['srv6', 'srv6L2', 'srv6L3'].includes(entry.type)) {
                 result.srv6EndpointBehavior = entry.srv6EndpointBehavior;
                 result.srv6SidStructure = { ...entry.srv6SidStructure };
             }

@@ -1,6 +1,6 @@
 const path = require('path');
 const { Worker } = require('worker_threads');
-const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
+const { normalizeBmpThreadCount } = require('../../utils/bmp/bmpThreadConfig');
 const { normalizeClientSourceId } = require('./bmpClientPersistencePaths');
 
 const RAW_HIGH_WATERMARK_BYTES = 1024 * 1024;

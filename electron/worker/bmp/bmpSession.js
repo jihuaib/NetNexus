@@ -10,18 +10,23 @@ const {
     decodeExtendedPeerFlagsValue,
     getEffectivePeerFlags,
     parseStatsRecords
-} = require('../../utils/bmpUtils');
+} = require('../../utils/bmp/bmpUtils');
 const BgpConst = require('../../const/bgpConst');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpRoute = require('./bmpBgpRoute');
-const { rdBufferToString, ipv4BufferToString, ipv6BufferToString } = require('../../utils/ipUtils');
-const { parseBgpPacket, getBgpPacketSummary: getBgpUpdateSummary } = require('../../utils/bgpPacketParser');
-const { parseBmpPacket, getBmpPacketSummary } = require('../../utils/bmpPacketParser');
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
-const { splitSessionStatisticsReport, getSessionStatisticsReportIdentityParts } = require('../../utils/bmpStatistics');
+const { rdBufferToString } = require('../../utils/bgp/bgpEncoding');
+const { ipv4BufferToString, ipv6BufferToString } = require('../../utils/ipUtils');
+const { parseBgpPacket, getBgpPacketSummary: getBgpUpdateSummary } = require('../../utils/bgp/bgpPacketParser');
+const { parseBmpPacket, getBmpPacketSummary } = require('../../utils/bmp/bmpPacketParser');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const {
+    splitSessionStatisticsReport,
+    getSessionStatisticsReportIdentityParts
+} = require('../../utils/bmp/bmpStatistics');
 const BmpBgpInstance = require('./bmpBgpInstance');
 const IdentityFallbackMap = require('./identityFallbackMap');
 const { canonicalizeBmpRouteAttr } = require('./bmpRouteAttrStore');
+const { reconstructLegacyAsPath, formatAsPath } = require('../../utils/bgp/bgpAsPath');
 const {
     buildScope,
     buildConnectionMutation,
@@ -1178,6 +1183,7 @@ class BmpSession {
                       : 4
             );
             const parsed = parseBgpPacket(bgpMessageTlv.value, bgpContext);
+            parsed.asnSize = bgpContext.asnSize;
             if (!parsed.valid) {
                 logger.error(`Received BMPv4 BGP Update message is invalid: ${parsed.error}`);
             }
@@ -1206,6 +1212,7 @@ class BmpSession {
         if (position + embedded.length !== message.length) {
             return { error: 'BMPv3 Route Monitoring contains bytes after its BGP Update' };
         }
+        embedded.parsed.asnSize = bgpContext.asnSize;
 
         return {
             parsedBgpUpdate: embedded.parsed,
@@ -1215,6 +1222,9 @@ class BmpSession {
     }
 
     parsePeerDownPayload(message, position, reason, version) {
+        if (!Object.values(BmpConst.BMP_PEER_DOWN_REASON).includes(reason)) {
+            return { error: 'Peer Down reason is missing or unsupported' };
+        }
         const result = {
             parsedBgpNotification: null,
             hasValidBgpNotification: false,
@@ -1237,18 +1247,18 @@ class BmpSession {
                     Number.isInteger(embedded.parsed.errorCode) &&
                     Number.isInteger(embedded.parsed.errorSubcode);
                 if (!result.hasValidBgpNotification) {
-                    logger.warn('Peer Down: embedded BGP message is not a valid Notification');
+                    return { error: 'Peer Down embedded BGP message is not a valid Notification' };
                 }
                 position += embedded.length;
             } else {
-                logger.warn(`Peer Down: ${embedded.error}`);
+                return { error: embedded.error };
             }
         } else if (reason === BmpConst.BMP_PEER_DOWN_REASON.LOCAL_SYSTEM_CLOSED_NO_NOTIFICATION) {
             if (position + 2 <= message.length) {
                 result.fsmEventCode = message.readUInt16BE(position);
                 position += 2;
             } else {
-                logger.warn('Peer Down: FSM event code is truncated');
+                return { error: 'Peer Down FSM event code is truncated' };
             }
         }
 
@@ -1258,7 +1268,10 @@ class BmpSession {
         ) {
             const tlvResult = parseBmpTlvs(message, position);
             this.logTlvWarnings('Peer Down TLV', tlvResult.warnings);
+            if (tlvResult.warnings.length > 0) return { error: 'Peer Down TLV is truncated' };
             result.tlvs = tlvResult.tlvs;
+        } else if (position !== message.length) {
+            return { error: 'BMPv3 Peer Down contains unexpected trailing bytes' };
         }
 
         return result;
@@ -1267,6 +1280,10 @@ class BmpSession {
     // 辅助方法：设置路由属性
     extractRouteAttributes(bgpUpdate, includeMpNextHop = true) {
         const routeAttr = {};
+        let asPath = null;
+        let as4Path = null;
+        let aggregator = null;
+        let as4Aggregator = null;
 
         for (const attr of bgpUpdate.pathAttributes || []) {
             switch (attr.typeCode) {
@@ -1274,11 +1291,17 @@ class BmpSession {
                     routeAttr.origin = attr.origin;
                     break;
                 case BgpConst.BGP_PATH_ATTR.AS_PATH:
-                    routeAttr.asPath = attr.segments
-                        .map(seg =>
-                            seg.typeName === 'AS_SEQUENCE' ? seg.asNumbers.join(' ') : `{${seg.asNumbers.join(' ')}}`
-                        )
-                        .join(' ');
+                    asPath = attr;
+                    routeAttr.asPath = formatAsPath(attr.segments);
+                    break;
+                case BgpConst.BGP_PATH_ATTR.AS4_PATH:
+                    as4Path = attr;
+                    break;
+                case BgpConst.BGP_PATH_ATTR.AGGREGATOR:
+                    aggregator = attr;
+                    break;
+                case BgpConst.BGP_PATH_ATTR.AS4_AGGREGATOR:
+                    as4Aggregator = attr;
                     break;
                 case BgpConst.BGP_PATH_ATTR.NEXT_HOP:
                     routeAttr.nextHop = attr.nextHop;
@@ -1300,6 +1323,20 @@ class BmpSession {
                     break;
                 case BgpConst.BGP_PATH_ATTR.MP_REACH_NLRI:
                     if (includeMpNextHop) routeAttr.nextHop = attr.mpReach.nextHop;
+            }
+        }
+
+        if (as4Path) {
+            // Preserve both wire attributes for inspection; the normal four-octet
+            // ingest path retains its existing compact attribute representation.
+            routeAttr.wireAsPath = routeAttr.asPath ?? null;
+            routeAttr.as4Path = formatAsPath(as4Path.segments);
+            if (
+                bgpUpdate.asnSize === 2 &&
+                asPath &&
+                !(aggregator && as4Aggregator && aggregator.aggregatorAs !== 23456)
+            ) {
+                routeAttr.asPath = formatAsPath(reconstructLegacyAsPath(asPath.segments, as4Path.segments));
             }
         }
 
@@ -2581,6 +2618,10 @@ class BmpSession {
             const reason = message[position];
             position += 1;
             const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
+            if (peerDownPayload.error) {
+                logger.warn(`Peer Down: ${peerDownPayload.error}`);
+                return;
+            }
             const effectiveSessionFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(sessionFlags, peerDownPayload.tlvs)
@@ -2666,6 +2707,10 @@ class BmpSession {
             const reason = message[position];
             position += 1;
             const peerDownPayload = this.parsePeerDownPayload(message, position, reason, version);
+            if (peerDownPayload.error) {
+                logger.warn(`Loc-RIB Peer Down: ${peerDownPayload.error}`);
+                return;
+            }
             const peerDownVrfTableNames = this.decodeVrfTableNameTlvs(peerDownPayload.tlvs);
 
             const rdIdentity = instanceRdRaw || instanceRd;
@@ -3176,8 +3221,8 @@ class BmpSession {
                 bgpInstance.recvAddressFamilies = recvAddressFamilies.map(item => ({ ...item }));
                 bgpInstance.sendAddressFamilies = sentAddressFamilies.map(item => ({ ...item }));
 
-                bgpInstance.recvAddPathMap = recvAddPaths;
-                bgpInstance.sendAddPathMap = sendAddPaths;
+                bgpInstance.recvAddPathMap = new Map(recvAddPaths);
+                bgpInstance.sendAddPathMap = new Map(sendAddPaths);
                 bgpInstance.afi = enabledAF.afi;
                 bgpInstance.safi = enabledAF.safi;
 
@@ -3320,6 +3365,7 @@ class BmpSession {
             if (version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()) {
                 const tlvResult = parseBmpTlvs(message, position);
                 this.logTlvWarnings('Statistics Report TLV', tlvResult.warnings);
+                if (tlvResult.warnings.length > 0) return;
                 tlvs = tlvResult.tlvs;
                 const statsTlv = tlvs.find(
                     tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS
@@ -3331,10 +3377,12 @@ class BmpSession {
                 statsTlv.name = 'Stats';
                 const statsResult = parseStatsRecords(statsTlv.value);
                 this.logTlvWarnings('Statistics Report Stats TLV', statsResult.warnings);
+                if (statsResult.warnings.length > 0 || statsResult.offset !== statsTlv.value.length) return;
                 statistics = statsResult.statistics;
             } else {
                 const statsResult = parseStatsRecords(message, position);
                 this.logTlvWarnings('Statistics Report', statsResult.warnings);
+                if (statsResult.warnings.length > 0 || statsResult.offset !== message.length) return;
                 statistics = statsResult.statistics;
             }
 
@@ -3422,6 +3470,7 @@ class BmpSession {
             if (version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()) {
                 const tlvResult = parseBmpTlvs(message, position);
                 this.logTlvWarnings('Local-RIB Statistics Report TLV', tlvResult.warnings);
+                if (tlvResult.warnings.length > 0) return;
                 tlvs = tlvResult.tlvs;
                 const statsTlv = tlvs.find(
                     tlv => !tlv.enterprise && tlv.type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS
@@ -3433,10 +3482,12 @@ class BmpSession {
                 statsTlv.name = 'Stats';
                 const statsResult = parseStatsRecords(statsTlv.value, 0, { locRib: true });
                 this.logTlvWarnings('Local-RIB Statistics Report Stats TLV', statsResult.warnings);
+                if (statsResult.warnings.length > 0 || statsResult.offset !== statsTlv.value.length) return;
                 statistics = statsResult.statistics;
             } else {
                 const statsResult = parseStatsRecords(message, position, { locRib: true });
                 this.logTlvWarnings('Local-RIB Statistics Report', statsResult.warnings);
+                if (statsResult.warnings.length > 0 || statsResult.offset !== message.length) return;
                 statistics = statsResult.statistics;
             }
 

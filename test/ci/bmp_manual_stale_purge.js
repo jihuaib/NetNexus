@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
-const BmpRouteAssuranceService = require('../../electron/utils/bmpRouteAssuranceService');
+const BmpRouteAssuranceService = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 
 const BmpWorker = loadBmpWorkerClass(__dirname, module);
 const SOURCE = 'manual-source-a';

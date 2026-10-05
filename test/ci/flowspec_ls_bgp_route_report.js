@@ -11,7 +11,7 @@ const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 
 const RIB_TYPE = BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN;
 const PAGE_SIZE = 29;

@@ -2,7 +2,7 @@ const assert = require('assert');
 const {
     buildRandomAsPathGenerationContext,
     getGeneratedRandomAsPath
-} = require('../../electron/utils/bgpRouteGenerator');
+} = require('../../electron/utils/bgp/simulator/bgpRouteGenerator');
 
 const samples = [0.999999, 0, 0.5, 0.999999];
 let index = 0;

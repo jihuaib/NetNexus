@@ -170,7 +170,7 @@
     import { computed, inject, ref, onActivated, onBeforeUnmount, watch, onDeactivated, onMounted } from 'vue';
     import { useRoute } from 'vue-router';
     import { notify } from '../../utils/notify';
-    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
+    import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
     import BmpLocRibInstanceDetailModal from '../../components/BmpLocRibInstanceDetailModal.vue';
     import {
@@ -186,7 +186,7 @@
         getRouteParseStatusColor,
         getRouteParseStatusRowClass,
         getRouteParseStatusText
-    } from '../../utils/routeParseStatus';
+    } from '../../utils/bmp/routeParseStatus';
     import EventBus from '../../utils/eventBus';
     defineOptions({
         name: 'BgpLocRib'

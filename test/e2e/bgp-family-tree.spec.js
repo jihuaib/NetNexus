@@ -271,10 +271,10 @@ test.describe('BGP family tree workspaces', () => {
             last: '10.20.4.0/24'
         },
         {
-            key: 'ipv4',
+            key: 'ipv4-label',
             label: 'IPv4 Label',
             family: 12,
-            configKey: 'Ipv4UNCRouteConfig',
+            configKey: 'Ipv4LabelRouteConfig',
             prefix: '198.51.100.1',
             mask: '24',
             first: '198.51.100.0/24',
@@ -294,7 +294,6 @@ test.describe('BGP family tree workspaces', () => {
         }) => {
             const prefix = prefixFor(profile);
             await openPage(page, profile);
-            if (profile.family === 12) await selectOption(page, 'route-field-addressFamily', 'IPv4 Label');
             await page.getByTestId(basicFieldId(profile, 'prefix')).fill(profile.prefix);
             await page.getByTestId(basicFieldId(profile, 'mask')).fill(profile.mask);
             await page.getByTestId(basicFieldId(profile, 'count')).fill('3');

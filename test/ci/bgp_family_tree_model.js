@@ -25,7 +25,147 @@ const {
     getRouteResultColumns,
     getRouteSections
 } = loaded.exports;
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../electron/utils/bgpAttributeRules');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
+
+const ipv4Profile = getRouteProfile('ipv4');
+const labelProfile = getRouteProfile('ipv4-label');
+assert.deepEqual(ipv4Profile.addressFamilies, [1]);
+assert.deepEqual(labelProfile.addressFamilies, [12]);
+assert.equal(ipv4Profile.title, 'IPv4-UNC');
+assert.equal(labelProfile.title, 'IPv4 Label');
+const classic = createRouteGroup('ipv4', 'classic', {
+    addressFamily: 12,
+    prefix: '10.0.0.1',
+    mask: '24',
+    count: '2',
+    rd: '65000:7',
+    nlriRules: [
+        { id: 'paths', type: 'addPath', count: 2, enabled: true },
+        { id: 'hidden-mp', type: 'mpNextHop', mode: 'fixed', value: 'invalid' },
+        { id: 'hidden-label', type: 'label', mode: 'fixed', value: 'invalid' }
+    ],
+    attributeRules: []
+});
+assert.equal(classic.config.addressFamily, 1, 'each IPv4 page fixes its address family');
+assert.deepEqual(validateRouteConfig(classic.config), {}, 'classic NLRI ignores inactive MP and label drafts');
+const classicPayload = compileRouteTreePayload(classic.config, classic);
+assert.equal(classicPayload.nlriEncoding, 'auto', 'classic NLRI must retain automatic encoding');
+assert.equal(classicPayload.rd, '65000:7', 'the shared page preserves the legacy RD payload');
+assert.equal(classicPayload.groupId, classic.id);
+assert.deepEqual(classicPayload.nlriRules, [{ id: 'paths', type: 'addPath', count: 2 }]);
+assert.equal(buildAttributeRuleContext(classicPayload).pathCount, 2);
+const explicitMp = { ...classic.config, nlriEncoding: 'mpReach' };
+assert.ok(validateRouteConfig(explicitMp)['rule:hidden-mp']);
+assert.ok(compileRouteTreePayload(explicitMp).nlriRules.some(rule => rule.id === 'hidden-mp'));
+const label = createRouteGroup('ipv4-label', 'label', { ...classic.config, nlriRules: undefined });
+assert.equal(label.config.addressFamily, 12);
+assert.deepEqual(validateRouteConfig(label.config), {});
+assert.deepEqual(
+    label.config.nlriRules.map(rule => rule.type),
+    ['mpNextHop', 'label']
+);
+const defaultLabel = createRouteGroup('ipv4-label');
+assert.equal(
+    defaultLabel.config.attributeRules.some(rule => rule.type === 'nextHop'),
+    false
+);
+assert.equal(
+    createRouteGroup('ipv4').config.attributeRules.some(rule => rule.type === 'nextHop'),
+    true
+);
+const labelPayload = compileRouteTreePayload(defaultLabel.config);
+const labelAttributes = getGeneratedAttributeValues(buildAttributeRuleContext(labelPayload), 0);
+assert.equal(labelAttributes.mpNextHop, '');
+assert.equal(
+    labelAttributes.attr.pathAttributes.some(entry => entry.type === 'nextHop'),
+    false
+);
+assert.ok(getRouteResultColumns(defaultLabel.config).some(column => column.key === 'label'));
+assert.ok(getRouteResultColumns(defaultLabel.config).some(column => column.key === 'mpNextHop'));
+assert.equal(
+    getRouteResultColumns(classic.config).some(column => column.key === 'label'),
+    false
+);
+for (const [profile, group] of [
+    ['ipv4', classic],
+    ['ipv4-label', defaultLabel]
+]) {
+    const sections = getRouteSections(group.config, profile);
+    assert.equal(sections[0].title, '前缀范围');
+    const fields = sections.flatMap(section => section.fields);
+    assert.equal(
+        fields.some(field => field.key === 'addressFamily'),
+        false
+    );
+    assert.equal(fields.find(field => field.key === 'prefix').testId, `bgp-${profile}-route-prefix-input`);
+}
+const mixedWorkspace = {
+    ...label.config,
+    routeWorkspace: { version: 6, groups: [classic, label], activeGroupId: label.id }
+};
+for (const [profile, expected] of [
+    ['ipv4', classic],
+    ['ipv4-label', label]
+]) {
+    const restored = restoreRouteWorkspace(profile, mixedWorkspace);
+    assert.equal(restored.activeGroupId, expected.id);
+    assert.equal(restored.groups.length, 1);
+    assert.equal(restored.groups[0].id, expected.id);
+    assert.equal(restored.groups[0].name, expected.name);
+    assert.deepEqual(restored.groups[0].config, expected.config);
+    const saved = serializeRouteWorkspace(profile, [classic, label], label.id);
+    assert.equal(saved.routeWorkspace.version, 6, 'both IPv4 pages retain the legacy workspace format');
+    assert.equal(saved.routeWorkspace.groups.length, 1);
+    assert.equal(saved.routeWorkspace.activeGroupId, expected.id);
+    assert.equal(saved.addressFamily, expected.config.addressFamily);
+    assert.deepEqual(restoreRouteWorkspace(profile, saved).groups, restored.groups);
+}
+const opaqueRdWorkspace = {
+    ...mixedWorkspace,
+    routeWorkspace: {
+        ...mixedWorkspace.routeWorkspace,
+        groups: [classic, label].map(group => ({ ...group, config: { ...group.config, rd: 'tenantA' } }))
+    }
+};
+for (const profile of ['ipv4', 'ipv4-label']) {
+    const restored = restoreRouteWorkspace(profile, opaqueRdWorkspace);
+    const group = restored.groups[0];
+    assert.equal(group.config.rd, 'tenantA');
+    assert.deepEqual(validateRouteConfig(group.config), {}, 'legacy IPv4 RD is an opaque route key');
+    assert.equal(compileRouteTreePayload(group.config, group).rd, 'tenantA');
+    assert.equal(serializeRouteWorkspace(profile, restored.groups, restored.activeGroupId).routeWorkspace.version, 6);
+    assert.match(
+        validateRouteConfig({ ...group.config, prefix: '255.255.255.255', mask: 32, count: 2 }).count,
+        /IP 地址空间/,
+        'opaque RD must not bypass prefix-range overflow validation'
+    );
+}
+const emptyLabel = createRouteGroup('ipv4-label', 'empty', { nlriRules: [], attributeRules: [] });
+const restoredEmptyLabel = restoreRouteWorkspace(
+    'ipv4-label',
+    serializeRouteWorkspace('ipv4-label', [emptyLabel], emptyLabel.id)
+).groups[0];
+assert.deepEqual(restoredEmptyLabel.config.nlriRules, []);
+assert.deepEqual(restoredEmptyLabel.config.attributeRules, []);
+assert.equal(restoreRouteWorkspace('ipv4-label', null).groups[0].config.addressFamily, 12);
+assert.equal(findRouteGroupOverlap([classic, label], classic.id), null, 'UNC and Label occupy separate NLRI keys');
+const sameLabel = createRouteGroup('ipv4-label', 'other label', {
+    ...label.config,
+    nlriRules: [{ id: 'different-label', type: 'label', mode: 'fixed', value: 999 }]
+});
+assert.ok(findRouteGroupOverlap([label, sameLabel], label.id), 'labels do not change IPv4 NLRI identity');
+assert.equal(describeRouteRange(label.config), '10.0.0.0/24 → 10.0.1.0/24');
+for (const profile of ['ipv4', 'ipv4-label']) {
+    const config = createRouteGroup(profile, 'validation', { nlriRules: [], attributeRules: [] }).config;
+    assert.ok(validateRouteConfig({ ...config, prefix: '10.1' }).prefix);
+    assert.ok(validateRouteConfig({ ...config, count: '1e2' }).count);
+    assert.ok(validateRouteConfig({ ...config, mask: ' 24' }).mask);
+    assert.ok(validateRouteConfig({ ...config, ipStep: '1e0' }).ipStep);
+    assert.deepEqual(validateRouteConfig({ ...config, prefix: '0.0.0.0', mask: 0, count: 1 }), {});
+}
 
 for (const name of ['ipv6', 'ipv4-qp', 'ipv6-qp', 'mvpn']) {
     const profile = getRouteProfile(name);
@@ -351,4 +491,4 @@ assert.equal(findRouteGroupOverlap([mvpn6, mvpn6Other], mvpn6.id), null);
 assert.ok(validateRouteConfig({ ...mvpn6.config, rd: '70000:70000' }).rd);
 assert.ok(validateRouteConfig({ ...mvpn6.config, groupIp: '255.255.255.255', count: 2 }).count);
 assert.ok(validateRouteConfig({ ...mvpn6.config, routeType: 2, sourceAs: 0xffffffff, count: 2 }).count);
-console.log('Other-family tree defaults, presence, payloads, saved workspaces and exact NLRI overlap tests passed');
+console.log('Route-family tree defaults, presence, payloads, saved workspaces and exact NLRI overlap tests passed');

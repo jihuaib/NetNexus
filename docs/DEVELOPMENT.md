@@ -138,6 +138,28 @@ npm run build:ui -- /absolute/path/to/NetNexusUI
 
 完成本地联调后，再升级 UI 版本并发布一次，最后在 NetNexus 中更新精确依赖版本。
 
+## BGP/BMP 工具目录与复用边界
+
+工具按协议职责归属组织。BMP 消息中嵌入的 BGP OPEN、UPDATE 等报文复用同一份 BGP 解码器；“被 BGP 和 BMP 共用”不代表需要复制模块或移到无协议归属的目录。
+
+| 目录或模块 | 职责 |
+| --- | --- |
+| `electron/utils/ipUtils.js` | 通用 IP 与字节转换：`writeUInt16`、`writeUInt32`、`ipToBytes`、`ipv4BufferToString`、`ipv6BufferToString`、`getNetworkAddress`，不依赖 BGP 常量。 |
+| `electron/utils/bgp/` | 纯 BGP 协议工具：`bgpUtils`、`bgpPacketParser`、`bgpAttributeRegistry`、`bgpRawPacket`、`bgpEncoding`、`bgpAsPath`。RD、扩展团体编解码和 AS4_PATH 重建也归此处。 |
+| `electron/utils/bgp/addressFamily/` | 各地址族的 NLRI、next-hop 和相关协议结构解析，供 BGP 与 BMP 共用。 |
+| `electron/utils/bgp/simulator/` | 模拟器配置、生成及导入导出：`bgpAttributeRules`、`bgpRouteGenerator`、`bgpVpnEvpn`、`bgpMrtEncoder`、`bgpMrtExport`、`bgpMrtImport`、`bgpRouteIpGenerator`。原 `routeViewsUtils` 改名为 `bgpMrtImport`。 |
+| `electron/utils/bmp/` | BMP 解析、统计、持久化路由身份、Route Assurance/Lens、线程配置及 `bmpRouteUpdateAggregator` 等 BMP 专属工具。 |
+| `src/utils/bgp/`、`src/utils/bmp/` | 渲染层协议工具：各自的 `validationRules`；BMP 另有 `bmpClientLabel`、`routeParseStatus`。通用输入校验仍放在 `src/utils/validationCommon.js`。 |
+| `src/const/ipConst.js` | 通用 IP 类型枚举；RPKI 与通用校验直接引用，BGP 常量保留转导出以兼容已有入口。 |
+| `shared/` | 已有跨主进程、Worker 和渲染层的定义与协议数据，保持原有共享入口。 |
+
+新增或调整工具时遵守以下依赖规则：
+
+- BMP 工具可依赖 BGP 纯协议工具和通用工具，不依赖 `bgp/simulator/`；模拟器依赖协议层，协议层不反向依赖模拟器或 Worker。
+- BMP 的 source/scope/route 身份、持久化键和路由对比语义属于采集与分析流程，不能与模拟器的配置默认值、生成规则强行合并。
+- 纯通用工具不引入 BGP/BMP 常量或会话状态；已有 `shared/` 定义继续共用，避免在新目录维护第二份定义。
+- `electron/pktParser/` 输出抓包展示树，工具目录中的 packet parser 输出供业务使用的解析对象。两者输出职责不同，目录整理不合并这两套接口。
+
 ## 常用脚本
 
 | 命令 | 用途 |

@@ -2,8 +2,8 @@ const net = require('net');
 const ipaddr = require('ipaddr.js');
 const util = require('util');
 const BgpConst = require('../../const/bgpConst');
-const { forEachGeneratedRouteIp } = require('../../utils/ipUtils');
-const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
+const { forEachGeneratedRouteIp } = require('../../utils/bgp/simulator/bgpRouteIpGenerator');
+const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const BgpSession = require('./bgpSession');
@@ -20,8 +20,19 @@ const {
     getGeneratedUnicastPathIds,
     buildRandomAsPathGenerationContext,
     getGeneratedRandomAsPath
-} = require('../../utils/bgpRouteGenerator');
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../utils/bgpAttributeRules');
+} = require('../../utils/bgp/simulator/bgpRouteGenerator');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../utils/bgp/simulator/bgpAttributeRules');
+const {
+    makeVpnRouteKey,
+    makeEvpnRouteKey,
+    iterateVpnRouteInputs,
+    iterateEvpnRouteInputs,
+    applyGeneratedEvpnNlri
+} = require('../../utils/bgp/simulator/bgpVpnEvpn');
+const { isEvpnPerEs } = require('../../../shared/bgpEvpnSrv6');
 
 function validateTreePrefixRange(config, ipType, prefixStep = 1) {
     const count = Math.floor(Number(config.count));
@@ -73,6 +84,10 @@ function formatBgpListenError(error, port, platform = process.platform) {
 }
 
 function makeRouteLookupKey(addressFamily, route) {
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.VPNV4 || addressFamily === BgpConst.BGP_ADDR_FAMILY.VPNV6) {
+        return makeVpnRouteKey(route, addressFamily === BgpConst.BGP_ADDR_FAMILY.VPNV4 ? 1 : 2);
+    }
+    if (addressFamily === BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN) return makeEvpnRouteKey(route);
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST) {
         return BgpRoute.makeLabelUnicastKey(route?.pathId, route?.ip, route?.mask);
     }
@@ -253,6 +268,12 @@ function getAddressFamilyFlag(addressFamily) {
             return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV4_LABEL_UNICAST;
         case BgpConst.BGP_ADDR_FAMILY.IPV6_LABEL_UNICAST:
             return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.IPV6_LABEL_UNICAST;
+        case BgpConst.BGP_ADDR_FAMILY.VPNV4:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.VPNV4;
+        case BgpConst.BGP_ADDR_FAMILY.VPNV6:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.VPNV6;
+        case BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN:
+            return BgpConst.BGP_MULTIPROTOCOL_EXTENSIONS_FLAGS.L2VPN_EVPN;
         default:
             return 0;
     }
@@ -279,6 +300,11 @@ class BgpWorker {
         // 初始化消息处理器
         this.messageHandler.init();
         // 注册消息处理器
+        this.messageHandler.registerHandler(
+            BgpConst.BGP_REQ_TYPES.GENERATE_VPN_EVPN_ROUTES,
+            this.generateVpnEvpnRoutes.bind(this)
+        );
+        this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.DELETE_VPN_EVPN_ROUTES, this.deleteRoute.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.START_BGP, this.startBgp.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.STOP_BGP, this.stopBgp.bind(this));
         this.messageHandler.registerHandler(BgpConst.BGP_REQ_TYPES.CONFIG_IPV4_PEER, this.configIpv4Peer.bind(this));
@@ -794,6 +820,9 @@ class BgpWorker {
     getPeerInfo(messageId) {
         const ipv4PeerInfoList = [];
         const ipv6PeerInfoList = [];
+        const vpnv4PeerInfoList = [];
+        const vpnv6PeerInfoList = [];
+        const evpnPeerInfoList = [];
         const ipv4LabelPeerInfoList = [];
         const ipv4MvpnPeerInfoList = [];
         const ipv6MvpnPeerInfoList = [];
@@ -817,6 +846,12 @@ class BgpWorker {
                         ipv4QpPeerInfoList.push(peerInfo);
                     } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {
                         ipv6QpPeerInfoList.push(peerInfo);
+                    } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.VPNV4) {
+                        vpnv4PeerInfoList.push(peerInfo);
+                    } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.VPNV6) {
+                        vpnv6PeerInfoList.push(peerInfo);
+                    } else if (peerInfo.addressFamily === BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN) {
+                        evpnPeerInfoList.push(peerInfo);
                     }
                 });
             } else {
@@ -827,6 +862,9 @@ class BgpWorker {
         const peerInfoList = {
             [BgpConst.BGP_ADDR_FAMILY.IPV4_UNC]: [...ipv4PeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV6_UNC]: [...ipv6PeerInfoList],
+            [BgpConst.BGP_ADDR_FAMILY.VPNV4]: [...vpnv4PeerInfoList],
+            [BgpConst.BGP_ADDR_FAMILY.VPNV6]: [...vpnv6PeerInfoList],
+            [BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN]: [...evpnPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST]: [...ipv4LabelPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN]: [...ipv4MvpnPeerInfoList],
             [BgpConst.BGP_ADDR_FAMILY.IPV6_MVPN]: [...ipv6MvpnPeerInfoList],
@@ -992,6 +1030,7 @@ class BgpWorker {
     assertTreeRouteEncodable(instance, route) {
         for (const peer of instance.peerMap.values()) {
             if (peer.peerState !== BgpConst.BGP_PEER_STATE.ESTABLISHED) continue;
+            if (route.encapsulationType === 'srv6') peer.getMpReachNextHopBytes(route);
             const builder = peer.getRouteGroupBuilder(route);
             if (!builder) continue;
             const result = builder([route], 0);
@@ -1380,6 +1419,12 @@ class BgpWorker {
 
         if (Array.isArray(config.routes)) {
             config.routes.forEach(deleteInput);
+        } else if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
+            for (const route of iterateVpnRouteInputs(config)) deleteInput({ ...route, rd: config.rd });
+        } else if (safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+            // Mutable labels/VNIs and gateways are not needed to identify an EVPN NLRI.
+            if (Number(config.count ?? 1) !== 1) throw new Error('EVPN批量删除请提供routes列表');
+            deleteInput(config);
         } else {
             forEachGeneratedRouteIp(ipType, config.prefix, config.mask, config.count, route =>
                 deleteInput({ ...route, rd: config.rd, pathId: config.pathId })
@@ -1451,7 +1496,7 @@ class BgpWorker {
         }
     }
 
-    generateSpecialTreeRoutes(messageId, config) {
+    generateSpecialTreeRoutes(messageId, config, options = {}) {
         const { afi, safi } = getAfiAndSafi(config.addressFamily);
         const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
         if (!instance) throw new Error('实例不存在');
@@ -1462,31 +1507,174 @@ class BgpWorker {
         const count = Array.isArray(config.routes) ? config.routes.length : Number(config.count);
         if (!Number.isSafeInteger(count) || count < 1) throw new Error('路由组数量必须为正整数');
         const isQp = safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP;
-        if (!isQp && Number(config.addressFamily) !== BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN)
+        const isVpn = safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN;
+        const isEvpn = safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN;
+        if (!isQp && !isVpn && !isEvpn && Number(config.addressFamily) !== BgpConst.BGP_ADDR_FAMILY.IPV4_MVPN)
             throw new Error('当前地址族不支持专用树生成');
         const context = buildAttributeRuleContext(config, Math.random, count);
         if (!context.enabled) throw new Error('路由组必须使用树属性配置');
-        if (context.rules.some(rule => ['addPath', 'label', 'srv6'].includes(rule.type)))
-            throw new Error('当前地址族不支持ADD-PATH、Label或Unicast SRv6节点');
+        if (
+            context.rules.some(
+                rule => ['addPath', 'srv6'].includes(rule.type) || (!isVpn && !isEvpn && rule.type === 'label')
+            )
+        )
+            throw new Error(
+                isVpn
+                    ? 'VPN地址族不支持ADD-PATH或Unicast SRv6节点'
+                    : '当前地址族不支持ADD-PATH、Label或Unicast SRv6节点'
+            );
         if (isQp && context.rules.some(rule => rule.type === 'mpNextHop'))
             throw new Error('QP的MP下一跳请通过BSID节点配置');
+        if ((isVpn || isEvpn) && !context.rules.some(rule => rule.type === 'mpNextHop'))
+            throw new Error('VPN/EVPN路由需要MP Next Hop节点');
         const ipType = afi === BgpConst.BGP_AFI_TYPE.AFI_IPV6 ? BgpConst.IP_TYPE.IPV6 : BgpConst.IP_TYPE.IPV4;
-        const inputs = isQp ? iterateQpTreeRouteInputs(config, ipType) : iterateMvpnTreeRouteInputs(config);
+        const inputs = isQp
+            ? iterateQpTreeRouteInputs(config, ipType)
+            : isVpn
+              ? iterateVpnRouteInputs(config)
+              : isEvpn
+                ? iterateEvpnRouteInputs(config)
+                : iterateMvpnTreeRouteInputs(config);
         const assertEncodable = route => this.assertTreeRouteEncodable(instance, route);
+        const applyEvpnAttributes = (input, attr) => {
+            // Custom attributes already contain their complete BGP attribute headers.
+            const custom = Buffer.from(attr.customAttr || '', 'hex');
+            let hasPmsi = false;
+            const pmsiValues = [];
+            const encapsulations = [];
+            for (let offset = 0; offset + 3 <= custom.length; ) {
+                const extended = (custom[offset] & 0x10) !== 0;
+                const headerLength = extended ? 4 : 3;
+                if (offset + headerLength > custom.length) break;
+                const length = extended ? custom.readUInt16BE(offset + 2) : custom[offset + 2];
+                const end = offset + headerLength + length;
+                if (end > custom.length) break;
+                if (custom[offset + 1] === BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL) {
+                    hasPmsi = true;
+                    pmsiValues.push(custom.subarray(offset + headerLength, end));
+                }
+                if (custom[offset + 1] === BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES)
+                    for (let position = offset + headerLength; position + 8 <= end; position += 8)
+                        encapsulations.push(`hex:${custom.subarray(position, position + 8).toString('hex')}`);
+                offset = end;
+            }
+            let values = attr.extendedCommunities || [];
+            const descriptorValues = attr.pathAttributes
+                .filter(entry => entry.type === 'extendedCommunities')
+                .flatMap(entry => entry.value);
+            const configuredEncapsulation = [...values, ...descriptorValues, ...encapsulations].filter(value =>
+                /^hex:030c[\da-f]{12}$/i.test(value)
+            );
+            if (input.routeType === 4) {
+                const configuredImports = [...values, ...descriptorValues, ...encapsulations].filter(value =>
+                    /^hex:0602[\da-f]{12}$/i.test(value)
+                );
+                const expected = input.esImportRt ? `hex:0602${input.esImportRt.replace(/:/g, '')}` : '';
+                if (!expected && !configuredImports.length)
+                    throw new Error('EVPN Type 4的ESI类型0/4/5需要显式ES-Import RT');
+                if (expected && !configuredImports.includes(expected)) {
+                    values = [...values, expected];
+                    attr.extendedCommunities = values;
+                    const descriptor = attr.pathAttributes.find(entry => entry.type === 'extendedCommunities');
+                    if (descriptor) descriptor.value = [...descriptor.value, expected];
+                    else attr.pathAttributes.push({ type: 'extendedCommunities', value: [expected] });
+                }
+            }
+            const tunnelType =
+                input.encapsulationType === 'vxlan' ? '0008' : input.encapsulationType === 'srv6' ? '000e' : '000a';
+            if (configuredEncapsulation.some(value => !value.toLowerCase().endsWith(tunnelType)))
+                throw new Error(
+                    input.encapsulationType === 'vxlan'
+                        ? 'VXLAN路由的Encapsulation Extended Community必须为VXLAN（8）'
+                        : input.encapsulationType === 'srv6'
+                          ? 'SRv6路由的Encapsulation Extended Community必须为IPv6 Tunnel（14）'
+                          : 'MPLS路由的Encapsulation Extended Community必须为MPLS（10）'
+                );
+            if (input.encapsulationType === 'vxlan') {
+                if (!configuredEncapsulation.length) {
+                    const vxlan = 'hex:030c000000000008';
+                    attr.extendedCommunities = [...values, vxlan];
+                    const descriptor = attr.pathAttributes.find(entry => entry.type === 'extendedCommunities');
+                    if (descriptor) descriptor.value = [...descriptor.value, vxlan];
+                    else attr.pathAttributes.push({ type: 'extendedCommunities', value: [vxlan] });
+                }
+            }
+            if (input.encapsulationType === 'srv6' && isEvpnPerEs(input)) {
+                const esiLabel = 'hex:0601000000000030';
+                const configuredEsiLabels = [...values, ...descriptorValues, ...encapsulations].filter(value =>
+                    /^hex:0601[\da-f]{12}$/i.test(value)
+                );
+                if (configuredEsiLabels.some(value => value.toLowerCase() !== esiLabel))
+                    throw new Error(
+                        'EVPN SRv6 per-ES Local Bias的ESI Label Extended Community必须为all-active、Implicit NULL（3）'
+                    );
+                if (!configuredEsiLabels.length) {
+                    attr.extendedCommunities = [...(attr.extendedCommunities || []), esiLabel];
+                    const descriptor = attr.pathAttributes.find(entry => entry.type === 'extendedCommunities');
+                    if (descriptor) descriptor.value = [...descriptor.value, esiLabel];
+                    else attr.pathAttributes.push({ type: 'extendedCommunities', value: [esiLabel] });
+                }
+            }
+            if (
+                input.encapsulationType === 'srv6' &&
+                input.routeType === 3 &&
+                pmsiValues.some(
+                    value =>
+                        ![9, 21].includes(value.length) ||
+                        value[0] !== 0 ||
+                        value[1] !== 6 ||
+                        value.subarray(2, 5).some(byte => byte !== 0)
+                )
+            )
+                throw new Error(
+                    'EVPN SRv6 Type 3的PMSI必须为Ingress Replication（6）、Flags和Label为0，Tunnel Identifier为PE IP地址'
+                );
+            if (input.routeType === 3 && !hasPmsi) {
+                const tunnelId = Buffer.from(ipaddr.parse(input.originatingRouterIp).toByteArray());
+                const label =
+                    input.encapsulationType === 'vxlan'
+                        ? input.vni
+                        : input.encapsulationType === 'srv6'
+                          ? 0
+                          : input.label * 16;
+                const value = Buffer.from([0, 6, (label >>> 16) & 255, (label >>> 8) & 255, label & 255]);
+                const pmsi = Buffer.concat([
+                    Buffer.from([0xc0, BgpConst.BGP_PATH_ATTR.PMSI_TUNNEL, value.length + tunnelId.length]),
+                    value,
+                    tunnelId
+                ]).toString('hex');
+                attr.customAttr = (attr.customAttr || '') + pmsi;
+                attr.pathAttributes.push({ type: 'custom', value: pmsi });
+            }
+            return attr;
+        };
         const candidates = (function* () {
             let index = 0;
             for (const input of inputs) {
                 const generated = getGeneratedAttributeValues(context, index);
+                const nlri = isEvpn ? applyGeneratedEvpnNlri(input, generated) : input;
                 const route = new BgpRoute(instance);
-                instance.copyRouteNlriFields(route, input);
+                instance.copyRouteNlriFields(route, nlri);
+                if (isVpn) {
+                    if (generated.rd !== undefined) route.rd = generated.rd;
+                    if (generated.label !== undefined) route.label = generated.label;
+                }
                 route.nlriEncoding = BgpRoute.normalizeNlriEncoding(config.nlriEncoding);
                 route.mpNextHop = BgpRoute.normalizeMpNextHop(generated.mpNextHop);
                 if (isQp) route.dqpn = generated.dqpn ?? null;
+                if (
+                    isEvpn &&
+                    nlri.encapsulationType === 'srv6' &&
+                    generated.mpNextHop &&
+                    ipaddr.parse(generated.mpNextHop).kind() !== 'ipv6'
+                )
+                    throw new Error('EVPN SRv6的MP Next Hop必须为IPv6地址');
+                const generatedAttr = isEvpn ? applyEvpnAttributes(nlri, generated.attr) : generated.attr;
                 const attr = instance.makeRouteAttr(null, {
                     customAttr: '',
                     rt: '',
-                    ...generated.attr,
-                    attributePolicy: 'configured',
+                    ...generatedAttr,
+                    attributePolicy: options.legacyAttributes ? 'legacy' : 'configured',
                     configuredAttributes: context.attributeRules.map(rule => rule.type)
                 });
                 route._routeAttr = attr;
@@ -1523,6 +1711,87 @@ class BgpWorker {
             messageId,
             { added: inserted, updated, unchanged, total: instance.routeMap.size },
             '路由生成成功'
+        );
+    }
+
+    generateVpnEvpnRoutes(messageId, config) {
+        const family = Number(config.addressFamily);
+        if (
+            ![
+                BgpConst.BGP_ADDR_FAMILY.VPNV4,
+                BgpConst.BGP_ADDR_FAMILY.VPNV6,
+                BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN
+            ].includes(family)
+        )
+            throw new Error('当前地址族不支持VPN/EVPN路由生成');
+        if (config.attributeRules !== undefined || config.nlriRules !== undefined || config.groupId !== undefined)
+            return this.generateSpecialTreeRoutes(messageId, config);
+        const attributes = [
+            { type: 'origin', value: config.origin ?? BgpConst.BGP_ORIGIN_TYPE.IGP },
+            { type: 'asPath', value: config.asPath ?? '' },
+            { type: 'med', value: config.med ?? 0 },
+            { type: 'localPref', value: config.localPref ?? 100 }
+        ];
+        if (config.communities) attributes.push({ type: 'communities', value: config.communities });
+        if (config.extendedCommunities)
+            attributes.push({ type: 'extendedCommunities', value: config.extendedCommunities });
+        if (config.rt) {
+            const targets = String(config.rt)
+                .trim()
+                .split(/\s+/)
+                .filter(Boolean)
+                .map(value => `rt:${value}`);
+            const communities = attributes.find(rule => rule.type === 'extendedCommunities');
+            if (communities)
+                communities.value = [
+                    ...(Array.isArray(communities.value) ? communities.value : [communities.value]),
+                    ...targets
+                ];
+            else attributes.push({ type: 'extendedCommunities', value: targets });
+        }
+        if (config.customAttr) attributes.push({ type: 'custom', value: config.customAttr });
+        return this.generateSpecialTreeRoutes(
+            messageId,
+            {
+                ...config,
+                count: config.count ?? 1,
+                attributeRules: attributes,
+                nlriRules: [
+                    ...(!Array.isArray(config.routes)
+                        ? [{ type: 'rd', mode: 'fixed', value: config.rd ?? '0:0' }]
+                        : []),
+                    ...(!Array.isArray(config.routes) &&
+                    (family !== BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN || [1, 2, 3, 5].includes(Number(config.routeType)))
+                        ? [
+                              {
+                                  type: config.encapsulationType === 'vxlan' ? 'vni' : 'label',
+                                  mode: 'fixed',
+                                  value:
+                                      config.encapsulationType === 'vxlan'
+                                          ? (config.vni ?? 1000)
+                                          : (config.label ?? config.labelStart ?? 16)
+                              }
+                          ]
+                        : []),
+                    ...(family === BgpConst.BGP_ADDR_FAMILY.L2VPN_EVPN &&
+                    Number(config.routeType) === 2 &&
+                    (config.label2 !== undefined || config.vni2 !== undefined)
+                        ? [
+                              {
+                                  type: config.encapsulationType === 'vxlan' ? 'vni2' : 'label2',
+                                  mode: 'fixed',
+                                  value: config.encapsulationType === 'vxlan' ? config.vni2 : config.label2
+                              }
+                          ]
+                        : []),
+                    {
+                        type: 'mpNextHop',
+                        mode: config.mpNextHop || config.nextHop ? 'fixed' : 'auto',
+                        value: config.mpNextHop || config.nextHop || ''
+                    }
+                ]
+            },
+            { legacyAttributes: true }
         );
     }
 

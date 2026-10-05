@@ -9,13 +9,9 @@
 const logger = require('../log/logger');
 
 const BgpConst = require('../const/bgpConst');
+const { ipv4BufferToString, ipv6BufferToString } = require('../utils/ipUtils');
 const {
-    ipv4BufferToString,
-    ipv6BufferToString,
     getIpTypeName,
-    extCommunitiesBufferToString
-} = require('../utils/ipUtils');
-const {
     getBgpPacketTypeName,
     getBgpOpenCapabilityName,
     getBgpAfiName,
@@ -26,8 +22,10 @@ const {
     getBgpOriginType,
     getBgpAsPathTypeName,
     getBgpAddPathTypeName
-} = require('../utils/bgpUtils');
-const bgpAddressFamily = require('../utils/bgpAddressFamily');
+} = require('../utils/bgp/bgpUtils');
+const { extCommunitiesBufferToString } = require('../utils/bgp/bgpEncoding');
+
+const bgpAddressFamily = require('../utils/bgp/addressFamily');
 
 function readUint24BE(buffer, position) {
     return (buffer[position] << 16) | (buffer[position + 1] << 8) | buffer[position + 2];

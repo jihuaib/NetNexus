@@ -1,7 +1,7 @@
 const assert = require('assert');
 const registry = require('../../electron/pktParser/packetParserRegistry');
 const { parseBmpPacket: parseBmpTreePacket } = require('../../electron/pktParser/bmpPacketParser');
-const { parseBmpPacket, getBmpPacketSummary } = require('../../electron/utils/bmpPacketParser');
+const { parseBmpPacket, getBmpPacketSummary } = require('../../electron/utils/bmp/bmpPacketParser');
 const BmpConst = require('../../electron/const/bmpConst');
 const BgpConst = require('../../electron/const/bgpConst');
 

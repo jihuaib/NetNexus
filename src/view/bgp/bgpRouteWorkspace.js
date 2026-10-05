@@ -2,7 +2,9 @@ import ipaddr from 'ipaddr.js';
 import { BGP_ADDR_FAMILY as AF } from '../../const/bgpConst';
 import registry from '../../../shared/bgpAttributes.json';
 import { isSchemaFieldVisible } from '../../utils/schemaForm';
+import { isValidIpv4 } from '../../utils/validationCommon';
 import { intersectRouteSequences } from './bgpRouteRange';
+import { IPV4_ROUTE_SECTIONS } from './ipv4RouteSchema';
 import {
     createAttributeRule,
     normalizeAttributeRules,
@@ -22,13 +24,30 @@ import {
     describeIpv4RouteRange,
     findIpv4RouteGroupOverlap
 } from './ipv4RouteWorkspace';
+import {
+    VPN_EVPN_ROUTE_PROFILES,
+    getEvpnRouteTypeDefaults,
+    isVpnRoute,
+    isEvpnRoute,
+    normalizeEvpnRouteConfig,
+    isVpnEvpnRoute,
+    getVpnEvpnRouteSections,
+    validateVpnEvpnRouteConfig,
+    getVpnEvpnRouteSequences,
+    describeVpnEvpnRouteNlri,
+    getVpnEvpnRouteResultColumns
+} from './bgpVpnEvpnSchema';
 
 const clone = value => JSON.parse(JSON.stringify(value));
 const families = {
     ipv4: {
-        title: 'IPv4',
+        title: 'IPv4-UNC',
         addressFamily: AF.IPV4_UNC,
-        addressFamilies: [AF.IPV4_UNC, AF.IPV4_LABEL_UNICAST],
+        defaults: registry.route.defaults
+    },
+    'ipv4-label': {
+        title: 'IPv4 Label',
+        addressFamily: AF.IPV4_LABEL_UNICAST,
         defaults: registry.route.defaults
     },
     ipv6: {
@@ -59,7 +78,8 @@ const families = {
             leafRouteKey: '020c00000064000000010000ffff',
             count: '1'
         }
-    }
+    },
+    ...VPN_EVPN_ROUTE_PROFILES
 };
 export const ROUTE_PROFILES = Object.fromEntries(
     Object.entries(families).map(([key, value]) => [
@@ -88,12 +108,31 @@ const profileFor = config =>
 const isQp = config => [AF.IPV4_QP, AF.IPV6_QP].includes(Number(config.addressFamily));
 const isMvpn = config => Number(config.addressFamily) === AF.IPV4_MVPN;
 const isIpv6 = config => [AF.IPV6_UNC, AF.IPV6_QP].includes(Number(config.addressFamily));
+const isIpv4Route = config => [AF.IPV4_UNC, AF.IPV4_LABEL_UNICAST].includes(Number(config.addressFamily));
+const isIpv4Profile = profile => ['ipv4', 'ipv4-label'].includes(profile.key);
 let sequence = 0;
 
 export function createRouteGroup(profile, name = '路由组 1', config = {}) {
     profile = getRouteProfile(profile);
-    if (profile.key === 'ipv4') return createIpv4RouteGroup(name, config);
-    const normalized = { ...clone(profile.defaults), ...clone(config) };
+    if (isIpv4Profile(profile)) {
+        const group = createIpv4RouteGroup(name, {
+            ...clone(profile.defaults),
+            ...config,
+            addressFamily: profile.addressFamily
+        });
+        if (profile.key === 'ipv4-label') {
+            if (!Array.isArray(config.attributeRules))
+                group.config.attributeRules = group.config.attributeRules.filter(rule => rule.type !== 'nextHop');
+            if (!Array.isArray(config.nlriRules))
+                group.config.nlriRules.unshift(createAttributeRule('mpNextHop', profile.addressFamily));
+        }
+        return group;
+    }
+    let normalized = {
+        ...clone(profile.defaults),
+        ...(profile.key === 'evpn' ? getEvpnRouteTypeDefaults(config) : {}),
+        ...clone(config)
+    };
     delete normalized.routeWorkspace;
     if (!profile.addressFamilies.includes(Number(normalized.addressFamily)))
         normalized.addressFamily = profile.addressFamily;
@@ -105,22 +144,41 @@ export function createRouteGroup(profile, name = '路由组 1', config = {}) {
             ? config.attributeRules
             : getDefaultAttributeRules(normalized.addressFamily).filter(rule => rule.type !== 'nextHop')
     );
-    if (isMvpn(normalized) && !Array.isArray(config.attributeRules)) {
+    if ((isMvpn(normalized) || isVpnEvpnRoute(normalized)) && !Array.isArray(config.attributeRules)) {
         const rt = normalized.attributeRules.find(rule => rule.type === 'extendedCommunities');
-        rt.value = 'rt:1:1';
+        if (rt) rt.value = isMvpn(normalized) ? 'rt:1:1' : 'rt:65000:1';
     }
     normalized.nlriRules = normalizeAttributeRules(
         Array.isArray(config.nlriRules)
             ? config.nlriRules
             : isQp(normalized)
               ? [createAttributeRule('dqpn'), createAttributeRule('bsid')]
-              : [createAttributeRule('mpNextHop')]
+              : isVpnRoute(normalized)
+                ? ['rd', 'label', 'mpNextHop'].map(type => createAttributeRule(type, normalized.addressFamily))
+                : [createAttributeRule('mpNextHop', normalized.addressFamily, normalized)]
     );
+    if (isVpnRoute(normalized)) {
+        for (const type of ['rd', 'label'])
+            if (!normalized.nlriRules.some(rule => rule.type === type))
+                normalized.nlriRules.push(createAttributeRule(type, normalized.addressFamily));
+        for (const field of ['rd', 'labelMode', 'labelStart', 'labelStep']) delete normalized[field];
+    }
+    if (isEvpnRoute(normalized)) normalized = normalizeEvpnRouteConfig(normalized);
     return { id: `${profile.key}-group-${Date.now().toString(36)}-${++sequence}`, name, config: normalized };
 }
 export function restoreRouteWorkspace(profile, saved) {
     profile = getRouteProfile(profile);
-    if (profile.key === 'ipv4') return restoreIpv4RouteWorkspace(saved);
+    if (isIpv4Profile(profile)) {
+        const restored = restoreIpv4RouteWorkspace(saved);
+        const groups = restored.groups.filter(group => group.config.addressFamily === profile.addressFamily);
+        if (!groups.length) groups.push(createRouteGroup(profile));
+        return {
+            groups,
+            activeGroupId: groups.some(group => group.id === restored.activeGroupId)
+                ? restored.activeGroupId
+                : groups[0].id
+        };
+    }
     const workspace = saved?.routeWorkspace;
     const used = new Set();
     const groups =
@@ -144,7 +202,11 @@ export function restoreRouteWorkspace(profile, saved) {
 }
 export function serializeRouteWorkspace(profile, groups, activeGroupId) {
     profile = getRouteProfile(profile);
-    if (profile.key === 'ipv4') return serializeIpv4RouteWorkspace(groups, activeGroupId);
+    if (isIpv4Profile(profile)) {
+        const familyGroups = groups.filter(group => Number(group.config.addressFamily) === profile.addressFamily);
+        if (!familyGroups.length) familyGroups.push(createRouteGroup(profile));
+        return serializeIpv4RouteWorkspace(familyGroups, activeGroupId);
+    }
     const active = groups.find(group => group.id === activeGroupId) || groups[0];
     return clone({
         ...active.config,
@@ -165,6 +227,7 @@ export const MVPN_ROUTE_TYPES = types;
 const condition = routeTypes => ({ any: routeTypes.map(equals => ({ field: 'routeType', equals })) });
 export function getRouteSections(config, profileKey) {
     const profile = profileKey ? getRouteProfile(profileKey) : profileFor(config);
+    if (isVpnEvpnRoute(config)) return getVpnEvpnRouteSections(config, profile);
     const field = (key, label, options = {}) => ({
         key,
         label,
@@ -172,7 +235,16 @@ export function getRouteSections(config, profileKey) {
         testId: `${profile.testPrefix}-route-${key}-${options.type === 'select' ? 'select' : 'input'}`,
         ...options
     });
-    if (profile.key === 'ipv4') return [{ id: 'prefix', fields: registry.route.fields }];
+    if (isIpv4Profile(profile))
+        return IPV4_ROUTE_SECTIONS.map(section => ({
+            ...section,
+            fields: section.fields
+                .filter(field => field.key !== 'addressFamily')
+                .map(field => ({
+                    ...field,
+                    testId: field.testId?.replace('bgp-ipv4-', `${profile.testPrefix}-`)
+                }))
+        }));
     const count = field('count', 'Count', {
         help: isMvpn(config)
             ? 'Type 1/4 递增 Orig Router；Type 2 递增 Source AS；其余类型递增 Group IP。'
@@ -216,13 +288,14 @@ export function getRouteSections(config, profileKey) {
     return [{ id: 'nlri', fields }];
 }
 export function compileRouteTreePayload(config, group) {
-    const fields = getRouteSections(config)
-        .flatMap(section => section.fields)
-        .filter(field => isSchemaFieldVisible(field, config));
+    if (isIpv4Route(config)) return compileRouteRulePayload(config, group);
+    const schemaFields = getRouteSections(config).flatMap(section => section.fields);
+    const fields = schemaFields.filter(field => isSchemaFieldVisible(field, config));
     const payload = {
         ...Object.fromEntries(fields.map(field => [field.key, config[field.key]])),
         ...compileRouteRulePayload(config, group)
     };
+    for (const field of schemaFields) if (!isSchemaFieldVisible(field, config)) delete payload[field.key];
     for (const key of ['prefix', 'mask', 'rd']) if (!fields.some(field => field.key === key)) delete payload[key];
     return clone(payload);
 }
@@ -233,6 +306,7 @@ const integer = (value, min, max) =>
     Number.isSafeInteger(Number(value)) &&
     Number(value) >= min &&
     Number(value) <= max;
+const decimalInteger = (value, min, max) => /^\d+$/.test(String(value)) && integer(value, min, max);
 function ipNumber(value, bits) {
     const address = ipaddr.parse(String(value));
     if (address.kind() !== (bits === 32 ? 'ipv4' : 'ipv6')) throw new Error('地址族不匹配');
@@ -276,9 +350,15 @@ export function validateRouteConfig(config) {
             errors[key] = message;
         }
     };
-    check('count', () => integer(config.count, 1, Number.MAX_SAFE_INTEGER), '数量必须为正整数');
+    check(
+        'count',
+        () => (isIpv4Route(config) ? decimalInteger : integer)(config.count, 1, Number.MAX_SAFE_INTEGER),
+        '数量必须为正整数'
+    );
     if (!errors.count && !getGeneratedRouteCount(config)) errors.count = '生成路由总数超出安全整数范围';
-    if (isMvpn(config)) {
+    if (isVpnEvpnRoute(config)) {
+        Object.assign(errors, validateVpnEvpnRouteConfig(config));
+    } else if (isMvpn(config)) {
         check('routeType', () => integer(config.routeType, 1, 7), '请选择路由类型');
         for (const field of getRouteSections(config)
             .flatMap(section => section.fields)
@@ -297,12 +377,24 @@ export function validateRouteConfig(config) {
         }
     } else {
         const bits = isIpv6(config) ? 128 : 32;
-        check('prefix', () => ipNumber(config.prefix, bits) >= 0n, `请输入有效的 IPv${bits === 128 ? 6 : 4} 地址`);
-        check('mask', () => integer(config.mask, 0, bits), `前缀长度范围为 0–${bits}`);
+        check(
+            'prefix',
+            () => (!isIpv4Route(config) || isValidIpv4(config.prefix)) && ipNumber(config.prefix, bits) >= 0n,
+            `请输入有效的 IPv${bits === 128 ? 6 : 4} 地址`
+        );
+        check(
+            'mask',
+            () => (isIpv4Route(config) ? decimalInteger : integer)(config.mask, 0, bits),
+            `前缀长度范围为 0–${bits}`
+        );
         check(
             'ipStep',
             () =>
-                integer(config.ipStep === undefined ? 1 : config.ipStep, isQp(config) ? 0 : 1, Number.MAX_SAFE_INTEGER),
+                (isIpv4Route(config) ? decimalInteger : integer)(
+                    config.ipStep === undefined ? 1 : config.ipStep,
+                    isQp(config) ? 0 : 1,
+                    Number.MAX_SAFE_INTEGER
+                ),
             isQp(config) ? 'IP 步长必须为非负整数，0 表示固定 IP' : 'IP 步长必须为正整数'
         );
     }
@@ -328,6 +420,7 @@ function routeSequences(config) {
     const count = BigInt(config.count);
     if (count < 1n) throw new Error('数量必须为正整数');
     const af = Number(config.addressFamily);
+    if (isVpnEvpnRoute(config)) return getVpnEvpnRouteSequences(config);
     if (isMvpn(config)) {
         const type = Number(config.routeType);
         const variable = type === 2 ? 'sourceAs' : [1, 4].includes(type) ? 'originatingRouterIp' : 'groupIp';
@@ -357,7 +450,12 @@ function routeSequences(config) {
     const start = (ipNumber(config.prefix, bits) / subnet) * subnet;
     const step = subnet * BigInt(ipStep);
     if (start + step * (count - 1n) >= 1n << BigInt(bits)) throw new Error('生成范围超出 IP 地址空间');
-    const signature = JSON.stringify([af, mask, isQp(config) ? '' : canonicalRd(config.rd || '0:0')]);
+    const rd = isQp(config)
+        ? ''
+        : isIpv4Route(config)
+          ? String(config.rd ?? '') || '0:0'
+          : canonicalRd(config.rd || '0:0');
+    const signature = JSON.stringify([af, mask, rd]);
     const format = value => `${ipString(value[0], bits)}/${mask}${value.length > 1 ? ` · DQPN ${value[1]}` : ''}`;
     if (!isQp(config)) return [{ signature, start: [start], step: [step], count, format }];
     const rule = (config.nlriRules || []).find(rule => rule.type === 'dqpn');
@@ -405,7 +503,7 @@ function routeSequences(config) {
 export function findRouteGroupOverlap(groups, groupId) {
     const active = groups.find(group => group.id === groupId);
     if (!active) return null;
-    if (profileFor(active.config).key === 'ipv4') return findIpv4RouteGroupOverlap(groups, groupId);
+    if (isIpv4Route(active.config)) return findIpv4RouteGroupOverlap(groups, groupId);
     let ranges;
     try {
         ranges = routeSequences(active.config);
@@ -436,10 +534,11 @@ export function findRouteGroupOverlap(groups, groupId) {
     return null;
 }
 export function describeRouteRange(config) {
-    if (profileFor(config).key === 'ipv4') return describeIpv4RouteRange(config);
+    if (isIpv4Route(config)) return describeIpv4RouteRange(config);
     try {
         const range = routeSequences(config)[0];
-        if (!range) return `${config.prefix}/${config.mask} · DQPN 按随机规则生成`;
+        if (!range)
+            return `${isEvpnRoute(config) ? `Type ${config.routeType}` : `${config.prefix}/${config.mask}`} · ${isVpnEvpnRoute(config) ? 'RD' : 'DQPN'} 按随机规则生成`;
         const span = `${range.format(range.start)} → ${range.format(range.start.map((value, index) => value + range.step[index] * (range.count - 1n)))}`;
         return !isQp(config) && !isMvpn(config) && Number(config.ipStep ?? 1) > 1
             ? `${span} · 步长 ${config.ipStep}`
@@ -449,10 +548,23 @@ export function describeRouteRange(config) {
     }
 }
 export const describeRouteNlri = config =>
-    isMvpn(config)
-        ? `Type ${config.routeType} · ${Number(config.count) || 0} 条路由`
-        : `${config.prefix}/${config.mask} · ${Number(config.count) || 0} 个 NLRI`;
+    isVpnEvpnRoute(config)
+        ? describeVpnEvpnRouteNlri(config)
+        : isMvpn(config)
+          ? `Type ${config.routeType} · ${Number(config.count) || 0} 条路由`
+          : `${config.prefix}/${config.mask} · ${Number(config.count) || 0} 个 NLRI`;
 export function getRouteResultColumns(config) {
+    if (isVpnEvpnRoute(config)) {
+        const primary = getVpnEvpnRouteResultColumns(config);
+        return [
+            ...primary,
+            ...getAttributeResultColumns(config).filter(
+                column =>
+                    !primary.some(item => item.key === column.key) &&
+                    !(isEvpnRoute(config) && ['label', 'label2', 'vni', 'vni2'].includes(column.key))
+            )
+        ];
+    }
     const column = (key, title, width = 140) => ({ key, dataIndex: key, title, width, ellipsis: true });
     const primary = isMvpn(config)
         ? [

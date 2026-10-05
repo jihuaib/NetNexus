@@ -487,6 +487,8 @@
     let suppressNextStateRefresh = false;
     let lastAppliedDeepLink = '';
     let pageActive = false;
+    let inFlightRequestId = null;
+    let refreshRequested = false;
 
     const normalizeResult = payload => {
         const source = payload && typeof payload === 'object' ? payload : {};
@@ -618,6 +620,7 @@
     const runQuery = async (query, silent = false) => {
         if (!pageActive) return;
         const currentRequestId = ++requestId;
+        inFlightRequestId = currentRequestId;
         if (!silent) loading.value = true;
         try {
             if (!window.bmpApi?.getRouteLens) {
@@ -634,7 +637,12 @@
             const message = error?.message || 'Route Lens 查询失败';
             notifyQueryError(message, silent);
         } finally {
+            if (inFlightRequestId === currentRequestId) inFlightRequestId = null;
             if (currentRequestId === requestId) loading.value = false;
+            if (inFlightRequestId === null && refreshRequested) {
+                refreshRequested = false;
+                scheduleRefresh();
+            }
         }
     };
 
@@ -655,6 +663,7 @@
     };
 
     const clearRefreshTimer = () => {
+        refreshRequested = false;
         if (refreshTimer) {
             clearTimeout(refreshTimer);
             refreshTimer = null;
@@ -662,10 +671,18 @@
     };
 
     const scheduleRefresh = () => {
-        if (!pageActive || !lastQuery.value || !hasSearched.value) return;
-        clearRefreshTimer();
+        if (!pageActive || !lastQuery.value || !hasSearched.value || refreshTimer) return;
+        if (inFlightRequestId !== null) {
+            refreshRequested = true;
+            return;
+        }
         refreshTimer = setTimeout(() => {
             refreshTimer = null;
+            if (!pageActive) return;
+            if (inFlightRequestId !== null) {
+                refreshRequested = true;
+                return;
+            }
             runQuery(lastQuery.value, true);
         }, 900);
     };
@@ -738,6 +755,7 @@
         if (!pageActive) return;
         pageActive = false;
         requestId += 1;
+        inFlightRequestId = null;
         loading.value = false;
         clearRefreshTimer();
         unregisterEvents();

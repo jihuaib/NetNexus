@@ -14,10 +14,18 @@ export default defineConfig({
     plugins: [
         vue(),
         {
-            name: 'bgp-shared-community-parser',
+            name: 'bgp-shared-helpers',
             enforce: 'pre',
             transform(code, id) {
-                if (id.split('?')[0].endsWith('/shared/bgpExtendedCommunities.js')) {
+                const filename = id.split('?')[0];
+                if (
+                    [
+                        '/shared/bgpExtendedCommunities.js',
+                        '/shared/bgpRouteDistinguisher.js',
+                        '/shared/bgpAttributeConditions.js',
+                        '/shared/bgpEvpnSrv6.js'
+                    ].some(path => filename.endsWith(path))
+                ) {
                     return transformWithEsbuild(code, id, { format: 'esm', loader: 'js' });
                 }
             }

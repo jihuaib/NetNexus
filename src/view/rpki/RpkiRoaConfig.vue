@@ -167,7 +167,7 @@
     import RpkiRoaImportModal from '../../components/RpkiRoaImportModal.vue';
     import { FormValidator, createRpkiRoaConfigValidationRules } from '../../utils/validationCommon';
     import { DEFAULT_VALUES, RPKI_EVENT_PAGE_ID } from '../../const/rpkiConst';
-    import { IP_TYPE } from '../../const/bgpConst';
+    import { IP_TYPE } from '../../const/ipConst';
     import { useRpkiDatasetRuntime } from './useRpkiDatasetRuntime';
 
     defineOptions({

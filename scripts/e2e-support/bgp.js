@@ -1,7 +1,7 @@
 const { successResponse } = require('./common');
 
 let bgpBrowserMockScript =
-    "(function installBgpApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__bgpE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.bgpApi = {\n        saveBgpConfig: config => window.__bgpE2eCall('saveBgpConfig', config),\n        loadBgpConfig: () => window.__bgpE2eCall('loadBgpConfig'),\n        saveIpv4PeerConfig: config => window.__bgpE2eCall('saveIpv4PeerConfig', config),\n        loadIpv4PeerConfig: () => window.__bgpE2eCall('loadIpv4PeerConfig'),\n        saveIpv6PeerConfig: config => window.__bgpE2eCall('saveIpv6PeerConfig', config),\n        loadIpv6PeerConfig: () => window.__bgpE2eCall('loadIpv6PeerConfig'),\n        saveIpv4UNCRouteConfig: config => window.__bgpE2eCall('saveIpv4UNCRouteConfig', config),\n        loadIpv4UNCRouteConfig: () => window.__bgpE2eCall('loadIpv4UNCRouteConfig'),\n        saveIpv6UNCRouteConfig: config => window.__bgpE2eCall('saveIpv6UNCRouteConfig', config),\n        loadIpv6UNCRouteConfig: () => window.__bgpE2eCall('loadIpv6UNCRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => window.__bgpE2eCall('saveIpv4MvpnRouteConfig', config),\n        loadIpv4MvpnRouteConfig: () => window.__bgpE2eCall('loadIpv4MvpnRouteConfig'),\n        saveIpv4QpRouteConfig: config => window.__bgpE2eCall('saveIpv4QpRouteConfig', config),\n        loadIpv4QpRouteConfig: () => window.__bgpE2eCall('loadIpv4QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => window.__bgpE2eCall('saveIpv6QpRouteConfig', config),\n        loadIpv6QpRouteConfig: () => window.__bgpE2eCall('loadIpv6QpRouteConfig'),\n\n        startBgp: config => window.__bgpE2eCall('startBgp', config),\n        stopBgp: () => window.__bgpE2eCall('stopBgp'),\n        configIpv4Peer: config => window.__bgpE2eCall('configIpv4Peer', config),\n        configIpv6Peer: config => window.__bgpE2eCall('configIpv6Peer', config),\n        getPeerInfo: () => window.__bgpE2eCall('getPeerInfo'),\n        deletePeer: peer => window.__bgpE2eCall('deletePeer', peer),\n        sendRawPacket: config => window.__bgpE2eCall('sendRawPacket', config),\n\n        generateIpv4Routes: config => window.__bgpE2eCall('generateIpv4Routes', config),\n        generateIpv6Routes: config => window.__bgpE2eCall('generateIpv6Routes', config),\n        generateIpv4MvpnRoutes: config => window.__bgpE2eCall('generateIpv4MvpnRoutes', config),\n        generateIpv4QpRoutes: config => window.__bgpE2eCall('generateIpv4QpRoutes', config),\n        generateIpv6QpRoutes: config => window.__bgpE2eCall('generateIpv6QpRoutes', config),\n        deleteIpv4Routes: config => window.__bgpE2eCall('deleteIpv4Routes', config),\n        deleteIpv6Routes: config => window.__bgpE2eCall('deleteIpv6Routes', config),\n        deleteIpv4MvpnRoutes: config => window.__bgpE2eCall('deleteIpv4MvpnRoutes', config),\n        deleteIpv4QpRoutes: config => window.__bgpE2eCall('deleteIpv4QpRoutes', config),\n        deleteIpv6QpRoutes: config => window.__bgpE2eCall('deleteIpv6QpRoutes', config),\n        deleteAllRoutesByFamily: addressFamily => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily),\n        getRoutes: (addressFamily, page, pageSize) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => window.__bgpE2eCall('getRouteDetail', addressFamily, route),\n\n        selectMrtFile: () =>\n            Promise.resolve({\n                status: 'success',\n                data: null,\n                msg: 'E2E does not select MRT files'\n            }),\n        importRouteViewsData: (filePath, limit, addressFamily) =>\n            window.__bgpE2eCall('importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => window.__bgpE2eCall('openExternal', url),\n        getInstanceInfo: () => window.__bgpE2eCall('getInstanceInfo'),\n        getDefaultMrtFiles: () => window.__bgpE2eCall('getDefaultMrtFiles')\n    };\n})();\n";
+    "(function installBgpApiMocks() {\n    const unifiedCallbacks = [];\n\n    window.__bgpE2eEmit = (type, data) => {\n        unifiedCallbacks.forEach(callback => callback({ type, data }));\n    };\n\n    window.commonApi = {\n        onUnifiedEvent: callback => {\n            unifiedCallbacks.push(callback);\n            return () => {\n                const index = unifiedCallbacks.indexOf(callback);\n                if (index >= 0) {\n                    unifiedCallbacks.splice(index, 1);\n                }\n            };\n        },\n        notifyRendererReady: () => {},\n        openDeveloperOptions: () => {},\n        openSoftwareInfo: () => {}\n    };\n\n    window.bgpApi = {\n        saveBgpConfig: config => window.__bgpE2eCall('saveBgpConfig', config),\n        loadBgpConfig: () => window.__bgpE2eCall('loadBgpConfig'),\n        saveIpv4PeerConfig: config => window.__bgpE2eCall('saveIpv4PeerConfig', config),\n        loadIpv4PeerConfig: () => window.__bgpE2eCall('loadIpv4PeerConfig'),\n        saveIpv6PeerConfig: config => window.__bgpE2eCall('saveIpv6PeerConfig', config),\n        loadIpv6PeerConfig: () => window.__bgpE2eCall('loadIpv6PeerConfig'),\n        saveIpv4UNCRouteConfig: config => window.__bgpE2eCall('saveIpv4UNCRouteConfig', config),\n        loadIpv4UNCRouteConfig: () => window.__bgpE2eCall('loadIpv4UNCRouteConfig'),\n        loadIpv4LabelRouteConfig: () => window.__bgpE2eCall('loadIpv4LabelRouteConfig'),\n        saveIpv4LabelRouteConfig: config => window.__bgpE2eCall('saveIpv4LabelRouteConfig', config),\n        saveIpv6UNCRouteConfig: config => window.__bgpE2eCall('saveIpv6UNCRouteConfig', config),\n        loadIpv6UNCRouteConfig: () => window.__bgpE2eCall('loadIpv6UNCRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => window.__bgpE2eCall('saveIpv4MvpnRouteConfig', config),\n        loadIpv4MvpnRouteConfig: () => window.__bgpE2eCall('loadIpv4MvpnRouteConfig'),\n        saveIpv4QpRouteConfig: config => window.__bgpE2eCall('saveIpv4QpRouteConfig', config),\n        loadIpv4QpRouteConfig: () => window.__bgpE2eCall('loadIpv4QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => window.__bgpE2eCall('saveIpv6QpRouteConfig', config),\n        loadIpv6QpRouteConfig: () => window.__bgpE2eCall('loadIpv6QpRouteConfig'),\n\n        startBgp: config => window.__bgpE2eCall('startBgp', config),\n        stopBgp: () => window.__bgpE2eCall('stopBgp'),\n        configIpv4Peer: config => window.__bgpE2eCall('configIpv4Peer', config),\n        configIpv6Peer: config => window.__bgpE2eCall('configIpv6Peer', config),\n        getPeerInfo: () => window.__bgpE2eCall('getPeerInfo'),\n        deletePeer: peer => window.__bgpE2eCall('deletePeer', peer),\n        sendRawPacket: config => window.__bgpE2eCall('sendRawPacket', config),\n\n        generateIpv4Routes: config => window.__bgpE2eCall('generateIpv4Routes', config),\n        generateIpv6Routes: config => window.__bgpE2eCall('generateIpv6Routes', config),\n        generateIpv4MvpnRoutes: config => window.__bgpE2eCall('generateIpv4MvpnRoutes', config),\n        generateIpv4QpRoutes: config => window.__bgpE2eCall('generateIpv4QpRoutes', config),\n        generateIpv6QpRoutes: config => window.__bgpE2eCall('generateIpv6QpRoutes', config),\n        deleteIpv4Routes: config => window.__bgpE2eCall('deleteIpv4Routes', config),\n        deleteIpv6Routes: config => window.__bgpE2eCall('deleteIpv6Routes', config),\n        deleteIpv4MvpnRoutes: config => window.__bgpE2eCall('deleteIpv4MvpnRoutes', config),\n        deleteIpv4QpRoutes: config => window.__bgpE2eCall('deleteIpv4QpRoutes', config),\n        deleteIpv6QpRoutes: config => window.__bgpE2eCall('deleteIpv6QpRoutes', config),\n        deleteAllRoutesByFamily: addressFamily => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily),\n        getRoutes: (addressFamily, page, pageSize) => window.__bgpE2eCall('getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => window.__bgpE2eCall('getRouteDetail', addressFamily, route),\n\n        selectMrtFile: () =>\n            Promise.resolve({\n                status: 'success',\n                data: null,\n                msg: 'E2E does not select MRT files'\n            }),\n        importRouteViewsData: (filePath, limit, addressFamily) =>\n            window.__bgpE2eCall('importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => window.__bgpE2eCall('openExternal', url),\n        getInstanceInfo: () => window.__bgpE2eCall('getInstanceInfo'),\n        getDefaultMrtFiles: () => window.__bgpE2eCall('getDefaultMrtFiles')\n    };\n})();\n";
 bgpBrowserMockScript = bgpBrowserMockScript
     .replace(
         "deleteAllRoutesByFamily: addressFamily => window.__bgpE2eCall('deleteAllRoutesByFamily', addressFamily)",
@@ -17,7 +17,7 @@ bgpBrowserMockScript = bgpBrowserMockScript
     );
 
 const bgpPageApiScript =
-    "    window.bgpApi = {\n        loadIpv6UNCRouteConfig: () => call('bgp.loadIpv6UNCRouteConfig'),\n        saveIpv6UNCRouteConfig: config => call('bgp.saveIpv6UNCRouteConfig', config),\n        generateIpv6Routes: config => call('bgp.generateRoutes', config),\n        loadIpv4MvpnRouteConfig: () => call('bgp.loadIpv4MvpnRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => call('bgp.saveIpv4MvpnRouteConfig', config),\n        generateIpv4MvpnRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv4QpRouteConfig: () => call('bgp.loadIpv4QpRouteConfig'),\n        saveIpv4QpRouteConfig: config => call('bgp.saveIpv4QpRouteConfig', config),\n        generateIpv4QpRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv6QpRouteConfig: () => call('bgp.loadIpv6QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => call('bgp.saveIpv6QpRouteConfig', config),\n        generateIpv6QpRoutes: config => call('bgp.generateRoutes', config),\n        getRoutes: (addressFamily, page, pageSize) => call('bgp.getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => call('bgp.getRouteDetail', addressFamily, route),\n        deleteAllRoutesByFamily: addressFamily => call('bgp.deleteAllRoutesByFamily', addressFamily),\n        deleteIpv6Routes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4MvpnRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4QpRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv6QpRoutes: config => call('bgp.deleteRoutes', config),\n        getDefaultMrtFiles: () => call('bgp.getDefaultMrtFiles'),\n        selectMrtFile: () => call('bgp.selectMrtFile'),\n        importRouteViewsData: (filePath, limit, addressFamily) => call('bgp.importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => call('bgp.openExternal', url)\n    };";
+    "    window.bgpApi = {\n        loadIpv4UNCRouteConfig: () => call('bgp.loadIpv4UNCRouteConfig'),\n        saveIpv4UNCRouteConfig: config => call('bgp.saveIpv4UNCRouteConfig', config),\n        loadIpv4LabelRouteConfig: () => call('bgp.loadIpv4LabelRouteConfig'),\n        saveIpv4LabelRouteConfig: config => call('bgp.saveIpv4LabelRouteConfig', config),\n        generateIpv4Routes: config => call('bgp.generateRoutes', config),\n        deleteIpv4Routes: config => call('bgp.deleteRoutes', config),\n        loadIpv6UNCRouteConfig: () => call('bgp.loadIpv6UNCRouteConfig'),\n        saveIpv6UNCRouteConfig: config => call('bgp.saveIpv6UNCRouteConfig', config),\n        generateIpv6Routes: config => call('bgp.generateRoutes', config),\n        loadIpv4MvpnRouteConfig: () => call('bgp.loadIpv4MvpnRouteConfig'),\n        saveIpv4MvpnRouteConfig: config => call('bgp.saveIpv4MvpnRouteConfig', config),\n        generateIpv4MvpnRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv4QpRouteConfig: () => call('bgp.loadIpv4QpRouteConfig'),\n        saveIpv4QpRouteConfig: config => call('bgp.saveIpv4QpRouteConfig', config),\n        generateIpv4QpRoutes: config => call('bgp.generateRoutes', config),\n        loadIpv6QpRouteConfig: () => call('bgp.loadIpv6QpRouteConfig'),\n        saveIpv6QpRouteConfig: config => call('bgp.saveIpv6QpRouteConfig', config),\n        generateIpv6QpRoutes: config => call('bgp.generateRoutes', config),\n        getRoutes: (addressFamily, page, pageSize) => call('bgp.getRoutes', addressFamily, page, pageSize),\n        getRouteDetail: (addressFamily, route) => call('bgp.getRouteDetail', addressFamily, route),\n        deleteAllRoutesByFamily: addressFamily => call('bgp.deleteAllRoutesByFamily', addressFamily),\n        deleteIpv6Routes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4MvpnRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv4QpRoutes: config => call('bgp.deleteRoutes', config),\n        deleteIpv6QpRoutes: config => call('bgp.deleteRoutes', config),\n        getDefaultMrtFiles: () => call('bgp.getDefaultMrtFiles'),\n        selectMrtFile: () => call('bgp.selectMrtFile'),\n        importRouteViewsData: (filePath, limit, addressFamily) => call('bgp.importRouteViewsData', filePath, limit, addressFamily),\n        openExternal: url => call('bgp.openExternal', url)\n    };";
 
 function createBgpPageState() {
     return {
@@ -26,8 +26,45 @@ function createBgpPageState() {
     };
 }
 
+function splitIpv4RouteConfig(config, addressFamily) {
+    if (!config) return null;
+    const result = JSON.parse(JSON.stringify(config));
+    result.addressFamily = addressFamily;
+    const workspace = result.routeWorkspace;
+    if (Array.isArray(workspace?.groups)) {
+        workspace.groups = workspace.groups.filter(group => Number(group.config?.addressFamily ?? 1) === addressFamily);
+        if (!workspace.groups.some(group => group.id === workspace.activeGroupId))
+            workspace.activeGroupId = workspace.groups[0]?.id ?? null;
+    }
+    return result;
+}
+
+function captureLegacyIpv4Config(bgp) {
+    const config = bgp.configs.get('Ipv4UNCRouteConfig');
+    if (!bgp.legacyIpv4RouteConfig && config?.routeWorkspace?.version === 6 && !config.routeWorkspace.profile)
+        bgp.legacyIpv4RouteConfig = JSON.parse(JSON.stringify(config));
+}
+
 function handlePageCall(controller, method, args) {
     const bgp = controller.state.bgp;
+    if (['bgp.loadIpv4UNCRouteConfig', 'bgp.loadIpv4LabelRouteConfig'].includes(method)) {
+        captureLegacyIpv4Config(bgp);
+        const addressFamily = method.includes('Label') ? 12 : 1;
+        const key = addressFamily === 12 ? 'Ipv4LabelRouteConfig' : 'Ipv4UNCRouteConfig';
+        const current = bgp.configs.get(key);
+        const source = current?.routeWorkspace ? current : bgp.legacyIpv4RouteConfig || current;
+        const config = splitIpv4RouteConfig(source, addressFamily);
+        return successResponse(config, config ? '配置加载成功' : '配置不存在');
+    }
+    if (['bgp.saveIpv4UNCRouteConfig', 'bgp.saveIpv4LabelRouteConfig'].includes(method)) {
+        captureLegacyIpv4Config(bgp);
+        const addressFamily = method.includes('Label') ? 12 : 1;
+        bgp.configs.set(
+            addressFamily === 12 ? 'Ipv4LabelRouteConfig' : 'Ipv4UNCRouteConfig',
+            splitIpv4RouteConfig(args[0], addressFamily)
+        );
+        return successResponse(null, '配置保存成功');
+    }
     if (method.startsWith('bgp.load')) {
         const config = bgp.configs.get(method.slice('bgp.load'.length));
         return successResponse(
@@ -82,7 +119,7 @@ const BgpE2eController = (() => {
     const BgpSession = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpSession'));
     const BgpInstance = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpInstance'));
     const BgpRoute = require(path.join(projectRoot, 'electron', 'worker', 'bgp', 'bgpRoute'));
-    const { parseBgpPacket } = require(path.join(projectRoot, 'electron', 'utils', 'bgpPacketParser'));
+    const { parseBgpPacket } = require(path.join(projectRoot, 'electron', 'utils', 'bgp', 'bgpPacketParser'));
 
     const BGP_EVENT_TYPE_TO_RENDERER_TYPE = {
         [BgpConst.BGP_EVT_TYPES.BGP_PEER_CHANGE]: 'bgp:peerChange'
@@ -470,9 +507,14 @@ const BgpE2eController = (() => {
                     return this.saveIpv4RouteConfig(args[0]);
                 case 'loadIpv4UNCRouteConfig':
                     return successResponse(
-                        this.savedIpv4RouteConfig,
+                        splitIpv4RouteConfig(this.savedIpv4RouteConfig, 1),
                         this.savedIpv4RouteConfig ? 'IPv4-UNC路由配置加载成功' : 'IPv4-UNC路由配置不存在'
                     );
+                case 'saveIpv4LabelRouteConfig':
+                    this.savedConfigs.set(method, args[0] || null);
+                    return successResponse(null, 'IPv4 Label路由配置保存成功');
+                case 'loadIpv4LabelRouteConfig':
+                    return successResponse(splitIpv4RouteConfig(this.savedConfigs.get('saveIpv4LabelRouteConfig'), 12));
                 case 'saveIpv6UNCRouteConfig':
                 case 'saveIpv4MvpnRouteConfig':
                 case 'saveIpv4QpRouteConfig':

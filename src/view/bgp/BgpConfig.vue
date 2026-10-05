@@ -55,6 +55,7 @@
                         <nn-form-item label="地址族" name="addressFamily">
                             <nn-select
                                 v-model:value="bgpConfigData.addressFamily"
+                                data-testid="bgp-address-family-select"
                                 :disabled="bgpRunning"
                                 mode="multiple"
                                 style="width: 100%"
@@ -133,7 +134,8 @@
         BGP_RUNTIME_CHANGED_EVENT,
         DEFAULT_VALUES
     } from '../../const/bgpConst';
-    import { FormValidator, createBgpConfigValidationRules } from '../../utils/validationCommon';
+    import { FormValidator } from '../../utils/validationCommon';
+    import { createBgpConfigValidationRules } from '../../utils/bgp/validationRules';
 
     defineOptions({
         name: 'BgpConfig'
@@ -146,6 +148,9 @@
         { label: 'Ipv4-UNC', value: BGP_ADDR_FAMILY.IPV4_UNC, disabled: true },
         { label: 'IPv4 Label', value: BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST },
         { label: 'Ipv6-UNC', value: BGP_ADDR_FAMILY.IPV6_UNC },
+        { label: 'VPNv4', value: BGP_ADDR_FAMILY.VPNV4 },
+        { label: 'VPNv6', value: BGP_ADDR_FAMILY.VPNV6 },
+        { label: 'EVPN', value: BGP_ADDR_FAMILY.L2VPN_EVPN },
         { label: 'IPv4-MVPN', value: BGP_ADDR_FAMILY.IPV4_MVPN },
         { label: 'IPv6-MVPN', value: BGP_ADDR_FAMILY.IPV6_MVPN },
         { label: 'IPv4-QP', value: BGP_ADDR_FAMILY.IPV4_QP },

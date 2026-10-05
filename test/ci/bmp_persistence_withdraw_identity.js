@@ -4,7 +4,7 @@ const os = require('os');
 const path = require('path');
 
 const BgpConst = require('../../electron/const/bgpConst');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const {

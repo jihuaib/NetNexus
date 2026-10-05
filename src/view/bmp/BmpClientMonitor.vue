@@ -20,7 +20,7 @@
 <script setup>
     import { computed, inject, onBeforeUnmount, onMounted, provide, ref, watch } from 'vue';
     import { useRoute, useRouter } from 'vue-router';
-    import { formatBmpClientLabel } from '../../utils/bmpClientLabel';
+    import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
     import EventBus from '../../utils/eventBus';
     import BgpSession from './BgpSession.vue';
     import BgpLocRib from './BgpLocRib.vue';

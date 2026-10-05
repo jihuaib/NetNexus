@@ -85,6 +85,18 @@ contextBridge.exposeInMainWorld('toolsApi', {
 
 // bgp模块
 contextBridge.exposeInMainWorld('bgpApi', {
+    saveVpnv4RouteConfig: config => ipcRenderer.invoke('bgp:saveVpnv4RouteConfig', config),
+    loadVpnv4RouteConfig: () => ipcRenderer.invoke('bgp:loadVpnv4RouteConfig'),
+    generateVpnv4Routes: config => ipcRenderer.invoke('bgp:generateVpnv4Routes', config),
+    deleteVpnv4Routes: config => ipcRenderer.invoke('bgp:deleteVpnv4Routes', config),
+    saveVpnv6RouteConfig: config => ipcRenderer.invoke('bgp:saveVpnv6RouteConfig', config),
+    loadVpnv6RouteConfig: () => ipcRenderer.invoke('bgp:loadVpnv6RouteConfig'),
+    generateVpnv6Routes: config => ipcRenderer.invoke('bgp:generateVpnv6Routes', config),
+    deleteVpnv6Routes: config => ipcRenderer.invoke('bgp:deleteVpnv6Routes', config),
+    saveEvpnRouteConfig: config => ipcRenderer.invoke('bgp:saveEvpnRouteConfig', config),
+    loadEvpnRouteConfig: () => ipcRenderer.invoke('bgp:loadEvpnRouteConfig'),
+    generateEvpnRoutes: config => ipcRenderer.invoke('bgp:generateEvpnRoutes', config),
+    deleteEvpnRoutes: config => ipcRenderer.invoke('bgp:deleteEvpnRoutes', config),
     // 配置相关
     saveBgpConfig: config => ipcRenderer.invoke('bgp:saveBgpConfig', config),
     loadBgpConfig: () => ipcRenderer.invoke('bgp:loadBgpConfig'),
@@ -94,6 +106,8 @@ contextBridge.exposeInMainWorld('bgpApi', {
     loadIpv6PeerConfig: () => ipcRenderer.invoke('bgp:loadIpv6PeerConfig'),
     saveIpv4UNCRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv4UNCRouteConfig', config),
     loadIpv4UNCRouteConfig: () => ipcRenderer.invoke('bgp:loadIpv4UNCRouteConfig'),
+    saveIpv4LabelRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv4LabelRouteConfig', config),
+    loadIpv4LabelRouteConfig: () => ipcRenderer.invoke('bgp:loadIpv4LabelRouteConfig'),
     saveIpv6UNCRouteConfig: config => ipcRenderer.invoke('bgp:saveIpv6UNCRouteConfig', config),
     loadIpv6UNCRouteConfig: () => ipcRenderer.invoke('bgp:loadIpv6UNCRouteConfig'),
 

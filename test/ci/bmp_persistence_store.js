@@ -8,7 +8,7 @@ const BmpConst = require('../../electron/const/bmpConst');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
-const { getSessionStatisticsReportRibType } = require('../../electron/utils/bmpStatistics');
+const { getSessionStatisticsReportRibType } = require('../../electron/utils/bmp/bmpStatistics');
 const {
     buildConnectionMutation,
     buildScopeMutation,

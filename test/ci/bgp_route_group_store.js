@@ -232,7 +232,7 @@ try {
     oldDb.close();
     assert.throws(
         () => new BgpRouteSqliteStore({ dbPath: legacyPath }).open(),
-        /schema 5 is incompatible with schema 6/
+        /schema 5 is incompatible with schema 7/
     );
 } finally {
     writer?.close();

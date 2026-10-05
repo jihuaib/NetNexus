@@ -168,7 +168,8 @@
                 <div class="route-range-preview" :data-testid="`${testPrefix}-route-range-preview`">
                     <span>{{ describeRouteRange(activeGroup.config) }}</span>
                     <strong>
-                        {{ prefixCount.toLocaleString('zh-CN') }} {{ profileKey === 'mvpn' ? '个 NLRI' : '个前缀' }} ×
+                        {{ prefixCount.toLocaleString('zh-CN') }}
+                        {{ ['mvpn', 'evpn'].includes(profileKey) ? '个 NLRI' : '个前缀' }} ×
                         {{ pathCount.toLocaleString('zh-CN') }} 条路径 = {{ routeCount.toLocaleString('zh-CN') }} 条路由
                     </strong>
                 </div>
@@ -244,6 +245,7 @@
     import { computed, h, nextTick, onDeactivated, ref, watch } from 'vue';
     import { CopyOutlined, DeleteOutlined, PlusOutlined } from 'netnexus-ui/icons';
     import RouteSchemaForm from './RouteSchemaForm.vue';
+    import { normalizeEvpnRouteTypeChange } from '../view/bgp/bgpVpnEvpnSchema';
     import { BGP_ADDR_FAMILY } from '../const/bgpConst';
     import {
         getRouteSections,
@@ -257,6 +259,7 @@
         getRouteTreeRules,
         getRuleSection,
         isAttributeRuleApplicable,
+        isAttributeRuleRequired,
         isMpNlriEncoding,
         getGeneratedRouteCount,
         getGeneratedPrefixCount,
@@ -328,6 +331,7 @@
     const fieldDrafts = ref({});
     const catalogFor = type =>
         ATTRIBUTE_CATALOG.find(entry => entry.type === type) || { type, label: type, modes: ['fixed'] };
+    const isRequiredRule = (rule, config) => isAttributeRuleRequired(rule, config);
     const isRuleVisible = (rule, config) =>
         isAttributeRuleApplicable(rule, config) &&
         (catalogFor(rule.type).treeGroup !== 'mpNlri' || isMpNlriEncoding(config));
@@ -476,7 +480,8 @@
                     key: 'remove-node',
                     label: menuLabel('删除节点', `${props.testPrefix}-remove-attribute-button`),
                     icon: () => h(DeleteOutlined),
-                    disabled: props.disabled
+                    disabled: props.disabled || isRequiredRule(contextRule.value, group.config),
+                    title: isRequiredRule(contextRule.value, group.config) ? '必选 NLRI 节点，不能删除' : undefined
                 }
             );
         }
@@ -486,7 +491,7 @@
         ATTRIBUTE_MODES.filter(option => (selectedCatalog.value.modes || []).includes(option.value))
     );
     const ruleFields = computed(() =>
-        (selectedRule.value ? getAttributeRuleFields(selectedRule.value) : [])
+        (selectedRule.value ? getAttributeRuleFields(selectedRule.value, activeGroup.value.config) : [])
             .filter(field => field.key !== 'mode')
             .map(field => ({
                 ...field,
@@ -538,7 +543,8 @@
             props.groups.map(group => (group.id === groupId ? { ...group, config: normalizedConfig } : group))
         );
     };
-    const updateConfig = config => updateGroupConfig(activeGroup.value.id, config);
+    const updateConfig = config =>
+        updateGroupConfig(activeGroup.value.id, normalizeEvpnRouteTypeChange(activeGroup.value.config, config));
     const updateGroupName = name => {
         if (props.disabled) return;
         emit(
@@ -577,6 +583,7 @@
         return (
             props.errors[`${storageKey}.${selectedRule.value?.id}.${key}`] ||
             props.errors[`${storageKey}.${selectedRule.value?.id}`] ||
+            props.errors[`rule:${selectedRule.value?.id}`] ||
             ''
         );
     };
@@ -649,7 +656,7 @@
         const group = props.groups.find(item => item.id === groupId);
         const entry = catalogFor(type);
         if (props.disabled || !canAddRule(entry, group)) return;
-        const rule = createAttributeRule(type, group.config.addressFamily);
+        const rule = createAttributeRule(type, group.config.addressFamily, group.config);
         const storageKey = ruleStorageKey(rule);
         updateGroupConfig(groupId, {
             ...group.config,
@@ -660,7 +667,7 @@
     const removeAttribute = (groupId, ruleId) => {
         const group = props.groups.find(item => item.id === groupId);
         const rule = group && getRouteTreeRules(group.config).find(item => item.id === ruleId);
-        if (props.disabled || !rule) return;
+        if (props.disabled || !rule || isRequiredRule(rule, group.config)) return;
         const section = getRuleSection(rule);
         const storageKey = ruleStorageKey(rule);
         updateGroupConfig(groupId, {
@@ -681,6 +688,7 @@
             closeContextMenu();
             addAttribute(type, groupId);
         } else if (key === 'remove-node' && contextNodeKind.value === 'rule' && contextRule.value) {
+            if (isRequiredRule(contextRule.value, contextGroup.value.config)) return;
             const ruleId = contextRuleId.value;
             closeContextMenu();
             removeAttribute(groupId, ruleId);

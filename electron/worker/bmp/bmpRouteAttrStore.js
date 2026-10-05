@@ -28,7 +28,7 @@ function normalizeOptionalValue(value, fallback = null) {
 }
 
 function canonicalizeBmpRouteAttr(attr = {}) {
-    return {
+    const normalized = {
         origin: normalizeOptionalValue(attr.origin, DEFAULT_BMP_ROUTE_ATTR.origin),
         asPath: normalizeOptionalValue(attr.asPath, DEFAULT_BMP_ROUTE_ATTR.asPath),
         med: normalizeNumber(attr.med, DEFAULT_BMP_ROUTE_ATTR.med),
@@ -38,6 +38,11 @@ function canonicalizeBmpRouteAttr(attr = {}) {
         nextHop: normalizeOptionalValue(attr.nextHop, DEFAULT_BMP_ROUTE_ATTR.nextHop),
         prefixSid: normalizeOptionalValue(attr.prefixSid, DEFAULT_BMP_ROUTE_ATTR.prefixSid)
     };
+    if (attr.as4Path !== undefined) {
+        normalized.wireAsPath = normalizeOptionalValue(attr.wireAsPath);
+        normalized.as4Path = normalizeOptionalValue(attr.as4Path);
+    }
+    return normalized;
 }
 
 module.exports = {

@@ -20,7 +20,7 @@
                         class="generate-route-button"
                         type="primary"
                         size="small"
-                        :data-testid="`${testPrefix}-generate-routes-button`"
+                        :data-testid="generateButtonTestId"
                         :loading="routesGenerating"
                         :disabled="workspaceBusy"
                         @click="generateRoutes"
@@ -190,6 +190,50 @@
     defineOptions({ name: 'BgpRouteWorkspacePage' });
     const props = defineProps({ profileKey: { type: String, required: true } });
     const pageApis = {
+        ipv4: {
+            load: 'loadIpv4UNCRouteConfig',
+            save: 'saveIpv4UNCRouteConfig',
+            generate: 'generateIpv4Routes',
+            delete: 'deleteIpv4Routes',
+            pageId: BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_IPV4,
+            routeLabel: 'IPv4-UNC',
+            allowImport: true,
+            allowExport: true,
+            generateButtonTestId: 'bgp-generate-ipv4-routes-button'
+        },
+        'ipv4-label': {
+            load: 'loadIpv4LabelRouteConfig',
+            save: 'saveIpv4LabelRouteConfig',
+            generate: 'generateIpv4Routes',
+            delete: 'deleteIpv4Routes',
+            pageId: BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_IPV4_LABEL,
+            routeLabel: 'IPv4 Label',
+            allowExport: true
+        },
+        vpnv4: {
+            load: 'loadVpnv4RouteConfig',
+            save: 'saveVpnv4RouteConfig',
+            generate: 'generateVpnv4Routes',
+            delete: 'deleteVpnv4Routes',
+            pageId: BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_VPNV4,
+            routeLabel: 'VPNv4'
+        },
+        vpnv6: {
+            load: 'loadVpnv6RouteConfig',
+            save: 'saveVpnv6RouteConfig',
+            generate: 'generateVpnv6Routes',
+            delete: 'deleteVpnv6Routes',
+            pageId: BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_VPNV6,
+            routeLabel: 'VPNv6'
+        },
+        evpn: {
+            load: 'loadEvpnRouteConfig',
+            save: 'saveEvpnRouteConfig',
+            generate: 'generateEvpnRoutes',
+            delete: 'deleteEvpnRoutes',
+            pageId: BGP_EVENT_PAGE_ID.PAGE_ID_ROUTE_EVPN,
+            routeLabel: 'EVPN'
+        },
         ipv6: {
             load: 'loadIpv6UNCRouteConfig',
             save: 'saveIpv6UNCRouteConfig',
@@ -228,6 +272,7 @@
     const profile = getRouteProfile(props.profileKey);
     const api = pageApis[profile.key];
     const testPrefix = profile.testPrefix;
+    const generateButtonTestId = api.generateButtonTestId || `${testPrefix}-generate-routes-button`;
     const isMvpn = profile.addressFamily === BGP_ADDR_FAMILY.IPV4_MVPN;
     const isQp = [BGP_ADDR_FAMILY.IPV4_QP, BGP_ADDR_FAMILY.IPV6_QP].includes(profile.addressFamily);
     const initialWorkspace = restoreRouteWorkspace(profile, null);
@@ -307,10 +352,22 @@
             addressFamily: displayAddressFamily.value,
             ...(isMvpn ? { routeType } : {})
         }),
-        { title: '操作', key: 'action', width: 150, align: 'center' }
+        { title: '操作', key: 'action', width: 150, fixed: 'right', align: 'center' }
     ];
     const routeColumns = computed(() => getTableColumns());
     const routeIdentity = route => {
+        if (profile.key === 'evpn')
+            return {
+                routeType: route.routeType,
+                rd: route.rd,
+                esi: route.esi,
+                ethernetTagId: route.ethernetTagId,
+                macAddress: route.macAddress,
+                ipAddress: route.ipAddress,
+                originatingRouterIp: route.originatingRouterIp,
+                ip: route.ip,
+                mask: route.mask
+            };
         if (isMvpn)
             return {
                 rd: route.rd,
@@ -443,7 +500,7 @@
             groupId && groupStates.value.find(item => item.groupId === groupId && Number(item.routeCount) > 0);
         if (groupId && (!groupStatesKnown.value || groupStatesLoading.value || !state)) return;
         const addressFamily = Number(state ? state.addressFamily : displayAddressFamily.value);
-        if (addressFamily !== BGP_ADDR_FAMILY.IPV6_UNC) return;
+        if (addressFamily !== profile.addressFamily) return;
         exportLoading.value = true;
         try {
             if (typeof window.bgpApi?.exportMrt !== 'function') throw new Error('请重启应用后使用 MRT 导出');
@@ -530,7 +587,8 @@
             }
             const overlap = findRouteGroupOverlap(routeGroups.value, activeGroupId.value);
             if (overlap) {
-                notify.error(`与路由组“${overlap.groupName}”的 NLRI 路由键重叠，请调整后生成。`);
+                const nlri = overlap.nlri || `${overlap.prefix}/${overlap.mask}`;
+                notify.error(`与路由组“${overlap.groupName}”的 ${nlri} NLRI 路由键重叠，请调整后生成。`);
                 return;
             }
             routesGenerating.value = true;
@@ -582,7 +640,7 @@
                 ...routeIdentity(route),
                 addressFamily: route.addressFamily || displayAddressFamily.value,
                 count: 1,
-                ...(isMvpn ? {} : { prefix: route.ip, mask: Number(route.mask) }),
+                ...(isMvpn || profile.key === 'evpn' ? {} : { prefix: route.ip, mask: Number(route.mask) }),
                 ...(isQp ? { startDqpn: route.dqpn, bsid: route.nextHop || '' } : {})
             };
             const result = await apiCall(api.delete, config);

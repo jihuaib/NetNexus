@@ -12,9 +12,9 @@ WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpWorker.js'));
 const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpUtils.js'));
+const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'bgpUtils.js'));
 const { collectBgpGeneratedRoutes } = require(
-    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpRouteGenerator.js')
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'simulator', 'bgpRouteGenerator.js')
 );
 
 function makeWorkerWithInstance(addressFamily) {

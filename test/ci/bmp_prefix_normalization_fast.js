@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { normalizeIpPrefix, createRouteKey } = require('../../electron/utils/bmpPersistentRouteKey');
+const { normalizeIpPrefix, createRouteKey } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 
 function reference(prefix, prefixLength) {
     const bytes = Buffer.from(prefix.split('.').map(Number));

@@ -1,4 +1,4 @@
-import { IP_TYPE } from './bgpConst';
+import { IP_TYPE } from './ipConst';
 
 // 默认值
 export const DEFAULT_VALUES = {

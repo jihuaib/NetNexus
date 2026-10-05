@@ -8,7 +8,7 @@ const ProtocolProcessWithPromise = require('../worker/core/protocolProcessWithPr
 const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../worker/core/protocolProcessServices');
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
-const { normalizeBmpThreadCount } = require('../utils/bmpThreadConfig');
+const { normalizeBmpThreadCount } = require('../utils/bmp/bmpThreadConfig');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 const {

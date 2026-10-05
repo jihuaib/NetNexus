@@ -2,7 +2,7 @@ const assert = require('node:assert/strict');
 const { performance } = require('node:perf_hooks');
 const { spawnSync } = require('node:child_process');
 const BmpConst = require('../../electron/const/bmpConst');
-const BmpRouteAssuranceService = require('../../electron/utils/bmpRouteAssuranceService');
+const BmpRouteAssuranceService = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 
 if (typeof global.gc !== 'function') {
     const result = spawnSync(process.execPath, ['--expose-gc', __filename], {

@@ -1,7 +1,7 @@
 const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../const/bgpConst');
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
-const { ATTRIBUTE_DEFAULTS, attributeRegistry } = require('../../utils/bgpAttributeRegistry');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const { ATTRIBUTE_DEFAULTS, attributeRegistry } = require('../../utils/bgp/bgpAttributeRegistry');
 
 const DEFAULT_PUBLIC_RD = '0:0';
 const DEFAULT_PATH_ID = 0;
@@ -149,6 +149,37 @@ class BgpRoute {
             routeInfo.groupIp = this.groupIp;
             routeInfo.sourceAs = this.sourceAs;
             if (this.leafRouteKey !== undefined) routeInfo.leafRouteKey = this.leafRouteKey;
+        }
+
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
+            Object.assign(routeInfo, { ip: this.ip, mask: this.mask, rd: this.rd, label: this.label });
+        }
+        if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+            if (routeAttr.srv6Services)
+                routeInfo.srv6Services = routeAttr.srv6Services.map(service => ({
+                    ...service,
+                    sidStructure: { ...service.sidStructure }
+                }));
+            for (const field of [
+                'routeType',
+                'rd',
+                'esi',
+                'ethernetTagId',
+                'macAddress',
+                'ipAddress',
+                'originatingRouterIp',
+                'ip',
+                'mask',
+                'gatewayIp',
+                'encapsulationType',
+                'esImportRt',
+                'label',
+                'label2',
+                'vni',
+                'vni2'
+            ]) {
+                if (this[field] !== undefined) routeInfo[field] = this[field];
+            }
         }
 
         if (this.bgpInstance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_QP) {

@@ -1,18 +1,14 @@
 const BgpConst = require('../../const/bgpConst');
-const {
-    writeUInt32,
-    ipToBytes,
-    writeUInt16,
-    getIpType,
-    rdStringToBytes,
-    extCommunitiesToBytes
-} = require('../../utils/ipUtils');
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { encodeVpnNlri, encodeEvpnNlri, encodeVpnNextHop } = require('../../utils/bgp/simulator/bgpVpnEvpn');
+const { writeUInt32, ipToBytes, writeUInt16 } = require('../../utils/ipUtils');
+const { getIpType, getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const { rdStringToBytes, extCommunitiesToBytes } = require('../../utils/bgp/bgpEncoding');
+
 const logger = require('../../log/logger');
 const CommonUtils = require('../../utils/commonUtils');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
 const BgpRoute = require('./bgpRoute');
-const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgpAttributeRegistry');
+const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgp/bgpAttributeRegistry');
 const { encodeExtendedCommunities } = require('../../../shared/bgpExtendedCommunities');
 
 const MAX_PENDING_ROUTE_STREAM_ROUTES = 2000;
@@ -301,7 +297,9 @@ class BgpPeer {
             return this.buildPathAttribute(BgpConst.BGP_PATH_ATTR.AS_PATH, BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE, [
                 0x02,
                 0x01,
-                ...writeUInt32(this.session.localAs)
+                ...(CommonUtils.BIT_TEST(this.session.localCapFlags, BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS)
+                    ? writeUInt32(this.session.localAs)
+                    : writeUInt16(this.session.localAs))
             ]);
         }
 
@@ -349,6 +347,14 @@ class BgpPeer {
             return [];
         }
 
+        return this.buildPathAttribute(
+            BgpConst.BGP_PATH_ATTR.PREFIX_SID,
+            BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE,
+            this.buildSrv6ServiceTlv('l3', routeAttr)
+        );
+    }
+
+    buildSrv6ServiceTlv(serviceType, routeAttr) {
         const sidBytes = ipToBytes(`${routeAttr.srv6Sid}`);
         if (sidBytes.length !== BgpConst.IPV6_HOST_BYTE_LEN) {
             throw new Error(`SRv6 SID must be IPv6 address: ${routeAttr.srv6Sid}`);
@@ -385,12 +391,21 @@ class BgpPeer {
         ];
         const sidInformationSubTlv = [0x01, ...writeUInt16(sidInformationValue.length), ...sidInformationValue];
         const serviceTlvValue = [0x00, ...sidInformationSubTlv];
-        const serviceTlv = [0x05, ...writeUInt16(serviceTlvValue.length), ...serviceTlvValue];
+        return [serviceType === 'l2' ? 0x06 : 0x05, ...writeUInt16(serviceTlvValue.length), ...serviceTlvValue];
+    }
 
+    buildEvpnSrv6PrefixSidAttribute(entries) {
         return this.buildPathAttribute(
             BgpConst.BGP_PATH_ATTR.PREFIX_SID,
             BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL | BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE,
-            serviceTlv
+            entries.flatMap(entry =>
+                this.buildSrv6ServiceTlv(entry.type === 'srv6L2' ? 'l2' : 'l3', {
+                    attributePolicy: 'configured',
+                    srv6Sid: entry.value,
+                    srv6EndpointBehavior: entry.srv6EndpointBehavior,
+                    srv6SidStructure: entry.srv6SidStructure
+                })
+            )
         );
     }
 
@@ -463,7 +478,15 @@ class BgpPeer {
     buildRoutePathAttributes(route, options = {}) {
         const routeAttr = this.getRouteAttr(route);
         if (routeAttr.attributePolicy === 'configured') {
-            return (routeAttr.pathAttributes || []).flatMap(entry => this.buildConfiguredPathAttribute(entry));
+            const entries = routeAttr.pathAttributes || [];
+            const services = entries.filter(entry => ['srv6L2', 'srv6L3'].includes(entry.type));
+            return entries.flatMap(entry =>
+                services.includes(entry)
+                    ? entry === services[0]
+                        ? this.buildEvpnSrv6PrefixSidAttribute(services)
+                        : []
+                    : this.buildConfiguredPathAttribute(entry)
+            );
         }
         const origin = [this.getOriginValue(routeAttr.origin)];
         const med = routeAttr.med ?? ATTRIBUTE_DEFAULTS.med.value;
@@ -510,27 +533,25 @@ class BgpPeer {
             pathAttr.push(...customPathAttr);
         }
 
-        if (routeAttr.rt?.trim()) {
-            const rtList = routeAttr.rt.trim().split(/\s+/);
-            const rtBuffers = [];
-            for (const rt of rtList) {
-                if (rt) {
-                    rtBuffers.push(extCommunitiesToBytes(BgpConst.EXT_COMMUNITY_SUB_TYPE.RT, rt));
-                }
-            }
-            const combinedBuffer = Buffer.concat(rtBuffers);
-
-            if (combinedBuffer.length > 0) {
-                pathAttr.push(
-                    ...this.buildPathAttribute(
-                        BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
-                        BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL |
-                            BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH |
-                            BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE,
-                        combinedBuffer
-                    )
-                );
-            }
+        const extendedCommunities = [
+            ...(routeAttr.extendedCommunities || []),
+            ...(routeAttr.rt?.trim()
+                ? routeAttr.rt
+                      .trim()
+                      .split(/\s+/)
+                      .map(rt => `rt:${rt}`)
+                : [])
+        ];
+        if (extendedCommunities.length) {
+            pathAttr.push(
+                ...this.buildPathAttribute(
+                    BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES,
+                    BgpConst.BGP_PATH_ATTR_FLAGS.OPTIONAL |
+                        BgpConst.BGP_PATH_ATTR_FLAGS.EXTENDED_LENGTH |
+                        BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE,
+                    encodeExtendedCommunities(extendedCommunities)
+                )
+            );
         }
 
         pathAttr.push(...this.buildSrv6PrefixSidAttribute(routeAttr));
@@ -603,6 +624,21 @@ class BgpPeer {
     getMpReachNextHopBytes(route) {
         const routeAttr = this.getRouteAttr(route);
         if (routeAttr.mrtMpNextHopBytes) return Array.from(Buffer.from(routeAttr.mrtMpNextHopBytes, 'hex'));
+        if (
+            [BgpConst.BGP_SAFI_TYPE.SAFI_VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN].includes(this.instance.safi) &&
+            routeAttr.attributePolicy === 'configured' &&
+            (route?.mpNextHop === undefined || route?.mpNextHop === null)
+        )
+            throw new Error('VPN/EVPN路由需要MP Next Hop节点');
+        if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN && route.encapsulationType === 'srv6') {
+            const bytes = ipToBytes(`${route.mpNextHop || this.session.localIp}`);
+            if (bytes.length !== BgpConst.IPV6_HOST_BYTE_LEN)
+                throw new Error('EVPN SRv6的MP Next Hop必须为IPv6地址；IPv4邻居请配置IPv6固定下一跳');
+            return bytes;
+        }
+        if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
+            return Array.from(encodeVpnNextHop(route.mpNextHop || this.session.localIp, this.instance.afi));
+        }
         if (routeAttr.attributePolicy === 'configured') {
             if (route?.mpNextHop === undefined || route?.mpNextHop === null) return [];
             const nextHop = route.mpNextHop || this.session.localIp;
@@ -661,7 +697,23 @@ class BgpPeer {
         // NLRI
         let nlriBuf = [];
 
-        if (
+        if ([BgpConst.BGP_SAFI_TYPE.SAFI_VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN].includes(this.instance.safi)) {
+            while (routeIndex < routes.length) {
+                if (
+                    routeIndex > firstRouteIndex &&
+                    Buffer.from(this.getMpReachNextHopBytes(route)).toString('hex') !== nextHopKey
+                )
+                    break;
+                const nlri =
+                    this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+                        ? encodeVpnNlri(route, this.instance.afi)
+                        : encodeEvpnNlri(route);
+                if (msgLen + nlriBuf.length + nlri.length > BgpConst.BGP_MAX_PKT_SIZE) break;
+                nlriBuf.push(...nlri);
+                route = routes[++routeIndex];
+            }
+            attr.push(...nlriBuf);
+        } else if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN
         ) {
@@ -795,7 +847,19 @@ class BgpPeer {
         // NLRI
         let route = routes[routeIndex];
 
-        if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
+        if ([BgpConst.BGP_SAFI_TYPE.SAFI_VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN].includes(this.instance.safi)) {
+            const nlriBuf = [];
+            while (routeIndex < routes.length) {
+                const nlri =
+                    this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN
+                        ? encodeVpnNlri(route, this.instance.afi, { withdraw: true })
+                        : encodeEvpnNlri(route);
+                if (msgLen + nlriBuf.length + nlri.length > BgpConst.BGP_MAX_PKT_SIZE) break;
+                nlriBuf.push(...nlri);
+                route = routes[++routeIndex];
+            }
+            attr.push(...nlriBuf);
+        } else if (this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
             let nlriBuf = [];
             while (routeIndex < routes.length) {
                 const mvpnNlri = this.buildMvpnNlri(route);
@@ -1100,6 +1164,16 @@ class BgpPeer {
 
     getRouteGroupBuilder(route) {
         const ipType = getIpType(this.session.peerIp);
+        if (
+            route &&
+            this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
+            this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN &&
+            this.getMpReachNextHopBytes(route).length === 24 &&
+            !this.session.isExtendedNextHopEnabled?.(this.instance.afi, this.instance.safi, 2)
+        )
+            return null;
+        if ([BgpConst.BGP_SAFI_TYPE.SAFI_VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN].includes(this.instance.safi))
+            return this.buildUpdateMpMsg.bind(this);
 
         if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
@@ -1473,6 +1547,8 @@ class BgpPeer {
         if (withdrawnRoutes.length === 0) {
             return null;
         }
+        if ([BgpConst.BGP_SAFI_TYPE.SAFI_VPN, BgpConst.BGP_SAFI_TYPE.SAFI_EVPN].includes(this.instance.safi))
+            return this.sendBuiltRouteLoop(withdrawnRoutes, this.buildWithdrawMpMsg.bind(this));
 
         if (
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&

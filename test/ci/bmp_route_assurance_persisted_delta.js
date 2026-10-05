@@ -1,7 +1,7 @@
 // Covers the SQLite committed-delta path that replaced ObservedRouteMap.
 const assert = require('node:assert/strict');
 const BmpConst = require('../../electron/const/bmpConst');
-const BmpRouteAssuranceService = require('../../electron/utils/bmpRouteAssuranceService');
+const BmpRouteAssuranceService = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 
 const service = new BmpRouteAssuranceService();
 const sourceId = 'persisted-source-observed-map';

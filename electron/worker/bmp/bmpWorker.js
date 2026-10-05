@@ -1,33 +1,32 @@
 ﻿const net = require('net');
-const util = require('util');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
 const TcpAuthForwardingServer = require('../core/tcpAuthForwardingServer');
 const BmpSession = require('./bmpSession');
-const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgpUtils');
-const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../utils/bmpPersistentRouteKey');
+const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../utils/bmp/bmpPersistentRouteKey');
 const BmpBgpSession = require('./bmpBgpSession');
 const BmpBgpInstance = require('./bmpBgpInstance');
 const BmpBgpRoute = require('./bmpBgpRoute');
 const BmpConst = require('../../const/bmpConst');
-const RouteUpdateAggregator = require('../../utils/routeUpdateAggregator');
-const BmpRouteAssuranceService = require('../../utils/bmpRouteAssuranceService');
+const RouteUpdateAggregator = require('../../utils/bmp/bmpRouteUpdateAggregator');
+const BmpRouteAssuranceService = require('../../utils/bmp/bmpRouteAssuranceService');
 const {
     splitSessionStatisticsReport,
     getSessionStatisticsEntityIdentityParts,
     getSessionStatisticsReportIdentityParts
-} = require('../../utils/bmpStatistics');
+} = require('../../utils/bmp/bmpStatistics');
 const {
     MAX_RESULT_LIMIT: MAX_ROUTE_LENS_RESULT_LIMIT,
     buildBmpRouteLensFromPersistedRoutes,
     parseRouteLensQuery,
     getComplexRouteIdentity
-} = require('../../utils/bmpRouteLens');
+} = require('../../utils/bmp/bmpRouteLens');
 const BmpPersistenceClient = require('./bmpPersistenceClient');
 const BmpIngestClientPool = require('./bmpIngestClientPool');
 const { applyIngestSnapshot, cloneIngestValue } = require('./bmpIngestSnapshot');
 const { allocatePersistenceConnection } = require('./bmpPersistenceMutation');
-const { normalizeBmpThreadCount } = require('../../utils/bmpThreadConfig');
+const { normalizeBmpThreadCount } = require('../../utils/bmp/bmpThreadConfig');
 
 const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
 const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
@@ -53,11 +52,13 @@ class BmpWorker {
         this.server = null;
         this.ipv6Server = null;
         this.tcpAuthForwardingServer = null;
+        this.tcpServersClosePromise = null;
         this.tcpAoRuntimeFailure = null;
         this.tcpMd5RuntimeFailure = null;
         this.bmpStopping = false;
         this.bmpRuntimeStarted = false;
         this.ingestRuntimeFailure = null;
+        this.bmpFatalRuntimeFailure = null;
         this.bmpShutdownPromise = null;
         this.socket = null;
 
@@ -529,7 +530,7 @@ class BmpWorker {
         });
     }
 
-    handlePersistenceFailure(error) {
+    handlePersistenceFailure(error, options = {}) {
         if (this.persistenceFailure) {
             return;
         }
@@ -545,6 +546,28 @@ class BmpWorker {
                 session.socket.destroy();
             }
         });
+        if (options.reportRuntimeFailure !== false && this.bmpRuntimeStarted && !this.bmpStopping) {
+            this.stopAfterRuntimeFailure(
+                {
+                    code: 'BMP_PERSISTENCE_WORKER_FAILURE',
+                    reason: 'BMP数据库写入异常，服务已安全停止，请重新启动'
+                },
+                'BMP持久化'
+            );
+        }
+    }
+
+    stopAfterRuntimeFailure(failure, label) {
+        if (this.bmpStopping || this.bmpFatalRuntimeFailure) return;
+        this.bmpFatalRuntimeFailure = failure;
+        try {
+            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
+        } catch (eventError) {
+            logger.warn(`${label}运行时故障事件发送失败: ${eventError.message}`);
+        }
+        this.shutdownBmpRuntime()
+            .catch(shutdownError => logger.error(`${label}故障后停止BMP失败: ${shutdownError.message}`))
+            .finally(() => this.scheduleFatalExit());
     }
 
     handlePersistenceReaderFailure(reader, error) {
@@ -1200,7 +1223,7 @@ class BmpWorker {
 
     handleIngestFailure(error) {
         if (this.bmpStopping || this.ingestRuntimeFailure) return;
-        this.handlePersistenceFailure(error);
+        this.handlePersistenceFailure(error, { reportRuntimeFailure: false });
         // Startup reports its own error and cleans up without publishing a
         // runtime failure for a service that never became ready.
         if (!this.bmpRuntimeStarted) return;
@@ -1208,14 +1231,7 @@ class BmpWorker {
             code: 'BMP_INGEST_WORKER_EXIT',
             reason: 'BMP客户端处理线程异常，服务已安全停止，请重新启动'
         };
-        try {
-            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, this.ingestRuntimeFailure);
-        } catch (eventError) {
-            logger.warn(`BMP解析线程运行时故障事件发送失败: ${eventError.message}`);
-        }
-        this.shutdownBmpRuntime()
-            .catch(shutdownError => logger.error(`BMP解析线程故障后停止失败: ${shutdownError.message}`))
-            .finally(() => this.scheduleFatalExit());
+        this.stopAfterRuntimeFailure(this.ingestRuntimeFailure, 'BMP解析线程');
     }
 
     attachClientSocket(socket, transportLabel, endpoint = {}, initialData = null) {
@@ -1331,13 +1347,42 @@ class BmpWorker {
         this.server = net.createServer(socket => this.attachClientSocket(socket, 'ipv4'));
         this.ipv6Server = net.createServer(socket => this.attachClientSocket(socket, 'ipv6'));
 
-        const listenPromise = util.promisify(this.server.listen).bind(this.server);
-        await listenPromise({ port: this.bmpConfigData.port, host: '0.0.0.0' });
+        await this.listenTcpServer(this.server, { port: this.bmpConfigData.port, host: '0.0.0.0' });
         logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at 0.0.0.0`);
 
-        const ipv6ListenPromise = util.promisify(this.ipv6Server.listen).bind(this.ipv6Server);
-        await ipv6ListenPromise({ port: this.bmpConfigData.port, host: '::', ipv6Only: true });
+        await this.listenTcpServer(this.ipv6Server, { port: this.bmpConfigData.port, host: '::', ipv6Only: true });
         logger.info(`TCP Server listening on port ${this.bmpConfigData.port} at ::`);
+    }
+
+    listenTcpServer(server, options) {
+        // listen() failures are emitted as events, not passed to its callback.
+        // Keep a runtime listener after startup, and reject START on bind errors.
+        server.on('error', error => {
+            if (!this.bmpRuntimeStarted || this.bmpStopping) return;
+            logger.error(`BMP TCP listener failed: ${error.message}`);
+            this.stopAfterRuntimeFailure(
+                { code: 'BMP_LISTENER_ERROR', reason: 'BMP TCP监听器异常，服务已安全停止，请重新启动' },
+                'BMP TCP监听器'
+            );
+        });
+        return new Promise((resolve, reject) => {
+            const onError = error => {
+                server.removeListener('listening', onListening);
+                reject(error);
+            };
+            const onListening = () => {
+                server.removeListener('error', onError);
+                resolve();
+            };
+            server.once('error', onError);
+            server.once('listening', onListening);
+            try {
+                server.listen(options);
+            } catch (error) {
+                server.removeListener('error', onError);
+                onError(error);
+            }
+        });
     }
 
     createTcpAuthForwardingServer(authType) {
@@ -1361,14 +1406,7 @@ class BmpWorker {
         };
         this.tcpAoRuntimeFailure = failure;
         logger.error(`TCP 认证 helper异常退出（TCP-AO），BMP协议进程将停止: ${error.message}`);
-        try {
-            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
-        } catch (eventError) {
-            logger.warn(`TCP-AO运行时故障事件发送失败: ${eventError.message}`);
-        }
-        this.shutdownBmpRuntime()
-            .catch(shutdownError => logger.error(`TCP-AO故障后停止BMP失败: ${shutdownError.message}`))
-            .finally(() => this.scheduleFatalExit());
+        this.stopAfterRuntimeFailure(failure, 'TCP-AO');
     }
 
     handleTcpMd5UnexpectedExit(error) {
@@ -1379,14 +1417,7 @@ class BmpWorker {
         };
         this.tcpMd5RuntimeFailure = failure;
         logger.error(`TCP 认证 helper异常退出（TCP MD5），BMP协议进程将停止: ${error.message}`);
-        try {
-            this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.RUNTIME_FAILURE, failure);
-        } catch (eventError) {
-            logger.warn(`TCP MD5运行时故障事件发送失败: ${eventError.message}`);
-        }
-        this.shutdownBmpRuntime()
-            .catch(shutdownError => logger.error(`TCP MD5故障后停止BMP失败: ${shutdownError.message}`))
-            .finally(() => this.scheduleFatalExit());
+        this.stopAfterRuntimeFailure(failure, 'TCP MD5');
     }
 
     async startTcpAoServer() {
@@ -1533,12 +1564,13 @@ class BmpWorker {
     }
 
     async closeTcpServers() {
+        if (this.tcpServersClosePromise) return this.tcpServersClosePromise;
         const servers = [this.server, this.ipv6Server];
         const tcpAuthForwardingServer = this.tcpAuthForwardingServer;
         this.server = null;
         this.ipv6Server = null;
         this.tcpAuthForwardingServer = null;
-        await Promise.all([
+        const closing = Promise.all([
             ...servers.map(
                 server =>
                     new Promise(resolve => {
@@ -1562,7 +1594,11 @@ class BmpWorker {
                     })
             ),
             tcpAuthForwardingServer?.stop?.() || Promise.resolve()
-        ]);
+        ]).finally(() => {
+            if (this.tcpServersClosePromise === closing) this.tcpServersClosePromise = null;
+        });
+        this.tcpServersClosePromise = closing;
+        return closing;
     }
 
     async startBmp(messageId, bmpConfigData) {
@@ -1573,6 +1609,7 @@ class BmpWorker {
         this.tcpAoRuntimeFailure = null;
         this.tcpMd5RuntimeFailure = null;
         this.ingestRuntimeFailure = null;
+        this.bmpFatalRuntimeFailure = null;
         this.bmpRuntimeStarted = false;
         this.bmpConfigData = bmpConfigData;
         try {

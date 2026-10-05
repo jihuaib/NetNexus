@@ -3,7 +3,7 @@ const path = require('path');
 const crypto = require('crypto');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 
-const routeKey = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bmpPersistentRouteKey.js'));
+const routeKey = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bmp', 'bmpPersistentRouteKey.js'));
 
 const {
     KEY_SCHEMA_VERSION,

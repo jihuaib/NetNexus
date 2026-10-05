@@ -4,7 +4,7 @@ const { DEFAULT_API_SETTINGS } = require('../../const/apiConst');
 const {
     getSessionStatisticsReportRibType,
     getSessionStatisticsReportIdentityParts
-} = require('../../utils/bmpStatistics');
+} = require('../../utils/bmp/bmpStatistics');
 const { CliCommandError } = require('./errors');
 const { formatDate, formatJson, formatPrefix, formatTable } = require('./formatters');
 

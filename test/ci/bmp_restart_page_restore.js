@@ -15,7 +15,7 @@ const {
 } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 const ProtocolProcessHost = require('../../electron/worker/core/protocolProcessHost');
 const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protocolProcessServices');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
 const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 

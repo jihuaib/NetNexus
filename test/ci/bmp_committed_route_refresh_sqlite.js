@@ -7,8 +7,8 @@ const Session = require('../../electron/worker/bmp/bmpSession');
 const Peer = require('../../electron/worker/bmp/bmpBgpSession');
 const Instance = require('../../electron/worker/bmp/bmpBgpInstance');
 const Route = require('../../electron/worker/bmp/bmpBgpRoute');
-const Assurance = require('../../electron/utils/bmpRouteAssuranceService');
-const Aggregator = require('../../electron/utils/routeUpdateAggregator');
+const Assurance = require('../../electron/utils/bmp/bmpRouteAssuranceService');
+const Aggregator = require('../../electron/utils/bmp/bmpRouteUpdateAggregator');
 const BmpConst = require('../../electron/const/bmpConst');
 const { getClientWorkerIndex } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 const {

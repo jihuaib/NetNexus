@@ -40,7 +40,7 @@ const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const ProtocolProcessWithPromise = require('../../electron/worker/core/protocolProcessWithPromise');
 const EventDispatcher = require('../../electron/utils/eventDispatcher');
-const { getAfiAndSafi } = require('../../electron/utils/bgpUtils');
+const { getAfiAndSafi } = require('../../electron/utils/bgp/bgpUtils');
 
 function makeStore() {
     const values = new Map();

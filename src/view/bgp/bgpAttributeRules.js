@@ -1,9 +1,20 @@
 import ipaddr from 'ipaddr.js';
 import registry from '../../../shared/bgpAttributes.json';
 import extendedCommunity from '../../../shared/bgpExtendedCommunities.js';
+import routeDistinguisher from '../../../shared/bgpRouteDistinguisher.js';
+import attributeConditions from '../../../shared/bgpAttributeConditions.js';
+import evpnSrv6 from '../../../shared/bgpEvpnSrv6.js';
 import { BGP_ADDR_FAMILY } from '../../const/bgpConst';
 
 const { normalizeExtendedCommunities, getExtendedCommunityValueRange } = extendedCommunity;
+const {
+    normalizeRouteDistinguisher,
+    parseRouteDistinguisher,
+    composeRouteDistinguisher,
+    getRouteDistinguisherValueRange
+} = routeDistinguisher;
+const { matchesCondition, isAttributeApplicable, isAttributeRequired } = attributeConditions;
+const { isEvpnPerEs, normalizeEvpnSrv6Parameters, validateEvpnSrv6Sid } = evpnSrv6;
 
 export const ATTRIBUTE_CATALOG = registry.attributes;
 export const ATTRIBUTE_MODES = registry.modes;
@@ -18,20 +29,26 @@ const typedRouteTargets = value =>
         .join(' ');
 let sequence = 0;
 
-export function createAttributeRule(type, addressFamily) {
+export function createAttributeRule(type, addressFamily, config = {}) {
     const definition = definitionFor(type);
     if (!definition) throw new Error(`不支持的属性：${type}`);
     return {
         id: `attr-${Date.now().toString(36)}-${++sequence}`,
         type,
         ...clone(definition.default),
-        ...clone(definition.familyDefaults?.[Number(addressFamily)] || {})
+        ...clone(definition.familyDefaults?.[Number(addressFamily)] || {}),
+        ...Object.assign(
+            {},
+            ...(definition.contextDefaults || [])
+                .filter(entry => matchesCondition(entry.when, { ...config, addressFamily }))
+                .map(entry => clone(entry.value))
+        )
     };
 }
 export function isAttributeRuleApplicable(rule, config) {
-    const families = definitionFor(rule.type)?.addressFamilies;
-    return !families || families.includes(Number(config.addressFamily));
+    return isAttributeApplicable(definitionFor(rule.type) || {}, config);
 }
+export const isAttributeRuleRequired = (rule, config) => isAttributeRequired(definitionFor(rule.type) || {}, config);
 export function isMpNlriEncoding(config) {
     return Number(config.addressFamily) !== BGP_ADDR_FAMILY.IPV4_UNC || config.nlriEncoding === 'mpReach';
 }
@@ -73,10 +90,25 @@ export function normalizeRouteRuleSections(config) {
     const nlriRules = (config.nlriRules || []).filter(rule => getRuleSection(rule) === 'nlri');
     return { ...config, attributeRules, nlriRules };
 }
-export function getAttributeRuleFields(rule) {
+export function getAttributeRuleFields(rule, config = {}) {
     const fields = definitionFor(rule?.type)?.fields;
     if (!fields) return [];
-    return [...(fields[rule.mode] || []), ...(fields.common || [])].map(field => ({ ...field }));
+    return [...(fields[rule.mode] || []), ...(fields.common || [])].map(field => {
+        const result = { ...field };
+        if (['srv6L2', 'srv6L3'].includes(rule.type) && field.key === 'endpointBehavior')
+            result.options = field.options.filter(option => {
+                try {
+                    normalizeEvpnSrv6Parameters(
+                        { type: rule.type, ...definitionFor(rule.type).default, endpointBehavior: option.value },
+                        config
+                    );
+                    return true;
+                } catch (_error) {
+                    return false;
+                }
+            });
+        return result;
+    });
 }
 export const getRuleModeLabel = rule =>
     ATTRIBUTE_MODES.find(mode => mode.value === rule?.mode)?.label || definitionFor(rule?.type)?.label || '';
@@ -144,6 +176,10 @@ export function getAttributeResultColumns(config) {
             dataIndex: column.key,
             ellipsis: true,
             customRender: ({ text, record }) => {
+                if (['srv6L2', 'srv6L3'].includes(rule.type))
+                    text = record?.srv6Services?.find(
+                        entry => entry.serviceType === (rule.type === 'srv6L2' ? 'l2' : 'l3')
+                    )?.sid;
                 if (getRuleSection(rule) === 'attributes' && Array.isArray(record?.pathAttributes)) {
                     const instances = record.pathAttributes.filter(
                         item => item.type === rule.type || (rule.type === 'extendedCommunities' && item.type === 'rt')
@@ -231,17 +267,46 @@ function ipString(number, bits) {
 function boundsFor(rule, definition) {
     if (definition.valueType === 'extendedCommunity')
         return getExtendedCommunityValueRange(rule.base ?? definition.default.base);
+    if (definition.valueType === 'rd') return getRouteDistinguisherValueRange(rule.base);
     return [definition.validation?.min ?? 0, definition.validation?.max ?? 0xffffffff];
 }
-function checkValue(rule, value, definition) {
+function checkValue(rule, value, definition, config = {}) {
     const kind = definition.valueType;
+    if (kind === 'rd') {
+        const rd = normalizeRouteDistinguisher(value);
+        if (
+            Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+            (Number(config.routeType) === 4 || isEvpnPerEs(config)) &&
+            parseRouteDistinguisher(rd).type !== 1
+        )
+            throw new Error('当前 EVPN 路由的 RD 必须使用 IPv4 管理员');
+        if (
+            Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+            isEvpnPerEs(config) &&
+            parseRouteDistinguisher(rd).assigned === 0
+        )
+            throw new Error('EVPN per-ES 路由的 RD 数值必须为非零值');
+        return rd;
+    }
     if (kind === 'extendedCommunity') return normalizeExtendedCommunities(value);
     if (kind === 'ipv4') return ipv4String(ipv4Number(value));
     if (kind === 'ipAddress') {
         const address = ipNumber(value);
+        if (
+            rule.type === 'mpNextHop' &&
+            config.encapsulationType === 'srv6' &&
+            Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+            address.bits !== 128
+        )
+            throw new Error('EVPN SRv6 的 MP Next Hop 必须为 IPv6 地址');
         return ipString(address.number, address.bits);
     }
-    if (kind === 'srv6' || kind === 'ipv6') return ipv6String(ipv6Number(value));
+    if (kind === 'srv6' || kind === 'ipv6') {
+        const sid = ipv6String(ipv6Number(value));
+        if (['srv6L2', 'srv6L3'].includes(rule.type))
+            validateEvpnSrv6Sid(sid, normalizeEvpnSrv6Parameters(rule, config), config);
+        return sid;
+    }
     if (kind === 'asPath') {
         const parts = String(value ?? '')
             .trim()
@@ -273,6 +338,13 @@ function checkValue(rule, value, definition) {
         }
         return value;
     }
+    if (
+        Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+        isEvpnPerEs(config) &&
+        ['label', 'vni'].includes(rule.type) &&
+        Number(value) !== 0
+    )
+        throw new Error('EVPN per-ES 的 Label / VNI 必须为 0');
     return integer(value, ...boundsFor(rule, definition));
 }
 
@@ -304,7 +376,23 @@ export function previewAttributeRule(rule, index = 0, config = {}, throwErrors =
             if (!rule.values?.length) throw new Error('值列表为空');
             value = rule.values[index % rule.values.length];
         } else if (rule.mode === 'fixed') value = rule.value;
-        else if (definition.valueCountValidation) {
+        else if (definition.valueType === 'rd') {
+            const base = rule.base;
+            const bounds = boundsFor(rule, definition);
+            let assigned;
+            if (rule.mode === 'increment') {
+                assigned =
+                    BigInt(integer(rule.start, ...bounds)) +
+                    BigInt(index) * BigInt(integer(rule.step, -Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER));
+                if (assigned < BigInt(bounds[0]) || assigned > BigInt(bounds[1]))
+                    throw new Error(`RD 数值范围为 ${bounds[0]}–${bounds[1]}`);
+            } else {
+                const min = integer(rule.min, ...bounds);
+                const max = integer(rule.max, min, bounds[1]);
+                assigned = min + Math.floor(sample * (max - min + 1));
+            }
+            value = composeRouteDistinguisher(base, String(assigned));
+        } else if (definition.valueCountValidation) {
             const valueCount = integer(
                 rule.valueCount === undefined ? definition.default.valueCount : rule.valueCount,
                 definition.valueCountValidation.min,
@@ -344,7 +432,8 @@ export function previewAttributeRule(rule, index = 0, config = {}, throwErrors =
             value = ipString(number, start.bits);
         } else if (definition.valueType === 'srv6') {
             const step = BigInt(rule.step);
-            if (step <= 0n) throw new Error('SID 步长必须为正整数');
+            if (step < 0n || (step === 0n && !['srv6L2', 'srv6L3'].includes(rule.type)))
+                throw new Error('SID 步长必须为正整数；EVPN 允许 0 表示固定 SID');
             value = ipv6String(ipv6Number(rule.start) + BigInt(index) * step);
         } else if (definition.valueType === 'asPath' && rule.mode === 'random') {
             integer(rule.min, ...boundsFor(rule, definition));
@@ -369,7 +458,7 @@ export function previewAttributeRule(rule, index = 0, config = {}, throwErrors =
             if (definition.valueType === 'extendedCommunity') value = `${rule.subtype}:${rule.base}:${value}`;
             else if (definition.valueType === 'community') value = `${rule.base}:${value}`;
         }
-        value = checkValue(rule, value, definition);
+        value = checkValue(rule, value, definition, config);
         const option = definition.fields?.fixed
             ?.find(field => field.key === 'value')
             ?.options?.find(item => String(item.value) === String(value));
@@ -385,7 +474,30 @@ export function validateAttributeRule(rule, config = {}) {
         const definition = definitionFor(rule.type);
         if (!definition || (definition.modes.length && !definition.modes.includes(rule.mode)))
             throw new Error('不支持的节点生成方式');
-        if (rule.mode === 'list') (rule.values || []).forEach(value => checkValue(rule, value, definition));
+        if (
+            rule.type === 'rd' &&
+            Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+            isEvpnPerEs(config) &&
+            rule.mode === 'random' &&
+            Number(rule.min) < 1
+        )
+            throw new Error('EVPN per-ES 路由的 RD 随机范围不能包含 0');
+        if (
+            Number(config.addressFamily) === BGP_ADDR_FAMILY.L2VPN_EVPN &&
+            isEvpnPerEs(config) &&
+            ['label', 'vni'].includes(rule.type) &&
+            rule.mode === 'random' &&
+            (Number(rule.min) !== 0 || Number(rule.max) !== 0)
+        )
+            throw new Error('EVPN per-ES 的 Label / VNI 随机范围必须为 0–0');
+        if (rule.mode === 'list') (rule.values || []).forEach(value => checkValue(rule, value, definition, config));
+        if (['srv6L2', 'srv6L3'].includes(rule.type) && rule.mode === 'increment') {
+            const parameters = normalizeEvpnSrv6Parameters(rule, config);
+            const structure = parameters.srv6SidStructure;
+            const tail = 128 - structure.locatorBlockLength - structure.locatorNodeLength - structure.functionLength;
+            if (BigInt(rule.step) % (1n << BigInt(tail)))
+                throw new Error('SID 步长必须保持 Locator 和 Function 之后的位为 0');
+        }
         previewAttributeRule(rule, 0, config, true);
         previewAttributeRule(rule, Math.max(0, getGeneratedRouteCount(config) - 1), config, true);
         return '';

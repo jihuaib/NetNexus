@@ -71,15 +71,14 @@ export const BGP_SRV6_ENDPOINT_BEHAVIOR = {
     END_DX4: 0x0011,
     END_DT6: 0x0012,
     END_DT4: 0x0013,
-    END_DT46: 0x0014
+    END_DT46: 0x0014,
+    END_DX2: 0x0015,
+    END_DX2V: 0x0016,
+    END_DT2U: 0x0017,
+    END_DT2M: 0x0018
 };
 
-// IP Type Values, 需要和后台定义保持一致, 后台会
-// 直接使用这个值处理
-export const IP_TYPE = {
-    IPV4: 1,
-    IPV6: 2
-};
+export { IP_TYPE } from './ipConst';
 
 // Peer Type Values, 需要和后台定义保持一致, 后台会
 // 直接使用这个值处理
@@ -193,7 +192,11 @@ export const BGP_EVENT_PAGE_ID = {
     PAGE_ID_BGP_PEER_INFO: 1,
     PAGE_ID_BGP_CONFIG: 'bgp-config-runtime',
     PAGE_ID_ROUTE_IPV4: 'bgp-route-ipv4-runtime',
+    PAGE_ID_ROUTE_IPV4_LABEL: 'bgp-route-ipv4-label-runtime',
     PAGE_ID_ROUTE_IPV6: 'bgp-route-ipv6-runtime',
+    PAGE_ID_ROUTE_VPNV4: 'bgp-route-vpnv4-runtime',
+    PAGE_ID_ROUTE_VPNV6: 'bgp-route-vpnv6-runtime',
+    PAGE_ID_ROUTE_EVPN: 'bgp-route-evpn-runtime',
     PAGE_ID_ROUTE_MVPN: 'bgp-route-mvpn-runtime',
     PAGE_ID_ROUTE_IPV4_QP: 'bgp-route-ipv4-qp-runtime',
     PAGE_ID_ROUTE_IPV6_QP: 'bgp-route-ipv6-qp-runtime'

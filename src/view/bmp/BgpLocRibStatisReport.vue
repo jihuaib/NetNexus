@@ -58,15 +58,12 @@
             </nn-col>
         </nn-row>
 
-        <nn-drawer
-            v-model:open="detailsDrawerVisible"
-            :title="detailsDrawerTitle"
-            placement="right"
-            width="520px"
-            @close="closeDetailsDrawer"
-        >
-            <nn-json-viewer v-if="currentDetails" :value="currentDetails" wrap />
-        </nn-drawer>
+        <BmpStatisticsDetailModal
+            :open="detailsModalVisible"
+            :report="currentDetails"
+            :client="monitoredClient"
+            @update:open="handleDetailsOpenChange"
+        />
     </div>
 </template>
 
@@ -77,6 +74,7 @@
     import EventBus from '../../utils/eventBus';
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
+    import BmpStatisticsDetailModal from '../../components/BmpStatisticsDetailModal.vue';
 
     defineOptions({
         name: 'BgpLocRibStatisReport'
@@ -150,9 +148,9 @@
 
     const monitoredClient = ref(null);
     const reportMap = ref(new Map());
-    const detailsDrawerVisible = ref(false);
-    const detailsDrawerTitle = ref('');
-    const currentDetails = ref(null);
+    const detailsModalVisible = ref(false);
+    const detailsReportKey = ref(null);
+    const currentDetails = computed(() => reportMap.value.get(detailsReportKey.value) || null);
 
     const getClientSourceId = client => client?.persistentSourceId || client?.sourceId || null;
 
@@ -249,14 +247,16 @@
     };
 
     const viewReportDetails = report => {
-        currentDetails.value = report;
-        detailsDrawerTitle.value = `Loc-RIB统计详情: ${report.instance.instanceRd}`;
-        detailsDrawerVisible.value = true;
+        detailsReportKey.value = report.key;
+        detailsModalVisible.value = true;
     };
 
-    const closeDetailsDrawer = () => {
-        detailsDrawerVisible.value = false;
-        currentDetails.value = null;
+    const closeDetailsModal = () => {
+        detailsModalVisible.value = false;
+        detailsReportKey.value = null;
+    };
+    const handleDetailsOpenChange = open => {
+        if (!open) closeDetailsModal();
     };
 
     const updateReportsForClient = (previousClientKey, client) => {
@@ -265,6 +265,7 @@
         for (const [key, report] of Array.from(nextMap.entries())) {
             if (report.clientKey !== previousClientKey) continue;
             const nextKey = `${nextClientKey}|${getInstanceKey(report.instance)}`;
+            if (detailsReportKey.value === key) detailsReportKey.value = nextKey;
             nextMap.delete(key);
             nextMap.set(nextKey, {
                 ...report,
@@ -450,6 +451,7 @@
     };
 
     const deactivatePage = () => {
+        closeDetailsModal();
         if (!pageActive) return;
         pageActive = false;
         invalidateRequests();
@@ -464,6 +466,7 @@
         clientEventRevision += 1;
         monitoredClient.value = null;
         reportMap.value = new Map();
+        closeDetailsModal();
         if (pageActive) void loadMonitoredClient();
     });
 

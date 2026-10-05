@@ -12,8 +12,11 @@ const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
 const registry = require('../../shared/bgpAttributes.json');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../electron/utils/bgpAttributeRules');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
 const family = BgpConst.BGP_ADDR_FAMILY;
 const type = BgpConst.BGP_PATH_ATTR;
 

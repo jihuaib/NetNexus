@@ -7,7 +7,7 @@ const BgpPeer = require(path.join(__dirname, '..', '..', 'electron', 'worker', '
 const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
 const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpRoute.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
+const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'bgpPacketParser.js'));
 
 function buildBgpMessageHeader(length, type) {
     const header = Buffer.alloc(BgpConst.BGP_HEAD_LEN, 0xff);

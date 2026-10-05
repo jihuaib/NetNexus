@@ -4,11 +4,29 @@ const path = require('path');
 const Database = require('better-sqlite3');
 const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../const/bgpConst');
-const { getAfiAndSafi } = require('../../utils/bgpUtils');
+const { getAfiAndSafi } = require('../../utils/bgp/bgpUtils');
 const BgpRoute = require('./bgpRoute');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
+const {
+    normalizeVpnRoute,
+    normalizeEvpnRoute,
+    makeVpnRouteKey,
+    makeEvpnRouteKey
+} = require('../../utils/bgp/simulator/bgpVpnEvpn');
 
-const SCHEMA_VERSION = 6;
+const SCHEMA_VERSION = 7;
+const EXTRA_NLRI_FIELDS = [
+    'esi',
+    'ethernetTagId',
+    'macAddress',
+    'ipAddress',
+    'gatewayIp',
+    'encapsulationType',
+    'esImportRt',
+    'label2',
+    'vni',
+    'vni2'
+];
 const DEFAULT_PAGE_SIZE = 25;
 const MAX_PAGE_SIZE = 10000;
 const DEFAULT_ITERATION_BATCH_SIZE = 2000;
@@ -26,6 +44,7 @@ const ATTRIBUTE_FIELDS = [
     'srv6Sid',
     'srv6EndpointBehavior',
     'srv6SidStructure',
+    'srv6Services',
     'attributePolicy',
     'configuredAttributes',
     'pathAttributes',
@@ -112,6 +131,7 @@ function routeTableSchemaSql(tableName) {
             label INTEGER,
             nlri_encoding TEXT,
             mp_next_hop TEXT,
+            nlri_json TEXT,
             attr_id INTEGER NOT NULL,
             created_at_ms INTEGER NOT NULL,
             updated_at_ms INTEGER NOT NULL,
@@ -178,10 +198,12 @@ function makeMvpnRouteKey(route) {
     return BgpRoute.makeMvpnKey(route);
 }
 
-function deriveRouteKey(route) {
+function deriveRouteKey(route, definition) {
     if (route?.routeKey !== undefined && route?.routeKey !== null && route.routeKey !== '') {
         return String(route.routeKey);
     }
+    if (definition?.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) return makeEvpnRouteKey(route);
+    if (definition?.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) return makeVpnRouteKey(route, definition.afi);
     if (route?.dqpn !== undefined && route?.dqpn !== null && route?.dqpn !== '') {
         return BgpRoute.makeQpKey(route.dqpn, route.ip, route.mask);
     }
@@ -217,6 +239,24 @@ function canonicalAttributeJson(attr) {
     return JSON.stringify(canonicalizeAttr(attr || {}));
 }
 
+function extraNlriJson(route) {
+    const extras = {};
+    EXTRA_NLRI_FIELDS.forEach(field => {
+        if (Object.prototype.hasOwnProperty.call(route, field) && route[field] !== undefined)
+            extras[field] = route[field];
+    });
+    return Object.keys(extras).length ? JSON.stringify(extras) : null;
+}
+
+function routeWithExtras(route) {
+    return {
+        ...parseJson(route.nlriJson, {}),
+        ...route,
+        ip: route.ip ?? route.prefix,
+        mask: route.mask ?? route.prefixLength
+    };
+}
+
 function attributeHash(canonicalJson) {
     return crypto.createHash('sha256').update(canonicalJson).digest();
 }
@@ -232,7 +272,7 @@ function normalizeRouteInput(input, options = {}) {
         options.routeKey ?? wrapper?.routeKey ?? (route.routeKey === undefined ? null : route.routeKey);
     const routeKey =
         explicitRouteKey === null || explicitRouteKey === undefined || explicitRouteKey === ''
-            ? deriveRouteKey(route)
+            ? deriveRouteKey(route, options.definition)
             : String(explicitRouteKey);
     let attr = options.attr ?? wrapper?.attr ?? wrapper?.routeAttr ?? route.routeAttr;
     if (attr === undefined && typeof route.bgpInstance?.getRouteAttr === 'function') {
@@ -258,11 +298,12 @@ function normalizeRouteInput(input, options = {}) {
         label: nullableInteger(route.label),
         nlriEncoding: route.nlriEncoding === undefined ? null : BgpRoute.normalizeNlriEncoding(route.nlriEncoding),
         mpNextHop: route.mpNextHop === undefined ? null : BgpRoute.normalizeMpNextHop(route.mpNextHop),
+        nlriJson: extraNlriJson(route),
         attr
     };
 }
 
-function getDeleteRouteKey(value) {
+function getDeleteRouteKey(value, definition) {
     if (typeof value === 'string' || typeof value === 'number') {
         const key = String(value);
         if (key) {
@@ -273,7 +314,7 @@ function getDeleteRouteKey(value) {
         if (value.routeKey !== undefined && value.routeKey !== null && value.routeKey !== '') {
             return String(value.routeKey);
         }
-        return deriveRouteKey(value.route || value);
+        return deriveRouteKey(value.route || value, definition);
     }
     throw new Error('BGP route SQLite delete requires a route key');
 }
@@ -410,6 +451,8 @@ function normalizeManagedMvpnRoute(route, rawRoute, definition) {
 }
 
 function managedRouteNlriIdentity(route, definition) {
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
+        return makeEvpnRouteKey({ ...routeWithExtras(route), pathId: 0 });
     if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
         const normalized = {};
         normalizeManagedMvpnRoute(normalized, route, definition);
@@ -422,6 +465,12 @@ function managedRouteNlriIdentity(route, definition) {
 }
 
 function managedRouteMembership(route, definition) {
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN)
+        return {
+            prefix: managedRouteNlriIdentity(route, definition),
+            prefixLength: -1,
+            rd: canonicalRouteRd(route.rd)
+        };
     if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
         // The existing membership columns also index non-prefix NLRI identities.
         return { prefix: managedRouteNlriIdentity(route, definition), prefixLength: -1, rd: route.rd ?? '' };
@@ -432,6 +481,42 @@ function managedRouteMembership(route, definition) {
 function normalizeManagedRoute(input, definition) {
     const rawRoute = input && input.route && typeof input.route === 'object' ? input.route : input;
     const route = normalizeRouteInput(input, { routeKey: 'managed-candidate' });
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+        const normalized = normalizeEvpnRoute({
+            ...rawRoute,
+            ip: rawRoute.ip ?? rawRoute.prefix,
+            mask: rawRoute.mask ?? rawRoute.prefixLength ?? rawRoute.length
+        });
+        route.prefix = normalized.ip ?? null;
+        route.prefixLength = normalized.mask ?? null;
+        route.rd = normalized.rd;
+        route.routeType = normalized.routeType;
+        route.originatingRouterIp = normalized.originatingRouterIp ?? null;
+        route.pathId = normalized.pathId ?? 0;
+        route.label = normalized.label ?? null;
+        route.nlriJson = extraNlriJson(normalized);
+        route.routeKey = makeEvpnRouteKey(normalized);
+        canonicalAttributeJson(route.attr);
+        return route;
+    }
+    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_VPN) {
+        const normalized = normalizeVpnRoute(
+            {
+                ...rawRoute,
+                ip: rawRoute.ip ?? rawRoute.prefix,
+                mask: rawRoute.mask ?? rawRoute.prefixLength ?? rawRoute.length
+            },
+            definition.afi
+        );
+        route.prefix = normalized.ip;
+        route.prefixLength = normalized.mask;
+        route.rd = normalized.rd;
+        route.pathId = normalized.pathId;
+        route.label = normalized.label;
+        route.routeKey = makeVpnRouteKey(normalized, definition.afi);
+        canonicalAttributeJson(route.attr);
+        return route;
+    }
     if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_MVPN) {
         normalizeManagedMvpnRoute(route, rawRoute, definition);
         canonicalAttributeJson(route.attr);
@@ -705,6 +790,18 @@ class BgpRouteSqliteStore {
         if (currentVersion === SCHEMA_VERSION) {
             return;
         }
+        if (currentVersion === 6) {
+            this.db
+                .transaction(() => {
+                    ROUTE_TABLE_DEFINITIONS.forEach(({ tableName }) => {
+                        this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN nlri_json TEXT`);
+                    });
+                    this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
+                    this.validateSchema();
+                })
+                .immediate();
+            return;
+        }
         if (currentVersion !== 0) {
             throw new Error(
                 `BGP route SQLite schema ${currentVersion} is incompatible with schema ${SCHEMA_VERSION}; data migration is not supported across major versions`
@@ -812,7 +909,8 @@ class BgpRouteSqliteStore {
                 'prefix',
                 'attr_id',
                 'nlri_encoding',
-                'mp_next_hop'
+                'mp_next_hop',
+                'nlri_json'
             ];
         });
         Object.entries(required).forEach(([table, columns]) => {
@@ -925,11 +1023,11 @@ class BgpRouteSqliteStore {
                 INSERT OR IGNORE INTO ${tableName}(
                     instance_id, route_key, prefix, prefix_length, rd, path_id, route_type,
                     originating_router_ip, source_ip, group_ip, source_as, dqpn, label, nlri_encoding, mp_next_hop, attr_id,
-                    created_at_ms, updated_at_ms
+                    nlri_json, created_at_ms, updated_at_ms
                 ) VALUES (
                     @instanceId, @routeKey, @prefix, @prefixLength, @rd, @pathId, @routeType,
                     @originatingRouterIp, @sourceIp, @groupIp, @sourceAs, @dqpn, @label, @nlriEncoding, @mpNextHop, @attrId,
-                    @now, @now
+                    @nlriJson, @now, @now
                 )
             `),
             updateRoute: this.db.prepare(`
@@ -947,6 +1045,7 @@ class BgpRouteSqliteStore {
                        label = @label,
                        nlri_encoding = @nlriEncoding,
                        mp_next_hop = @mpNextHop,
+                       nlri_json = @nlriJson,
                        attr_id = @attrId,
                        updated_at_ms = @now
                  WHERE instance_id = @instanceId AND route_key = @routeKey
@@ -956,6 +1055,7 @@ class BgpRouteSqliteStore {
                        OR originating_router_ip IS NOT @originatingRouterIp OR source_ip IS NOT @sourceIp
                        OR group_ip IS NOT @groupIp OR source_as IS NOT @sourceAs OR dqpn IS NOT @dqpn
                        OR label IS NOT @label OR nlri_encoding IS NOT @nlriEncoding OR mp_next_hop IS NOT @mpNextHop OR attr_id IS NOT @attrId
+                       OR nlri_json IS NOT @nlriJson
                    )
             `),
             updateRouteAttribute: this.db.prepare(`
@@ -1080,6 +1180,7 @@ class BgpRouteSqliteStore {
             label: route.label,
             nlriEncoding: route.nlriEncoding,
             mpNextHop: route.mpNextHop,
+            nlriJson: route.nlriJson,
             attrId,
             now
         };
@@ -1175,7 +1276,14 @@ class BgpRouteSqliteStore {
             let collision = findKey.get(params);
             if (!collision) {
                 try {
-                    if ([BgpConst.BGP_SAFI_TYPE.SAFI_QP, BgpConst.BGP_SAFI_TYPE.SAFI_MVPN].includes(definition.safi)) {
+                    if (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_EVPN) {
+                        collision = findPrefix.get({
+                            instanceId: instance.instance_id,
+                            ...managedRouteMembership(route, definition)
+                        });
+                    } else if (
+                        [BgpConst.BGP_SAFI_TYPE.SAFI_QP, BgpConst.BGP_SAFI_TYPE.SAFI_MVPN].includes(definition.safi)
+                    ) {
                         const normalized = normalizeManagedRoute(
                             { route: { ...route, ip: route.prefix, mask: route.prefixLength }, attr: route.attr },
                             definition
@@ -1310,6 +1418,7 @@ class BgpRouteSqliteStore {
                             dqpn: row.dqpn,
                             leafRouteKey: BgpRoute.parseMvpnLeafRouteKey(row.route_key)
                         };
+                        Object.assign(route, parseJson(row.nlri_json, {}));
                         collision = collisionNlri.get(managedRouteNlriIdentity(route, definition));
                     } catch (_error) {
                         // Non-prefix legacy NLRIs are protected by their exact key above.
@@ -1509,6 +1618,7 @@ class BgpRouteSqliteStore {
             const normalizedUpserts = upserts.map(input => {
                 const wrapperAttr = input && input.route && typeof input.route === 'object' ? input.attr : undefined;
                 return normalizeRouteInput(input, {
+                    definition: this.getRouteTableDefinition(instance),
                     attr: wrapperAttr === undefined ? (batch.attr ?? batch.routeAttr) : wrapperAttr
                 });
             });
@@ -1524,7 +1634,7 @@ class BgpRouteSqliteStore {
                 deleted += routeStatements.clearInstance.run({ instanceId }).changes;
             }
             deletes.forEach(value => {
-                const routeKey = getDeleteRouteKey(value);
+                const routeKey = getDeleteRouteKey(value, this.getRouteTableDefinition(instance));
                 routeStatements.rememberRouteAttribute.run({ instanceId, routeKey });
                 deleted += routeStatements.deleteRoute.run({ instanceId, routeKey }).changes;
             });
@@ -1786,6 +1896,7 @@ class BgpRouteSqliteStore {
         }
         const attr = parseJson(row.attr_json, {});
         const route = {
+            ...parseJson(row.nlri_json, {}),
             routeKey: row.route_key,
             persistentRouteId: Number(row.route_id),
             attrId: Buffer.isBuffer(row.attr_hash) ? row.attr_hash.toString('hex') : String(row.attr_hash || ''),
@@ -1850,7 +1961,10 @@ class BgpRouteSqliteStore {
     }
 
     queryDetail(instanceKey, routeKey) {
-        const key = routeKey && typeof routeKey === 'object' ? deriveRouteKey(routeKey) : routeKey;
+        const key =
+            routeKey && typeof routeKey === 'object'
+                ? deriveRouteKey(routeKey, parseInstanceFamily(instanceKey))
+                : routeKey;
         return this.getRoute(instanceKey, key);
     }
 

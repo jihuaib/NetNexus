@@ -1,4 +1,4 @@
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 const BmpConst = require('../../const/bmpConst');
 const { DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
 const {
@@ -6,7 +6,7 @@ const {
     formatRouteLookupKey,
     normalizeIpPrefix,
     normalizeRouteDistinguisher
-} = require('../../utils/bmpPersistentRouteKey');
+} = require('../../utils/bmp/bmpPersistentRouteKey');
 
 const DEFAULT_PATH_ID = 0;
 const DEFAULT_RD = '0:0';
@@ -545,6 +545,10 @@ class BmpBgpRoute {
             staleAt: staleMetadata?.staleAt || this.staleAt,
             staleReason: staleMetadata?.staleReason || this.staleReason
         };
+        if (routeAttr.as4Path !== undefined) {
+            routeInfo.wireAsPath = routeAttr.wireAsPath;
+            routeInfo.as4Path = routeAttr.as4Path;
+        }
         return routeInfo;
     }
 

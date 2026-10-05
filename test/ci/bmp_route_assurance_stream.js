@@ -6,12 +6,12 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const BmpConst = require('../../electron/const/bmpConst');
-const BmpRouteAssuranceService = require('../../electron/utils/bmpRouteAssuranceService');
+const BmpRouteAssuranceService = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
-const { makeStreamRunKey } = require('../../electron/utils/bmpRouteAssurance');
+const { makeStreamRunKey } = require('../../electron/utils/bmp/bmpRouteAssurance');
 const {
     buildConnectionMutation,
     buildScopeMutation,
@@ -377,7 +377,9 @@ async function main() {
         assert.deepEqual(cappedResult.summary.categoryCounts, expected.categoryCounts);
         assert.equal(cappedResult.summary.retainedIssueCount, 2);
         assert.deepEqual(cappedResult.summary.truncatedCategories, ['not-selected']);
-        assert.equal(cappedResult.pagination.total, expected.totalIssueCount);
+        assert.equal(cappedResult.pagination.total, cappedResult.summary.retainedIssueCount);
+        assert.equal(cappedResult.pagination.totalIssueCount, expected.totalIssueCount);
+        assert.equal(cappedResult.summary.issueCount, expected.totalIssueCount);
 
         // 6. Too many pending refreshes fall back to a rebuild request.
         const overflow = new BmpRouteAssuranceService({ enabled: false, maxPendingGroupRefreshes: 1 });

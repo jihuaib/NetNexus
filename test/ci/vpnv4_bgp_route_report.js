@@ -11,7 +11,7 @@ const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 
 const AFI = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
 const SAFI = BgpConst.BGP_SAFI_TYPE.SAFI_VPN;

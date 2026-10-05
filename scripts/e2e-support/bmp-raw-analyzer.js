@@ -1,8 +1,8 @@
 const fs = require('fs');
 const BmpConst = require('../../electron/const/bmpConst');
 const BgpConst = require('../../electron/const/bgpConst');
-const { parsePeerHeader, parseBmpTlvs } = require('../../electron/utils/bmpUtils');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parsePeerHeader, parseBmpTlvs } = require('../../electron/utils/bmp/bmpUtils');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 
 const LEGACY_ROUTE_TLV = Object.freeze({
     VRF_TABLE_NAME: 3,

@@ -9,7 +9,7 @@ const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 
 const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpSession.js'));
 const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpWorker.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
+const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'bgpPacketParser.js'));
 
 const ROUTE_COUNT = 5000;
 const IPV4_UNICAST_ROUTES_PER_FULL_PACKET = 809;

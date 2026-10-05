@@ -8,7 +8,10 @@ const {
     encodeExtendedCommunities,
     getExtendedCommunityValueRange
 } = require('../../shared/bgpExtendedCommunities');
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../electron/utils/bgpAttributeRules');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
 const { canonicalizeAttr } = require('../../electron/worker/bgp/bgpPathAttrStore');
 const WorkerMessageHandler = require('../../electron/worker/core/workerMessageHandler');
 WorkerMessageHandler.prototype.init = function initForTest() {};
@@ -17,7 +20,7 @@ const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
 const BgpPeer = require('../../electron/worker/bgp/bgpPeer');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const registry = require('../../shared/bgpAttributes.json');
 const type = BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES;
 const hex = value => Buffer.from(encodeExtendedCommunities(value)).toString('hex');
@@ -39,7 +42,11 @@ assert.equal(ext.defaultNode, true);
 assert.equal(ext.default.value, '');
 assert.equal(ext.default.subtype, 'rt');
 assert.equal(ext.resultColumn.key, 'extendedCommunities');
-assert.equal(BgpRouteSqliteStore.SCHEMA_VERSION, 6, 'the additional JSON path attribute needs no schema upgrade');
+assert.equal(
+    BgpRouteSqliteStore.SCHEMA_VERSION,
+    7,
+    'extended communities use the existing path attribute JSON storage'
+);
 
 assert.deepEqual(normalizeExtendedCommunities(''), []);
 assert.deepEqual(

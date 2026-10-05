@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 const BmpConst = require('../../electron/const/bmpConst');
-const Service = require('../../electron/utils/bmpRouteAssuranceService');
+const Service = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 const BmpWorker = loadBmpWorkerClass(__dirname, module);
 const tick = () => new Promise(resolve => setImmediate(resolve));

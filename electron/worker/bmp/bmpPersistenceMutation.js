@@ -6,7 +6,7 @@ const {
     createScopeKey,
     createRouteKey,
     formatRouteLookupKey
-} = require('../../utils/bmpPersistentRouteKey');
+} = require('../../utils/bmp/bmpPersistentRouteKey');
 
 // Per-owner cache of the immutable part of a scope descriptor (key, identity,
 // peer columns); only epoch/state/reason vary per mutation.

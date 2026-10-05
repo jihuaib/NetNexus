@@ -2,9 +2,9 @@ const assert = require('node:assert/strict');
 const http = require('node:http');
 const ExternalApiServer = require('../../electron/app/externalApiServer');
 const createBmpApiRoutes = require('../../electron/app/bmpApiRoutes');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
-const { parseBgpLsNlri } = require('../../electron/utils/bgpAddressFamily/bgpLs');
-const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../electron/utils/bmpPersistentRouteKey');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
+const { parseBgpLsNlri } = require('../../electron/utils/bgp/addressFamily/bgpLs');
+const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 const { successResponse } = require('../../electron/utils/responseUtils');
 
 function u16(value) {

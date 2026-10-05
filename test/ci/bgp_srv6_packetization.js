@@ -7,7 +7,7 @@ const BgpPeer = require(path.join(__dirname, '..', '..', 'electron', 'worker', '
 const BgpInstance = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpInstance.js'));
 const BgpRoute = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpRoute.js'));
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpPacketParser.js'));
+const { parseBgpPacket } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'bgpPacketParser.js'));
 const WorkerMessageHandler = require(
     path.join(__dirname, '..', '..', 'electron', 'worker', 'core', 'workerMessageHandler.js')
 );
@@ -16,7 +16,7 @@ WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 
 const BgpWorker = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpWorker.js'));
 const BgpSession = require(path.join(__dirname, '..', '..', 'electron', 'worker', 'bgp', 'bgpSession.js'));
-const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgpUtils.js'));
+const { getAfiAndSafi } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'bgpUtils.js'));
 
 const INCREMENTAL_SRV6_ROUTE_COUNT = 128;
 const FIXED_SRV6_ROUTE_COUNT = 500;

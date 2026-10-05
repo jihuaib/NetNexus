@@ -3,8 +3,8 @@ const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');
 
 const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
-const RouteUpdateAggregator = require('../../electron/utils/routeUpdateAggregator');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
+const RouteUpdateAggregator = require('../../electron/utils/bmp/bmpRouteUpdateAggregator');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');

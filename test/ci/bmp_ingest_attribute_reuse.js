@@ -4,7 +4,7 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BmpConst = require('../../electron/const/bmpConst');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const { buildRouteUpsertMutation } = require('../../electron/worker/bmp/bmpPersistenceMutation');
 const { builders } = require('../../scripts/mockBmpClient');
 

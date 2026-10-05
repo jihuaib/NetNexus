@@ -1,0 +1,105 @@
+{
+  "method": "synthetic SQLite store cleanup; all stale; same seed copied for detailed and compact paths; includes full object reclamation",
+  "routeCount": 1000000,
+  "rounds": 3,
+  "batchRouteLimit": 20000,
+  "gcLimit": 50000,
+  "system": {
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpu": "Apple M4 Pro",
+    "versions": {
+      "node": "16.17.1",
+      "v8": "10.8.168.25-electron.0",
+      "uv": "1.43.0",
+      "zlib": "1.2.12.1-motley",
+      "brotli": "1.0.9",
+      "ares": "1.18.1",
+      "modules": "110",
+      "nghttp2": "1.47.0",
+      "napi": "8",
+      "llhttp": "6.0.9",
+      "openssl": "1.1.1",
+      "cldr": "41.0",
+      "icu": "71.1",
+      "tz": "2022e",
+      "unicode": "14.0",
+      "electron": "22.3.27"
+    }
+  },
+  "baselineLabel": "bmp-review-before-full-gc-20261005",
+  "candidateLabel": "bmp-review-after-full-gc-20261005",
+  "baselineFingerprints": {
+    "scripts/benchmarks/bmp_stale_purge_benchmark.js": "1fe0d984863b75504e89a3874a4e1ec84e4f94b982e8bcb88465217fe3ec99bb",
+    "scripts/benchmarks/bmp_stale_purge_full_gc.js": "c38990dac02ac5a61bc46938e045a3601a6c809c976013e74b47fe9ef3c20c8c",
+    "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4"
+  },
+  "candidateFingerprints": {
+    "scripts/benchmarks/bmp_stale_purge_benchmark.js": "1fe0d984863b75504e89a3874a4e1ec84e4f94b982e8bcb88465217fe3ec99bb",
+    "scripts/benchmarks/bmp_stale_purge_full_gc.js": "c38990dac02ac5a61bc46938e045a3601a6c809c976013e74b47fe9ef3c20c8c",
+    "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9"
+  },
+  "rows": [
+    {
+      "kind": "peer",
+      "path": "detailed",
+      "beforeMedianMs": 45495.220332980156,
+      "afterMedianMs": 45433.81650006771,
+      "durationChangePercent": -0.13496765696050517,
+      "beforeRangeMs": [
+        45218.776291012764,
+        45894.23812496662
+      ],
+      "afterRangeMs": [
+        45282.79929089546,
+        45901.535875082016
+      ]
+    },
+    {
+      "kind": "peer",
+      "path": "compact",
+      "beforeMedianMs": 6369.53149998188,
+      "afterMedianMs": 6375.678125023842,
+      "durationChangePercent": 0.09650042616131671,
+      "beforeRangeMs": [
+        6339.599792003632,
+        6388.744542002678
+      ],
+      "afterRangeMs": [
+        6367.993207931519,
+        6405.361457943916
+      ]
+    },
+    {
+      "kind": "loc-rib",
+      "path": "detailed",
+      "beforeMedianMs": 45276.37950003147,
+      "afterMedianMs": 45661.56475007534,
+      "durationChangePercent": 0.850742162463769,
+      "beforeRangeMs": [
+        45252.358500003815,
+        45323.75291609764
+      ],
+      "afterRangeMs": [
+        45359.75450003147,
+        47097.11600005627
+      ]
+    },
+    {
+      "kind": "loc-rib",
+      "path": "compact",
+      "beforeMedianMs": 6401.598250031471,
+      "afterMedianMs": 6411.073083996773,
+      "durationChangePercent": 0.14800731934803135,
+      "beforeRangeMs": [
+        6395.801625013351,
+        6435.5790420770645
+      ],
+      "afterRangeMs": [
+        6384.615167021751,
+        6435.136083960533
+      ]
+    }
+  ],
+  "note": "Each revision ran three rounds; detailed and compact paths alternate order. Both use the identical full-GC adapter and assert no stale routes, queued GC candidates, orphan objects or FK errors. Not an end-to-end TCP/UI benchmark."
+}

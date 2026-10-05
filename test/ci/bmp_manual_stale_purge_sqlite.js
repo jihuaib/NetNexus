@@ -9,10 +9,10 @@ const Peer = require('../../electron/worker/bmp/bmpBgpSession');
 const Instance = require('../../electron/worker/bmp/bmpBgpInstance');
 const Route = require('../../electron/worker/bmp/bmpBgpRoute');
 const Persistence = require('../../electron/worker/bmp/bmpPersistenceClient');
-const Assurance = require('../../electron/utils/bmpRouteAssuranceService');
-const Aggregator = require('../../electron/utils/routeUpdateAggregator');
+const Assurance = require('../../electron/utils/bmp/bmpRouteAssuranceService');
+const Aggregator = require('../../electron/utils/bmp/bmpRouteUpdateAggregator');
 const BmpConst = require('../../electron/const/bmpConst');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
 const { getClientDatabasePath, getClientWorkerIndex } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 const {
     buildConnectionMutation,
@@ -272,6 +272,20 @@ async function main() {
             physical(getClientDatabasePath(dbPath, b.sourceId)),
             beforeB,
             'another writer/client must remain physically unchanged'
+        );
+        const afterPurgeA = physical(getClientDatabasePath(dbPath, a.sourceId));
+        assert.equal(afterPurgeA.routes.length, 8);
+        assert.ok(
+            afterPurgeA.bmp_route_identities.length > 5,
+            'manual route batches leave the excess GC backlog for bounded maintenance'
+        );
+        while ((await persistence.sweep({ sourceId: a.sourceId, auxiliaryLimit: 2000 })).hasMore) {
+            /* reclaim the remaining durable candidates without extending manual purge transactions */
+        }
+        assert.deepEqual(
+            physical(getClientDatabasePath(dbPath, b.sourceId)),
+            beforeB,
+            'client-scoped GC maintenance must preserve the other writer/client database'
         );
         const afterA = physical(getClientDatabasePath(dbPath, a.sourceId));
         assert.equal(afterA.routes.length, 8);

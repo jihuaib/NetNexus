@@ -2,7 +2,7 @@ const BgpPeer = require('./bgpPeer');
 const BgpRoute = require('./bgpRoute');
 const BgpRouteSqliteStore = require('./bgpRouteSqliteStore');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 
 const ROUTE_ATTR_FIELDS = [
     'nextHop',
@@ -17,6 +17,7 @@ const ROUTE_ATTR_FIELDS = [
     'srv6Sid',
     'srv6EndpointBehavior',
     'srv6SidStructure',
+    'srv6Services',
     'attributePolicy',
     'configuredAttributes',
     'pathAttributes',
@@ -36,7 +37,17 @@ const ROUTE_NLRI_FIELDS = [
     'pathId',
     'leafRouteKey',
     'nlriEncoding',
-    'mpNextHop'
+    'mpNextHop',
+    'esi',
+    'ethernetTagId',
+    'macAddress',
+    'ipAddress',
+    'gatewayIp',
+    'encapsulationType',
+    'esImportRt',
+    'label2',
+    'vni',
+    'vni2'
 ];
 
 class BgpInstance {

@@ -1,7 +1,7 @@
 const assert = require('assert');
-const { parseBgpPacket, getBgpPacketSummary } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket, getBgpPacketSummary } = require('../../electron/utils/bgp/bgpPacketParser');
 const BgpConst = require('../../electron/const/bgpConst');
-const { getAddrFamilyType, getAfiAndSafi } = require('../../electron/utils/bgpUtils');
+const { getAddrFamilyType, getAfiAndSafi } = require('../../electron/utils/bgp/bgpUtils');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 
 function u16(value) {

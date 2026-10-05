@@ -1,5 +1,5 @@
-const { getAddrFamilyType } = require('../../utils/bgpUtils');
-const { toSerializableTlvs } = require('../../utils/bmpUtils');
+const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
+const { toSerializableTlvs } = require('../../utils/bmp/bmpUtils');
 const BgpConst = require('../../const/bgpConst');
 
 class BmpBgpInstance {

@@ -5,7 +5,10 @@ const path = require('path');
 
 process.env.NODE_ENV = 'test';
 
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../electron/utils/bgpAttributeRules');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
 const WorkerMessageHandler = require('../../electron/worker/core/workerMessageHandler');
 WorkerMessageHandler.prototype.init = function initForUnitTest() {};
 const BgpWorker = require('../../electron/worker/bgp/bgpWorker');
@@ -13,10 +16,10 @@ const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
 const BgpPeer = require('../../electron/worker/bgp/bgpPeer');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
-const { getAfiAndSafi } = require('../../electron/utils/bgpUtils');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { getAfiAndSafi } = require('../../electron/utils/bgp/bgpUtils');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const attributeRegistry = require('../../shared/bgpAttributes.json');
-const { ATTRIBUTE_DEFAULTS } = require('../../electron/utils/bgpAttributeRegistry');
+const { ATTRIBUTE_DEFAULTS } = require('../../electron/utils/bgp/bgpAttributeRegistry');
 
 const coreRules = () =>
     attributeRegistry.attributes

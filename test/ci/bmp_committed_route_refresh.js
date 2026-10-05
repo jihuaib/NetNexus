@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const BmpConst = require('../../electron/const/bmpConst');
-const { getAddrFamilyType } = require('../../electron/utils/bgpUtils');
-const RouteUpdateAggregator = require('../../electron/utils/routeUpdateAggregator');
+const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
+const RouteUpdateAggregator = require('../../electron/utils/bmp/bmpRouteUpdateAggregator');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const { BMP_PERSISTENCE_OP } = require('../../electron/worker/bmp/bmpPersistenceConst');
 const { loadBmpWorkerClass } = require('./helpers/bmpWorkerLoader');

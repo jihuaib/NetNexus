@@ -3,7 +3,8 @@ const { setupFeaturePagesE2e, verifyPage } = require('../../scripts/e2e-support'
 const attributeRegistry = require('../../shared/bgpAttributes.json');
 
 const pageCases = [
-    { route: '/#/bgp/route-ipv4', title: 'IPv4-UNC路由配置', testPrefix: 'bgp-ipv4' },
+    { route: '/#/bgp/route-ipv4', title: 'IPv4-UNC', testPrefix: 'bgp-ipv4' },
+    { route: '/#/bgp/route-ipv4-label', title: 'IPv4 Label', testPrefix: 'bgp-ipv4-label' },
     { route: '/#/bgp/route-ipv6', title: 'IPv6-UNC', testPrefix: 'bgp-ipv6' },
     { route: '/#/bgp/route-mvpn', title: 'IPv4-MVPN', testPrefix: 'bgp-mvpn' },
     { route: '/#/bgp/route-ipv4-qp', title: 'IPv4-QP', testPrefix: 'bgp-ipv4-qp' },
@@ -17,6 +18,8 @@ const ipv4RoutePageApiPatch = `
                 loadIpv4UNCRouteConfig: () => window.__featureE2eCall('bgp.loadIpv4UNCRouteConfig'),
                 saveIpv4UNCRouteConfig: config =>
                     window.__featureE2eCall('bgp.saveIpv4UNCRouteConfig', config),
+                loadIpv4LabelRouteConfig: () => window.__featureE2eCall('bgp.loadIpv4LabelRouteConfig'),
+                saveIpv4LabelRouteConfig: config => window.__featureE2eCall('bgp.saveIpv4LabelRouteConfig', config),
                 generateIpv4Routes: config => {
                     window.__ipv4GeneratedPayload = JSON.parse(JSON.stringify(config));
                     return window.__featureE2eCall('bgp.generateRoutes', config);
@@ -38,40 +41,54 @@ const ipv4RoutePageApiPatch = `
     })();
 `;
 
-async function openIpv4RoutePage(page) {
-    await page.goto('/#/bgp/route-ipv4');
-    await expect(page.getByTestId('bgp-generate-ipv4-routes-button')).toBeEnabled();
+function ipv4TestPrefix(page) {
+    return page.url().includes('/route-ipv4-label') ? 'bgp-ipv4-label' : 'bgp-ipv4';
+}
+
+function ipv4GenerateButton(page) {
+    return page.getByTestId(
+        ipv4TestPrefix(page) === 'bgp-ipv4'
+            ? 'bgp-generate-ipv4-routes-button'
+            : 'bgp-ipv4-label-generate-routes-button'
+    );
+}
+
+async function openIpv4RoutePage(page, label = false) {
+    await page.goto(label ? '/#/bgp/route-ipv4-label' : '/#/bgp/route-ipv4');
+    await expect(ipv4GenerateButton(page)).toBeEnabled();
 }
 
 async function addIpv4Attribute(page, label, forceAdd = false) {
-    await expect(page.getByTestId('bgp-generate-ipv4-routes-button')).toBeEnabled();
+    await expect(ipv4GenerateButton(page)).toBeEnabled();
     const type = attributeRegistry.attributes.find(entry => entry.label === label).type;
-    const existing = page.getByTestId(`bgp-ipv4-tree-attribute-${type}`);
+    const existing = page.getByTestId(`${ipv4TestPrefix(page)}-tree-attribute-${type}`);
     if (!forceAdd && (await existing.count())) {
         await existing.last().click();
         return;
     }
     const section = attributeRegistry.attributes.find(entry => entry.type === type).section || 'attributes';
-    const groupId = await page.getByTestId('bgp-ipv4-route-workspace').getAttribute('data-active-group-id');
-    await page.getByTestId(`bgp-ipv4-tree-${section}-${groupId}`).click({ button: 'right' });
-    const menu = page.getByTestId(`bgp-ipv4-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`);
+    const groupId = await page
+        .getByTestId(`${ipv4TestPrefix(page)}-route-workspace`)
+        .getAttribute('data-active-group-id');
+    await page.getByTestId(`${ipv4TestPrefix(page)}-tree-${section}-${groupId}`).click({ button: 'right' });
+    const menu = page.getByTestId(`${ipv4TestPrefix(page)}-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`);
     await expect(menu).toBeVisible();
-    await page.getByTestId('bgp-ipv4-add-attribute-button').click();
-    await page.getByTestId(`bgp-ipv4-add-attribute-${type}`).click();
+    await page.getByTestId(`${ipv4TestPrefix(page)}-add-attribute-button`).click();
+    await page.getByTestId(`${ipv4TestPrefix(page)}-add-attribute-${type}`).click();
     await expect(menu).toHaveCount(0);
 }
 
 async function removeIpv4Attribute(page, target) {
     await target.click({ button: 'right' });
     const section = await target.getAttribute('data-rule-section');
-    const menu = page.getByTestId(`bgp-ipv4-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`);
+    const menu = page.getByTestId(`${ipv4TestPrefix(page)}-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`);
     await expect(menu).toBeVisible();
-    await page.getByTestId('bgp-ipv4-remove-attribute-button').click();
+    await page.getByTestId(`${ipv4TestPrefix(page)}-remove-attribute-button`).click();
     await expect(menu).toHaveCount(0);
 }
 
 async function setIpv4AttributeMode(page, label) {
-    await page.getByTestId('bgp-ipv4-attribute-mode-select').click();
+    await page.getByTestId(`${ipv4TestPrefix(page)}-attribute-mode-select`).click();
     await page.getByRole('option', { name: label, exact: true }).click();
 }
 
@@ -83,20 +100,22 @@ async function dismissNotifications(page) {
 
 async function generateIpv4Group(page) {
     await dismissNotifications(page);
-    await page.getByTestId('bgp-generate-ipv4-routes-button').click();
+    await ipv4GenerateButton(page).click();
 }
 
 async function openIpv4GroupMenu(page, target) {
     if (!target) {
-        const groupId = await page.getByTestId('bgp-ipv4-route-workspace').getAttribute('data-active-group-id');
-        target = page.getByTestId(`bgp-ipv4-tree-group-${groupId}`);
+        const groupId = await page
+            .getByTestId(`${ipv4TestPrefix(page)}-route-workspace`)
+            .getAttribute('data-active-group-id');
+        target = page.getByTestId(`${ipv4TestPrefix(page)}-tree-group-${groupId}`);
     }
     await target.click({ button: 'right' });
-    await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toBeVisible();
+    await expect(page.getByTestId(`${ipv4TestPrefix(page)}-group-context-menu`)).toBeVisible();
 }
 
 async function expectGeneratedCount(page, count) {
-    const generateButton = page.getByTestId('bgp-generate-ipv4-routes-button');
+    const generateButton = ipv4GenerateButton(page);
     await expect(generateButton).toBeEnabled();
     const selected = page.locator('[role="treeitem"][aria-selected="true"] .route-tree-title');
     const previous = await selected.evaluate(element => {
@@ -108,9 +127,13 @@ async function expectGeneratedCount(page, count) {
     });
     if (count === 0) await expect(generateButton).toHaveText('生成本组路由');
     await openIpv4GroupMenu(page);
-    const menu = page.getByTestId('bgp-ipv4-group-context-menu');
+    const menu = page.getByTestId(`${ipv4TestPrefix(page)}-group-context-menu`);
     if (count > 0) await expect(menu.locator('.nn-context-menu-meta')).toHaveText(`已生成 ${count} 条`);
-    else await expect(page.getByTestId('bgp-ipv4-withdraw-group-button')).toHaveAttribute('aria-disabled', 'true');
+    else
+        await expect(page.getByTestId(`${ipv4TestPrefix(page)}-withdraw-group-button`)).toHaveAttribute(
+            'aria-disabled',
+            'true'
+        );
     await page.keyboard.press('Escape');
     await expect(menu).toHaveCount(0);
     // Opening the group menu should not leave a different editor selected.
@@ -119,8 +142,8 @@ async function expectGeneratedCount(page, count) {
 
 async function ipv4GroupAction(page, action, target) {
     await openIpv4GroupMenu(page, target);
-    await page.getByTestId(`bgp-ipv4-${action}-group-button`).click();
-    await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toHaveCount(0);
+    await page.getByTestId(`${ipv4TestPrefix(page)}-${action}-group-button`).click();
+    await expect(page.getByTestId(`${ipv4TestPrefix(page)}-group-context-menu`)).toHaveCount(0);
 }
 
 test.describe('BGP route pages', () => {
@@ -320,75 +343,146 @@ test.describe('BGP route pages', () => {
         await expect(routeTable).toContainText(existingPrefix);
     });
 
-    test('restores IPv4 workspace groups and the active Label configuration after reload', async ({ page }) => {
+    test('keeps IPv4 UNC and Label workspaces independent across tabs and reload', async ({ page }) => {
         await openIpv4RoutePage(page);
-        const groups = page.locator('.route-group-item');
-        const nameInput = page.getByTestId('bgp-ipv4-route-group-name');
-        const prefixInput = page.getByTestId('bgp-ipv4-route-prefix-input');
-        const countInput = page.getByTestId('bgp-ipv4-route-count-input');
-        const addressFamilySelect = page.getByTestId('route-field-addressFamily');
-
-        await expect(groups).toHaveCount(1);
-        await nameInput.fill('IPv4普通路由');
-        await prefixInput.fill('10.30.0.0');
-        await countInput.fill('4');
-        await page.getByTestId('bgp-ipv4-add-group-button').click();
-        await nameInput.fill('IPv4标签路由');
-        await prefixInput.fill('198.51.100.0');
-        await countInput.fill('8');
-        await addressFamilySelect.click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-        await page.getByTestId('bgp-ipv4-tree-attribute-label').click();
-        await page.getByTestId('bgp-ipv4-attribute-mode-select').click();
-        await page.getByRole('option', { name: '递增', exact: true }).click();
-        await page.getByTestId('bgp-ipv4-attribute-start-input').fill('20000');
-        await page.getByTestId('bgp-ipv4-attribute-step-input').fill('5');
-        await expect(page.getByTestId('bgp-ipv4-attribute-preview')).toContainText('20005');
-        await addIpv4Attribute(page, 'ADD-PATH');
-        await expect(page.getByTestId('bgp-ipv4-attribute-enabled-switch')).toHaveCount(0);
-        await page.getByTestId('bgp-ipv4-attribute-count-input').fill('4');
-        await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('8 个前缀 × 4 条路径 = 32 条路由');
-
+        await page.getByTestId('bgp-ipv4-route-group-name').fill('IPv4普通路由');
+        await page.getByTestId('bgp-ipv4-route-prefix-input').fill('10.30.0.0');
+        await page.getByTestId('bgp-ipv4-route-count-input').fill('4');
         await page.getByTestId('bgp-ipv4-save-workspace-button').click();
-        await expect
-            .poll(() => harness.controller.state.bgp.configs.get('Ipv4UNCRouteConfig')?.routeWorkspace?.groups.length)
-            .toBe(2);
-        await expect
-            .poll(
-                () =>
-                    harness.controller.state.bgp.configs
-                        .get('Ipv4UNCRouteConfig')
-                        ?.routeWorkspace?.groups.find(group => group.name === 'IPv4标签路由')
-                        ?.config.nlriRules.find(rule => rule.type === 'addPath')?.count
-            )
-            .toBe('4');
-        const savedWorkspace = harness.controller.state.bgp.configs.get('Ipv4UNCRouteConfig').routeWorkspace;
-        expect(savedWorkspace.version).toBe(6);
-        expect(savedWorkspace.groups.find(group => group.id === savedWorkspace.activeGroupId)?.name).toBe(
-            'IPv4标签路由'
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        const uncId = await page.getByTestId('bgp-ipv4-route-workspace').getAttribute('data-active-group-id');
+
+        await page.getByRole('tab', { name: 'IPv4 Label路由', exact: true }).click();
+        await expect(ipv4GenerateButton(page)).toBeEnabled();
+        await expect(page.getByTestId('route-field-addressFamily')).toHaveCount(0);
+        await expect(page.locator('.route-display-switch')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-route-group-name').fill('IPv4标签路由');
+        await page.getByTestId('bgp-ipv4-label-route-prefix-input').fill('198.51.100.0');
+        await page.getByTestId('bgp-ipv4-label-route-count-input').fill('8');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
+        await setIpv4AttributeMode(page, '递增');
+        await page.getByTestId('bgp-ipv4-label-attribute-start-input').fill('20000');
+        await page.getByTestId('bgp-ipv4-label-attribute-step-input').fill('5');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-preview')).toContainText('20005');
+        await addIpv4Attribute(page, 'ADD-PATH');
+        await page.getByTestId('bgp-ipv4-label-attribute-count-input').fill('4');
+        await expect(page.getByTestId('bgp-ipv4-label-route-range-preview')).toContainText(
+            '8 个前缀 × 4 条路径 = 32 条路由'
         );
+        await page.getByTestId('bgp-ipv4-label-save-workspace-button').click();
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        const labelId = await page.getByTestId('bgp-ipv4-label-route-workspace').getAttribute('data-active-group-id');
+        expect(labelId).not.toBe(uncId);
+        const savedUnc = harness.controller.state.bgp.configs.get('Ipv4UNCRouteConfig').routeWorkspace;
+        const savedLabel = harness.controller.state.bgp.configs.get('Ipv4LabelRouteConfig').routeWorkspace;
+        expect(savedUnc.groups.map(group => group.config.addressFamily)).toEqual([1]);
+        expect(savedLabel.groups.map(group => group.config.addressFamily)).toEqual([12]);
 
+        await page.getByRole('tab', { name: 'IPv4-UNC路由', exact: true }).click();
+        await expect(page.getByTestId('bgp-ipv4-route-group-name')).toHaveValue('IPv4普通路由');
+        await expect(page.getByTestId('bgp-ipv4-route-prefix-input')).toHaveValue('10.30.0.0');
+        await expect(page.getByTestId('bgp-ipv4-route-count-input')).toHaveValue('4');
         await page.reload();
-        await expect(groups).toHaveCount(2);
-        await expect(nameInput).toHaveValue('IPv4标签路由');
-        await expect(prefixInput).toHaveValue('198.51.100.0');
-        await expect(countInput).toHaveValue('8');
-        await expect(addressFamilySelect).toContainText('IPv4 Label');
-        await page.getByTestId('bgp-ipv4-tree-attribute-label').click();
-        await expect(page.getByTestId('bgp-ipv4-attribute-start-input')).toHaveValue('20000');
-        await expect(page.getByTestId('bgp-ipv4-attribute-step-input')).toHaveValue('5');
-        await page.getByTestId('bgp-ipv4-tree-attribute-addPath').last().click();
-        await expect(page.getByTestId('bgp-ipv4-attribute-enabled-switch')).toHaveCount(0);
-        await expect(page.getByTestId('bgp-ipv4-attribute-count-input')).toHaveValue('4');
-        await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('32 条路由');
+        await expect(page.getByTestId('bgp-ipv4-route-workspace')).toHaveAttribute('data-active-group-id', uncId);
+        await page.getByRole('tab', { name: 'IPv4 Label路由', exact: true }).click();
+        await page.reload();
+        await expect(page.getByTestId('bgp-ipv4-label-route-workspace')).toHaveAttribute(
+            'data-active-group-id',
+            labelId
+        );
+        await expect(page.locator('.route-group-item')).toHaveCount(1);
+        await expect(page.getByTestId('bgp-ipv4-label-route-group-name')).toHaveValue('IPv4标签路由');
+        await expect(page.getByTestId('bgp-ipv4-label-route-prefix-input')).toHaveValue('198.51.100.0');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-start-input')).toHaveValue('20000');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-step-input')).toHaveValue('5');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-addPath').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-count-input')).toHaveValue('4');
+        await expect(page.getByTestId('bgp-ipv4-label-route-range-preview')).toContainText('32 条路由');
+    });
 
-        await groups.first().click();
-        await expect(nameInput).toHaveValue('IPv4普通路由');
-        await expect(prefixInput).toHaveValue('10.30.0.0');
-        await expect(countInput).toHaveValue('4');
-        await expect(addressFamilySelect).toContainText('IPv4-UNC');
-        await expect(page.locator('.advanced-config-button')).toHaveCount(0);
-        await expect(page.getByTestId('bgp-ipv4-tree-attribute-addPath')).toHaveCount(1);
+    test('migrates each family from a mixed version 6 workspace without overwriting the other family', async ({
+        page
+    }) => {
+        const legacy = {
+            prefix: '198.51.100.0',
+            mask: '24',
+            count: '3',
+            addressFamily: 12,
+            routeWorkspace: {
+                version: 6,
+                activeGroupId: 'legacy-label',
+                groups: [
+                    {
+                        id: 'legacy-unc',
+                        name: '旧普通组',
+                        config: {
+                            prefix: '10.30.0.0',
+                            mask: '24',
+                            count: '4',
+                            ipStep: '2',
+                            attributeRules: [{ id: 'legacy-med', type: 'med', mode: 'fixed', value: '321' }],
+                            nlriRules: []
+                        }
+                    },
+                    {
+                        id: 'legacy-label',
+                        name: '旧标签组',
+                        config: {
+                            prefix: '198.51.100.0',
+                            mask: '24',
+                            count: '3',
+                            addressFamily: 12,
+                            attributeRules: [],
+                            nlriRules: [
+                                {
+                                    id: 'legacy-label-rule',
+                                    type: 'label',
+                                    mode: 'increment',
+                                    start: '20000',
+                                    step: '5'
+                                },
+                                { id: 'legacy-path-rule', type: 'addPath', count: '2' }
+                            ]
+                        }
+                    }
+                ]
+            }
+        };
+        harness.controller.state.bgp.configs.set('Ipv4UNCRouteConfig', legacy);
+        await openIpv4RoutePage(page);
+        await expect(page.locator('.route-group-item')).toHaveCount(1);
+        await expect(page.getByTestId('bgp-ipv4-route-workspace')).toHaveAttribute(
+            'data-active-group-id',
+            'legacy-unc'
+        );
+        await expect(page.getByTestId('bgp-ipv4-route-group-name')).toHaveValue('旧普通组');
+        await page.getByTestId('bgp-ipv4-route-prefix-input').fill('10.40.0.0');
+        await page.getByTestId('bgp-ipv4-save-workspace-button').click();
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        await openIpv4RoutePage(page, true);
+        await expect(page.locator('.route-group-item')).toHaveCount(1);
+        await expect(page.getByTestId('bgp-ipv4-label-route-workspace')).toHaveAttribute(
+            'data-active-group-id',
+            'legacy-label'
+        );
+        await expect(page.getByTestId('bgp-ipv4-label-route-group-name')).toHaveValue('旧标签组');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-start-input')).toHaveValue('20000');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-step-input')).toHaveValue('5');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-addPath').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-count-input')).toHaveValue('2');
+        await page.getByTestId('bgp-ipv4-label-save-workspace-button').click();
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        const label = harness.controller.state.bgp.configs.get('Ipv4LabelRouteConfig').routeWorkspace;
+        expect(label.groups[0].config.nlriRules.map(rule => rule.id)).toEqual([
+            'legacy-label-rule',
+            'legacy-path-rule'
+        ]);
+        await openIpv4RoutePage(page);
+        await page.reload();
+        await expect(page.getByTestId('bgp-ipv4-route-prefix-input')).toHaveValue('10.40.0.0');
+        expect(harness.controller.state.bgp.legacyIpv4RouteConfig).toEqual(legacy);
     });
 
     test('adds and edits tree attributes with random, increment and list rules', async ({ page }) => {
@@ -466,6 +560,7 @@ test.describe('BGP route pages', () => {
     test('reuses route data across tabs and clears cached pages when BGP stops', async ({ page }) => {
         const ipv4Prefix = '203.0.113.77/32';
         const ipv6Prefix = '2001:db8::77/128';
+        const labelPrefix = '198.51.100.77/32';
         const getRoutesCallCount = () =>
             harness.controller.timeline.filter(item => item.message === 'renderer API call: bgp.getRoutes').length;
 
@@ -494,23 +589,32 @@ test.describe('BGP route pages', () => {
             }
         ]);
 
+        harness.controller.state.bgp.routes.set(12, [
+            { ip: '198.51.100.77', mask: 32, pathId: 0, label: 100, addressFamily: 12 }
+        ]);
+
         await openIpv4RoutePage(page);
         const routeTabs = page.locator('.fixed-tabs');
         const ipv4Table = page.getByTestId('bgp-ipv4-route-table');
         const ipv6Table = page.getByTestId('bgp-ipv6-route-table');
+        const labelTable = page.getByTestId('bgp-ipv4-label-route-table');
 
         await expect(ipv4Table).toContainText(ipv4Prefix);
         expect(getRoutesCallCount()).toBe(1);
 
+        await routeTabs.getByRole('tab', { name: 'IPv4 Label路由', exact: true }).click();
+        await expect(labelTable).toContainText(labelPrefix);
+        expect(getRoutesCallCount()).toBe(2);
+
         await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
         await expect(page.getByTestId('bgp-route-ipv6-page')).toBeVisible();
         await expect(ipv6Table).toContainText(ipv6Prefix);
-        expect(getRoutesCallCount()).toBe(2);
+        expect(getRoutesCallCount()).toBe(3);
 
-        await routeTabs.getByRole('tab', { name: 'IPv4路由', exact: true }).click();
+        await routeTabs.getByRole('tab', { name: 'IPv4-UNC路由', exact: true }).click();
         await expect(page.getByTestId('bgp-route-ipv4-page')).toBeVisible();
         await expect(ipv4Table).toContainText(ipv4Prefix);
-        expect(getRoutesCallCount()).toBe(2);
+        expect(getRoutesCallCount()).toBe(3);
 
         await page.evaluate(() => {
             window.__featureE2eEmit?.('bgp:runtimeChanged', {
@@ -520,31 +624,39 @@ test.describe('BGP route pages', () => {
         });
 
         await expect(ipv4Table).not.toContainText(ipv4Prefix);
-        expect(getRoutesCallCount()).toBe(2);
+        expect(getRoutesCallCount()).toBe(3);
+
+        await routeTabs.getByRole('tab', { name: 'IPv4 Label路由', exact: true }).click();
+        await expect(labelTable).not.toContainText(labelPrefix);
+        expect(getRoutesCallCount()).toBe(3);
 
         await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
         await expect(page.getByTestId('bgp-route-ipv6-page')).toBeVisible();
         await expect(ipv6Table).not.toContainText(ipv6Prefix);
-        expect(getRoutesCallCount()).toBe(2);
+        expect(getRoutesCallCount()).toBe(3);
 
         await page.evaluate(() => {
             window.__featureE2eEmit?.('bgp:runtimeChanged', {
                 running: true,
-                addressFamilies: [1, 2]
+                addressFamilies: [1, 2, 12]
             });
         });
 
         await expect(ipv6Table).toContainText(ipv6Prefix);
-        expect(getRoutesCallCount()).toBe(3);
+        expect(getRoutesCallCount()).toBe(4);
 
-        await routeTabs.getByRole('tab', { name: 'IPv4路由', exact: true }).click();
+        await routeTabs.getByRole('tab', { name: 'IPv4-UNC路由', exact: true }).click();
         await expect(page.getByTestId('bgp-route-ipv4-page')).toBeVisible();
         await expect(ipv4Table).toContainText(ipv4Prefix);
-        expect(getRoutesCallCount()).toBe(4);
+        expect(getRoutesCallCount()).toBe(5);
+
+        await routeTabs.getByRole('tab', { name: 'IPv4 Label路由', exact: true }).click();
+        await expect(labelTable).toContainText(labelPrefix);
+        expect(getRoutesCallCount()).toBe(6);
 
         await routeTabs.getByRole('tab', { name: 'IPv6路由', exact: true }).click();
         await expect(ipv6Table).toContainText(ipv6Prefix);
-        expect(getRoutesCallCount()).toBe(4);
+        expect(getRoutesCallCount()).toBe(6);
     });
 
     test('clears the previous runtime before loading routes for a new BGP start', async ({ page }) => {
@@ -705,25 +817,23 @@ test.describe('BGP route pages', () => {
 
     test('edits IPv4 Label under NLRI without horizontal overflow', async ({ page }) => {
         await page.setViewportSize({ width: 2056, height: 1209 });
-        await openIpv4RoutePage(page);
+        await openIpv4RoutePage(page, true);
 
-        const addressFamilySelect = page.getByTestId('route-field-addressFamily');
-        await addressFamilySelect.click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-        await expect(addressFamilySelect).toContainText('IPv4 Label');
+        await expect(page.getByTestId('route-field-addressFamily')).toHaveCount(0);
 
-        await expect(page.getByTestId('bgp-ipv4-tree-attribute-label')).toHaveAttribute('data-rule-section', 'nlri');
-        await page.getByTestId('bgp-ipv4-tree-attribute-label').click();
+        await expect(page.getByTestId('bgp-ipv4-label-tree-attribute-label')).toHaveAttribute(
+            'data-rule-section',
+            'nlri'
+        );
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
         await expect(page.locator('.node-editor-breadcrumb')).toContainText('NLRI / MPLS Label');
-        await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toBeVisible();
-        await page.getByTestId('bgp-ipv4-attribute-value-input').fill('100');
-        await expect(page.getByTestId('bgp-ipv4-attribute-preview')).toContainText('100');
-        const workspace = page.getByTestId('bgp-ipv4-route-workspace');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-value-input')).toBeVisible();
+        await page.getByTestId('bgp-ipv4-label-attribute-value-input').fill('100');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-preview')).toContainText('100');
+        const workspace = page.getByTestId('bgp-ipv4-label-route-workspace');
         expect(await workspace.evaluate(element => element.scrollWidth > element.clientWidth + 1)).toBe(false);
 
-        await page.locator('.route-group-item').click();
-        await addressFamilySelect.click();
-        await page.getByRole('option', { name: 'IPv4-UNC', exact: true }).click();
+        await openIpv4RoutePage(page);
         await expect(page.getByTestId('bgp-ipv4-tree-attribute-label')).toHaveCount(0);
         await generateIpv4Group(page);
         await expect
@@ -732,10 +842,9 @@ test.describe('BGP route pages', () => {
             )
             .toBe(false);
         await expect(page.locator('.workspace-save-state')).toContainText('已保存');
-        await addressFamilySelect.click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-        await page.getByTestId('bgp-ipv4-tree-attribute-label').click();
-        await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('100');
+        await openIpv4RoutePage(page, true);
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-value-input')).toHaveValue('100');
     });
 
     test('classifies ADD-PATH as NLRI and SRv6 as a path attribute', async ({ page }) => {
@@ -846,11 +955,15 @@ test.describe('BGP route pages', () => {
         await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('6 条路由');
 
         await page.locator('.route-group-item').click();
-        const addressFamilySelect = page.getByTestId('route-field-addressFamily');
-        await addressFamilySelect.click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
+        await openIpv4RoutePage(page, true);
+        await page.getByTestId('bgp-ipv4-label-route-count-input').fill('2');
+        await addIpv4Attribute(page, 'ADD-PATH');
+        await page.getByTestId('bgp-ipv4-label-attribute-count-input').fill('3');
         await expect(encodingSelect).toHaveCount(0);
-        await expect(page.getByTestId('bgp-ipv4-tree-attribute-label')).toHaveAttribute('data-rule-section', 'nlri');
+        await expect(page.getByTestId('bgp-ipv4-label-tree-attribute-label')).toHaveAttribute(
+            'data-rule-section',
+            'nlri'
+        );
         await generateIpv4Group(page);
         await expect.poll(() => page.evaluate(() => window.__ipv4GeneratedPayload?.addressFamily)).toBe(12);
         const labelPayload = await page.evaluate(() => window.__ipv4GeneratedPayload);
@@ -861,56 +974,59 @@ test.describe('BGP route pages', () => {
         });
         expect(labelPayload.attributeRules.some(rule => rule.type === 'addPath')).toBe(false);
         await expectGeneratedCount(page, 6);
-        expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(0);
+        expect(harness.controller.state.bgp.routes.get(1)).toHaveLength(6);
         expect(harness.controller.state.bgp.routes.get(12)).toHaveLength(6);
-        await page.getByTestId('bgp-ipv4-tree-attribute-addPath').click();
-        await expect(page.getByTestId('bgp-ipv4-attribute-enabled-switch')).toHaveCount(0);
-        await expect(page.getByTestId('bgp-ipv4-attribute-count-input')).toHaveValue('3');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-addPath').click();
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-enabled-switch')).toHaveCount(0);
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-count-input')).toHaveValue('3');
     });
 
     test('adds ADD-PATH from the Label NLRI menu and generates every path for every labeled prefix', async ({
         page
     }) => {
-        await openIpv4RoutePage(page);
-        await page.getByTestId('bgp-ipv4-route-group-name').fill('标签多路径组');
-        await page.getByTestId('bgp-ipv4-route-prefix-input').fill('10.60.0.0');
-        await page.getByTestId('bgp-ipv4-route-mask-input').fill('24');
-        await page.getByTestId('bgp-ipv4-route-count-input').fill('3');
-        await page.getByTestId('route-field-addressFamily').click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-        await expect(page.getByTestId('bgp-ipv4-nlri-encoding-select')).toHaveCount(0);
-        const addPathNode = page.getByTestId('bgp-ipv4-tree-attribute-addPath');
+        await openIpv4RoutePage(page, true);
+        await page.getByTestId('bgp-ipv4-label-route-group-name').fill('标签多路径组');
+        await page.getByTestId('bgp-ipv4-label-route-prefix-input').fill('10.60.0.0');
+        await page.getByTestId('bgp-ipv4-label-route-mask-input').fill('24');
+        await page.getByTestId('bgp-ipv4-label-route-count-input').fill('3');
+        await expect(page.getByTestId('bgp-ipv4-label-nlri-encoding-select')).toHaveCount(0);
+        const addPathNode = page.getByTestId('bgp-ipv4-label-tree-attribute-addPath');
         await expect(addPathNode).toHaveCount(0);
-        const groupId = await page.getByTestId('bgp-ipv4-route-workspace').getAttribute('data-active-group-id');
-        await page.getByTestId(`bgp-ipv4-tree-nlri-${groupId}`).click({ button: 'right' });
-        const nlriMenu = page.getByTestId('bgp-ipv4-nlri-context-menu');
+        const groupId = await page.getByTestId('bgp-ipv4-label-route-workspace').getAttribute('data-active-group-id');
+        await page.getByTestId(`bgp-ipv4-label-tree-nlri-${groupId}`).click({ button: 'right' });
+        const nlriMenu = page.getByTestId('bgp-ipv4-label-nlri-context-menu');
         await expect(nlriMenu).toBeVisible();
-        await expect(page.getByTestId('bgp-ipv4-group-context-menu')).toHaveCount(0);
-        await page.getByTestId('bgp-ipv4-add-attribute-button').click();
-        await expect(page.getByTestId('bgp-ipv4-add-attribute-addPath')).toBeVisible();
+        await expect(page.getByTestId('bgp-ipv4-label-group-context-menu')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-add-attribute-button').click();
+        await expect(page.getByTestId('bgp-ipv4-label-add-attribute-addPath')).toBeVisible();
         await expect(
-            page.getByTestId('bgp-ipv4-add-attribute-addPath').locator('..').locator('..')
+            page.getByTestId('bgp-ipv4-label-add-attribute-addPath').locator('..').locator('..')
         ).not.toHaveAttribute('aria-disabled', 'true');
-        await expect(page.getByTestId('bgp-ipv4-add-attribute-srv6')).toHaveCount(0);
-        await page.getByTestId('bgp-ipv4-add-attribute-addPath').click();
+        await expect(page.getByTestId('bgp-ipv4-label-add-attribute-srv6')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-add-attribute-addPath').click();
         await expect(nlriMenu).toHaveCount(0);
         await expect(page.locator('.node-editor-breadcrumb')).toContainText('NLRI / ADD-PATH');
-        await page.getByTestId('bgp-ipv4-attribute-count-input').fill('2');
-        await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('3 个前缀 × 2 条路径 = 6 条路由');
-        await expect(page.getByTestId('bgp-ipv4-route-range-preview')).toContainText('10.60.2.0/24');
+        await page.getByTestId('bgp-ipv4-label-attribute-count-input').fill('2');
+        await expect(page.getByTestId('bgp-ipv4-label-route-range-preview')).toContainText(
+            '3 个前缀 × 2 条路径 = 6 条路由'
+        );
+        await expect(page.getByTestId('bgp-ipv4-label-route-range-preview')).toContainText('10.60.2.0/24');
 
         await addIpv4Attribute(page, 'MP Next Hop');
-        await expect(page.getByTestId('bgp-ipv4-attribute-mode-select')).not.toHaveAttribute('aria-disabled', 'true');
-        await expect(page.getByTestId('bgp-ipv4-mp-nlri-inactive-hint')).toHaveCount(0);
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-mode-select')).not.toHaveAttribute(
+            'aria-disabled',
+            'true'
+        );
+        await expect(page.getByTestId('bgp-ipv4-label-mp-nlri-inactive-hint')).toHaveCount(0);
         await setIpv4AttributeMode(page, '固定值');
-        await page.getByTestId('bgp-ipv4-attribute-value-input').fill('192.0.2.55');
-        await page.getByTestId('bgp-ipv4-tree-attribute-label').click();
-        await page.getByTestId('bgp-ipv4-attribute-value-input').fill('100');
-        await expect(page.getByTestId('bgp-ipv4-tree-attribute-srv6')).toHaveCount(0);
-        await page.getByTestId(`bgp-ipv4-tree-attributes-${groupId}`).click({ button: 'right' });
-        await expect(page.getByTestId('bgp-ipv4-attribute-context-menu')).toBeVisible();
-        await page.getByTestId('bgp-ipv4-add-attribute-button').click();
-        await expect(page.getByTestId('bgp-ipv4-add-attribute-srv6')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-attribute-value-input').fill('192.0.2.55');
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-label').click();
+        await page.getByTestId('bgp-ipv4-label-attribute-value-input').fill('100');
+        await expect(page.getByTestId('bgp-ipv4-label-tree-attribute-srv6')).toHaveCount(0);
+        await page.getByTestId(`bgp-ipv4-label-tree-attributes-${groupId}`).click({ button: 'right' });
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-context-menu')).toBeVisible();
+        await page.getByTestId('bgp-ipv4-label-add-attribute-button').click();
+        await expect(page.getByTestId('bgp-ipv4-label-add-attribute-srv6')).toHaveCount(0);
         await page.keyboard.press('Escape');
         await page.keyboard.press('Escape');
         await generateIpv4Group(page);
@@ -1147,25 +1263,27 @@ test.describe('BGP route pages', () => {
         await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('100');
     });
 
-    test('sends exactly the visible tree nodes and keeps deleted nodes absent after reload and family changes', async ({
+    test('sends exactly the visible tree nodes and keeps deleted nodes absent after reload and tab changes', async ({
         page
     }) => {
         await openIpv4RoutePage(page);
         await page.getByTestId('bgp-ipv4-route-count-input').fill('2');
-        const node = type => page.getByTestId(`bgp-ipv4-tree-attribute-${type}`);
+        const node = type => page.getByTestId(`${ipv4TestPrefix(page)}-tree-attribute-${type}`);
         const generateAndCheckPresence = async () => {
             await generateIpv4Group(page);
-            await expect(page.getByTestId('bgp-generate-ipv4-routes-button')).toBeEnabled();
+            await expect(ipv4GenerateButton(page)).toBeEnabled();
             const payload = await page.evaluate(() => window.__ipv4GeneratedPayload);
             const rules = [...payload.attributeRules, ...payload.nlriRules];
             const visibleTypes = await page
-                .getByTestId(/^bgp-ipv4-tree-attribute-/)
-                .evaluateAll(elements =>
-                    elements.map(element => element.dataset.testid.replace('bgp-ipv4-tree-attribute-', ''))
+                .getByTestId(new RegExp(`^${ipv4TestPrefix(page)}-tree-attribute-`))
+                .evaluateAll(
+                    (elements, prefix) =>
+                        elements.map(element => element.dataset.testid.replace(`${prefix}-tree-attribute-`, '')),
+                    ipv4TestPrefix(page)
                 );
             expect(rules.map(rule => rule.type).sort()).toEqual(visibleTypes.sort());
             expect(rules.every(rule => !Object.hasOwn(rule, 'enabled'))).toBe(true);
-            await expect(page.getByTestId('bgp-ipv4-attribute-enabled-switch')).toHaveCount(0);
+            await expect(page.getByTestId(`${ipv4TestPrefix(page)}-attribute-enabled-switch`)).toHaveCount(0);
             return payload;
         };
         await expect(node('addPath')).toHaveCount(0);
@@ -1195,25 +1313,27 @@ test.describe('BGP route pages', () => {
         expect(removedOptional.attributeRules.some(rule => rule.type === 'srv6')).toBe(false);
         await expectGeneratedCount(page, 2);
 
-        await page.locator('.route-group-item').click();
-        await page.getByTestId('route-field-addressFamily').click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        await openIpv4RoutePage(page, true);
         await expect(node('label')).toHaveCount(1);
         await removeIpv4Attribute(page, node('label'));
+        await removeIpv4Attribute(page, node('mpNextHop'));
+        await removeIpv4Attribute(page, node('origin'));
         const labelWithoutLabelNode = await generateAndCheckPresence();
         expect(labelWithoutLabelNode.addressFamily).toBe(12);
         expect(labelWithoutLabelNode.nlriRules).toEqual([]);
         await expect(page.locator('.workspace-save-state')).toContainText('已保存');
         await page.reload();
-        await expect(page.getByTestId('route-field-addressFamily')).toContainText('IPv4 Label');
+        await expect(ipv4GenerateButton(page)).toBeEnabled();
         await expect(node('label')).toHaveCount(0);
         await expect(node('origin')).toHaveCount(0);
         await expect(node('addPath')).toHaveCount(0);
         await expect(node('srv6')).toHaveCount(0);
-        await page.getByTestId('route-field-addressFamily').click();
-        await page.getByRole('option', { name: 'IPv4-UNC', exact: true }).click();
-        await page.getByTestId('route-field-addressFamily').click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
+        await openIpv4RoutePage(page);
+        await expect(node('origin')).toHaveCount(0);
+        await node('med').click();
+        await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('321');
+        await openIpv4RoutePage(page, true);
         await expect(node('label')).toHaveCount(0);
         await expect(node('mpNextHop')).toHaveCount(0);
         await generateAndCheckPresence();
@@ -1305,12 +1425,11 @@ test.describe('BGP route pages', () => {
         await encodingSelect.click();
         await page.getByRole('option', { name: 'MP_REACH_NLRI', exact: true }).click();
         await expect(mpNode).toHaveCount(0);
-        await page.getByTestId('route-field-addressFamily').click();
-        await page.getByRole('option', { name: 'IPv4 Label', exact: true }).click();
-        await expect(mpNode).toHaveCount(0);
+        await openIpv4RoutePage(page, true);
+        await expect(page.getByTestId('bgp-ipv4-label-tree-attribute-mpNextHop')).toHaveCount(1);
         await addIpv4Attribute(page, 'MP Next Hop');
-        await expect(page.getByTestId('bgp-ipv4-attribute-mode-select')).toContainText('自动');
-        await expect(page.getByTestId('bgp-ipv4-attribute-enabled-switch')).toHaveCount(0);
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-mode-select')).toContainText('自动');
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-enabled-switch')).toHaveCount(0);
         await generateIpv4Group(page);
         const automaticMpPayload = await page.evaluate(() => window.__ipv4GeneratedPayload);
         expect(automaticMpPayload.nlriRules.find(rule => rule.type === 'mpNextHop')).toMatchObject({ mode: 'auto' });
@@ -1466,11 +1585,22 @@ test.describe('BGP route pages', () => {
             await openIpv4RoutePage(page);
             await page.locator('.route-group-item').first().click();
             const geometry = async () =>
-                page.evaluate(() => ({
-                    card: document.querySelector('.bgp-route-card').getBoundingClientRect().height,
-                    table: document.querySelector('.bgp-route-list-card').getBoundingClientRect().top,
-                    footer: document.querySelector('.node-editor-footer').getBoundingClientRect().top
-                }));
+                page.evaluate(() => {
+                    const container = document.querySelector('.bgp-route-page');
+                    const card = document.querySelector('.bgp-route-card').getBoundingClientRect();
+                    const table = document.querySelector('.bgp-route-list-card').getBoundingClientRect();
+                    const footer = document.querySelector('.node-editor-footer').getBoundingClientRect();
+                    // Narrow pages scroll when a tree node or select receives focus.
+                    // Compare their content coordinates so scrolling cannot look like a layout shift.
+                    const offset = container.scrollTop - container.getBoundingClientRect().top;
+                    return {
+                        card: card.height,
+                        table: table.top + offset,
+                        footer: footer.top + offset,
+                        tableHeight: table.height,
+                        footerHeight: footer.height
+                    };
+                });
             const baseline = await geometry();
             const expectStable = async () => {
                 const current = await geometry();

@@ -84,6 +84,7 @@ test.describe('BGP MRT export', () => {
 
     for (const profile of [
         { key: 'ipv4', family: 1 },
+        { key: 'ipv4-label', family: 12 },
         { key: 'ipv6', family: 2 }
     ]) {
         test(`${profile.key} exports the entire displayed family while stopped and handles pending, cancellation and errors`, async ({
@@ -141,8 +142,8 @@ test.describe('BGP MRT export', () => {
         page
     }) => {
         statesAvailable = true;
-        await openPage(page, 'ipv4');
-        const firstId = await activeGroupId(page, 'ipv4');
+        await openPage(page, 'ipv4-label');
+        const firstId = await activeGroupId(page, 'ipv4-label');
         generated.set(firstId, {
             groupId: firstId,
             groupName: '已生成标签组',
@@ -150,36 +151,35 @@ test.describe('BGP MRT export', () => {
             routeCount: 7,
             generatedAt: Date.now()
         });
-        await groupMenu(page, 'ipv4', firstId);
-        await page.getByTestId('bgp-ipv4-refresh-group-state-button').click();
-        await groupMenu(page, 'ipv4', firstId);
-        await expect(page.getByTestId('bgp-ipv4-group-context-menu').locator('.nn-context-menu-meta')).toHaveText(
+        await groupMenu(page, 'ipv4-label', firstId);
+        await page.getByTestId('bgp-ipv4-label-refresh-group-state-button').click();
+        await groupMenu(page, 'ipv4-label', firstId);
+        await expect(page.getByTestId('bgp-ipv4-label-group-context-menu').locator('.nn-context-menu-meta')).toHaveText(
             '已生成 7 条'
         );
         await page.keyboard.press('Escape');
-        await expect(page.getByTestId('route-field-addressFamily')).toContainText('IPv4-UNC');
-        await page.getByTestId('bgp-ipv4-route-prefix-input').fill('draft is not regenerated');
-        await page.getByTestId('bgp-ipv4-add-group-button').click();
-        const secondId = await activeGroupId(page, 'ipv4');
-        await groupMenu(page, 'ipv4', secondId);
-        await expect(page.getByTestId('bgp-ipv4-export-group-button')).toHaveAttribute('aria-disabled', 'true');
+        await expect(page.getByTestId('route-field-addressFamily')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-route-prefix-input').fill('draft is not regenerated');
+        await page.getByTestId('bgp-ipv4-label-add-group-button').click();
+        const secondId = await activeGroupId(page, 'ipv4-label');
+        await groupMenu(page, 'ipv4-label', secondId);
+        await expect(page.getByTestId('bgp-ipv4-label-export-group-button')).toHaveAttribute('aria-disabled', 'true');
         await page.keyboard.press('Escape');
         expect(secondId).not.toBe(firstId);
 
         exportResponse = () => ({ status: 'success', data: { filePath: '/tmp/label-group.mrt', routeCount: 7 } });
-        await groupMenu(page, 'ipv4', firstId);
-        await page.getByTestId('bgp-ipv4-export-group-button').click();
+        await groupMenu(page, 'ipv4-label', firstId);
+        await page.getByTestId('bgp-ipv4-label-export-group-button').click();
         await expect.poll(() => exports.length).toBe(1);
         expect(exports[0]).toEqual({ addressFamily: 12, groupId: firstId });
         await expect(page.locator('.nn-toast-success')).toContainText('已导出 7 条路由');
         await dismissToasts(page);
 
-        await page.getByTestId('bgp-ipv4-tree-attribute-med').first().click({ button: 'right' });
-        await expect(page.getByTestId('bgp-ipv4-attribute-context-menu')).toBeVisible();
-        await expect(page.getByTestId('bgp-ipv4-export-group-button')).toHaveCount(0);
+        await page.getByTestId('bgp-ipv4-label-tree-attribute-med').first().click({ button: 'right' });
+        await expect(page.getByTestId('bgp-ipv4-label-attribute-context-menu')).toBeVisible();
+        await expect(page.getByTestId('bgp-ipv4-label-export-group-button')).toHaveCount(0);
         await page.keyboard.press('Escape');
-        await page.getByText('IPv4 Label', { exact: true }).click();
-        await page.getByTestId('bgp-ipv4-export-mrt-button').click();
+        await page.getByTestId('bgp-ipv4-label-export-mrt-button').click();
         await expect.poll(() => exports.length).toBe(2);
         expect(exports[1]).toEqual({ addressFamily: 12 });
         await dismissToasts(page);

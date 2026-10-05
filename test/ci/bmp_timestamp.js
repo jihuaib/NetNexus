@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 
-const { parsePeerHeader, toUnixTimestampMs } = require('../../electron/utils/bmpUtils');
+const { parsePeerHeader, toUnixTimestampMs } = require('../../electron/utils/bmp/bmpUtils');
 
 const seconds = 1700000000;
 const microseconds = 123456;

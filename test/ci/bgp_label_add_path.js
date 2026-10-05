@@ -11,7 +11,7 @@ const BgpSession = require('../../electron/worker/bgp/bgpSession');
 const BgpRoute = require('../../electron/worker/bgp/bgpRoute');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
 const family = BgpConst.BGP_ADDR_FAMILY.IPV4_LABEL_UNICAST;
 const type = BgpConst.BGP_PATH_ATTR;
 

@@ -805,7 +805,15 @@ test.describe('Custom UI component interactions', () => {
         await installLayoutApiFallbacks(page);
         await page.goto('/#/bgp/bgp-peer-config');
 
-        await page.getByRole('tab', { name: 'IPv4-QP邻居', exact: true }).click();
+        const peerTabs = page.locator('.bgp-peer-info-tabs');
+        const qpTab = peerTabs.getByRole('tab', { name: 'IPv4-QP邻居', exact: true, includeHidden: true });
+        await expect(qpTab).toHaveCount(1);
+        if ((await qpTab.getAttribute('aria-hidden')) === 'true') {
+            await peerTabs.getByRole('button', { name: '选择右侧隐藏标签页', exact: true }).click();
+            await page.getByRole('menuitem', { name: 'IPv4-QP邻居', exact: true }).click();
+        } else {
+            await qpTab.click();
+        }
         const qpPanel = page.getByRole('tabpanel', { name: 'IPv4-QP邻居' });
         const qpHeader = qpPanel.getByText('IPv4-QP邻居列表', { exact: true });
         const qpTable = page.getByTestId('bgp-ipv4-qp-peer-table');

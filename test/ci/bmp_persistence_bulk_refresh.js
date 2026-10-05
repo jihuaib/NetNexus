@@ -689,7 +689,8 @@ try {
         store.flushDeferredMetadataRefresh = original;
         assert.equal(store.applyBatch(request).applied, 2);
 
-        // A changed endpoint must not reset in-memory connection progress or dirty.
+        // A changed endpoint must not reset in-memory connection progress or dirty,
+        // and a rejected replay cannot overwrite the latest accepted endpoint.
         const first = announce(current, 0),
             last = announce(current, 1);
         last.connection = { ...last.connection, localPort: 13019 };
@@ -699,7 +700,7 @@ try {
         assert.equal(result.requiresProjectionRebuild, true);
         const conn = store.db.prepare('SELECT local_port,last_sequence FROM bmp_connections').get();
         assert.equal(conn.last_sequence, last.sequence);
-        assert.equal(conn.local_port, 14019);
+        assert.equal(conn.local_port, 13019);
     } finally {
         store.close();
     }

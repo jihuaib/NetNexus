@@ -8,7 +8,7 @@ const {
     DEFAULT_BMP_THREAD_COUNT,
     MAX_BMP_THREAD_COUNT,
     normalizeBmpThreadCount
-} = require('../../electron/utils/bmpThreadConfig');
+} = require('../../electron/utils/bmp/bmpThreadConfig');
 
 const INVALID_THREAD_COUNTS = [
     0,
@@ -82,9 +82,9 @@ function createAppFixture() {
     return { app, store, calls, createdWorkers: () => createdWorkers, closedReaders: () => closedReaders };
 }
 
-function loadRendererValidation() {
+function loadRendererValidation(relativePath) {
     const projectRoot = path.resolve(process.env.NETNEXUS_SOURCE_PROJECT_ROOT || path.join(__dirname, '..', '..'));
-    const sourcePath = path.join(projectRoot, 'src', 'utils', 'validationCommon.js');
+    const sourcePath = path.join(projectRoot, 'src', 'utils', relativePath);
     const result = esbuild.buildSync({
         entryPoints: [sourcePath],
         bundle: true,
@@ -119,7 +119,8 @@ function testNormalizationAndRendererValidation() {
         assert.throws(() => BmpApp.normalizeBmpConfig(config({ threadCount: value })), THREAD_COUNT_ERROR);
     }
 
-    const { FormValidator, createBmpConfigValidationRules } = loadRendererValidation();
+    const { FormValidator } = loadRendererValidation('validationCommon.js');
+    const { createBmpConfigValidationRules } = loadRendererValidation('bmp/validationRules.js');
     const errors = { value: {} };
     const validator = new FormValidator(errors, 0);
     validator.addRules(createBmpConfigValidationRules());

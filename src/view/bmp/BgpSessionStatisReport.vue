@@ -80,15 +80,12 @@
             </nn-col>
         </nn-row>
 
-        <nn-drawer
-            v-model:open="detailsDrawerVisible"
-            :title="detailsDrawerTitle"
-            placement="right"
-            width="520px"
-            @close="closeDetailsDrawer"
-        >
-            <nn-json-viewer v-if="currentDetails" :value="currentDetails" wrap />
-        </nn-drawer>
+        <BmpStatisticsDetailModal
+            :open="detailsModalVisible"
+            :report="currentDetails"
+            :client="monitoredClient"
+            @update:open="handleDetailsOpenChange"
+        />
     </div>
 </template>
 
@@ -99,6 +96,7 @@
     import EventBus from '../../utils/eventBus';
     import { BMP_BGP_RIB_TYPE, BMP_EVENT_PAGE_ID, BMP_SESSION_FLAGS, BMP_STATS_TYPE } from '../../const/bmpConst';
     import { ADDRESS_FAMILY_NAME, getAddrFamilyType } from '../../const/bgpConst';
+    import BmpStatisticsDetailModal from '../../components/BmpStatisticsDetailModal.vue';
 
     defineOptions({
         name: 'BgpSessionStatisReport'
@@ -175,9 +173,9 @@
     const monitoredClient = ref(null);
     const reportMap = ref(new Map());
     const activeRibTypeMap = ref(new Map());
-    const detailsDrawerVisible = ref(false);
-    const detailsDrawerTitle = ref('');
-    const currentDetails = ref(null);
+    const detailsModalVisible = ref(false);
+    const detailsReportKey = ref(null);
+    const currentDetails = computed(() => reportMap.value.get(detailsReportKey.value) || null);
     let clientLoadRequestId = 0;
     let reportLoadRequestId = 0;
     let pageActive = false;
@@ -432,14 +430,16 @@
     };
 
     const viewReportDetails = report => {
-        currentDetails.value = report;
-        detailsDrawerTitle.value = `统计详情: ${report.session.sessionIp} · ${formatRibType(report.ribType)}`;
-        detailsDrawerVisible.value = true;
+        detailsReportKey.value = report.key;
+        detailsModalVisible.value = true;
     };
 
-    const closeDetailsDrawer = () => {
-        detailsDrawerVisible.value = false;
-        currentDetails.value = null;
+    const closeDetailsModal = () => {
+        detailsModalVisible.value = false;
+        detailsReportKey.value = null;
+    };
+    const handleDetailsOpenChange = open => {
+        if (!open) closeDetailsModal();
     };
 
     const updateReportsForClient = (previousClientKey, client) => {
@@ -448,6 +448,7 @@
         for (const [key, report] of Array.from(nextMap.entries())) {
             if (report.clientKey !== previousClientKey) continue;
             const nextKey = getReportKey(nextClientKey, report);
+            if (detailsReportKey.value === key) detailsReportKey.value = nextKey;
             nextMap.delete(key);
             nextMap.set(nextKey, {
                 ...report,
@@ -649,7 +650,7 @@
         monitoredClient.value = null;
         reportMap.value = new Map();
         activeRibTypeMap.value = new Map();
-        closeDetailsDrawer();
+        closeDetailsModal();
         if (!pageActive) return;
         const client = await loadMonitoredClient();
         if (client && pageActive) await loadStatisticsReports();
@@ -670,6 +671,7 @@
     };
 
     const deactivatePage = () => {
+        closeDetailsModal();
         if (!pageActive) return;
         pageActive = false;
         clientLoadRequestId += 1;

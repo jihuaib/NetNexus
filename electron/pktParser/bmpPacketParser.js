@@ -1,13 +1,14 @@
 const BmpConst = require('../const/bmpConst');
 const BgpConst = require('../const/bgpConst');
-const { ipv4BufferToString, ipv6BufferToString, rdBufferToString } = require('../utils/ipUtils');
+const { ipv4BufferToString, ipv6BufferToString } = require('../utils/ipUtils');
+const { rdBufferToString } = require('../utils/bgp/bgpEncoding');
 const {
     getBmpMessageTypeName,
     getBmpPeerTypeName,
     getBmpPeerDownReasonName,
     getBmpTlvName
-} = require('../utils/bmpPacketParser');
-const { getBgpAfiName, getBgpSafiName, getBgpAddPathTypeName } = require('../utils/bgpUtils');
+} = require('../utils/bmp/bmpPacketParser');
+const { getBgpAfiName, getBgpSafiName, getBgpAddPathTypeName } = require('../utils/bgp/bgpUtils');
 const { parseBgpPacket } = require('./bgpPacketParser');
 
 function createTreeNode(name, offset, length, value = '', children = []) {

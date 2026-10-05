@@ -412,7 +412,8 @@
     import { computed, ref, onMounted, onActivated, onDeactivated, onBeforeUnmount, watch } from 'vue';
     import ipaddr from 'ipaddr.js';
     import { notify } from '../../utils/notify';
-    import { FormValidator, createBmpConfigValidationRules } from '../../utils/validationCommon';
+    import { FormValidator } from '../../utils/validationCommon';
+    import { createBmpConfigValidationRules } from '../../utils/bmp/validationRules';
     import {
         DEFAULT_VALUES,
         BMP_EVENT_PAGE_ID,

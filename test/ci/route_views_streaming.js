@@ -5,7 +5,9 @@ const path = require('path');
 const zlib = require('zlib');
 
 const BgpConst = require(path.join(__dirname, '..', '..', 'electron', 'const', 'bgpConst.js'));
-const { iterateMrtRoutes } = require(path.join(__dirname, '..', '..', 'electron', 'utils', 'routeViewsUtils.js'));
+const { iterateMrtRoutes } = require(
+    path.join(__dirname, '..', '..', 'electron', 'utils', 'bgp', 'simulator', 'bgpMrtImport.js')
+);
 
 function makeIpv4TableDumpRecord(index) {
     const data = Buffer.alloc(22);

@@ -36,7 +36,7 @@ Module._load = function load(request, parent, isMain) {
 const BgpApp = require('../../electron/app/bgpApp');
 require('../../electron/preload');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
-const { getMrtExportInfo, exportRouteDatabaseMrt } = require('../../electron/utils/bgpMrtExport');
+const { getMrtExportInfo, exportRouteDatabaseMrt } = require('../../electron/utils/bgp/simulator/bgpMrtExport');
 
 const attr = {
     attributePolicy: 'configured',

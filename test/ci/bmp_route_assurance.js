@@ -4,7 +4,7 @@ const BgpConst = require('../../electron/const/bgpConst');
 const BmpBgpSession = require('../../electron/worker/bmp/bmpBgpSession');
 const BmpBgpInstance = require('../../electron/worker/bmp/bmpBgpInstance');
 const BmpBgpRoute = require('../../electron/worker/bmp/bmpBgpRoute');
-const { buildBmpRouteAssurance } = require('../../electron/utils/bmpRouteAssurance');
+const { buildBmpRouteAssurance } = require('../../electron/utils/bmp/bmpRouteAssurance');
 
 const clientInfo = {
     localIp: '127.0.0.1',

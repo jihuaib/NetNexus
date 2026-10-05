@@ -14,7 +14,7 @@ const {
     buildRouteWithdrawMutation,
     compactRoutePayload
 } = require('../../electron/worker/bmp/bmpPersistenceMutation');
-const { createRouteKey, KEY_SCHEMA_VERSION } = require('../../electron/utils/bmpPersistentRouteKey');
+const { createRouteKey, KEY_SCHEMA_VERSION } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 
 const bmpSession = {
     localIp: '127.0.0.1',

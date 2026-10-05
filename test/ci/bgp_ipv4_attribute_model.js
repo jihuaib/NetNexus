@@ -2,7 +2,10 @@ const assert = require('node:assert/strict');
 const path = require('node:path');
 const Module = require('node:module');
 const esbuild = require('esbuild');
-const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('../../electron/utils/bgpAttributeRules');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
 
 function loadFrontend(file) {
     const sourcePath = path.resolve(__dirname, '../../src/view/bgp', file);

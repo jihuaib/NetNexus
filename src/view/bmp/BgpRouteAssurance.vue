@@ -136,7 +136,7 @@
                     type="info"
                     show-icon
                     message="问题明细已封顶"
-                    :description="`路由量较大，${truncatedCategoryLabels.join('、')} 只保留前 ${formatCount(summary.retainedIssueCount)} 条明细；异常计数和漏斗仍为全量统计。`"
+                    :description="`路由量较大，${truncatedCategoryLabels.join('、')} 的明细已封顶，当前共保留 ${formatCount(summary.retainedIssueCount)} 条可浏览明细；异常计数和漏斗仍为全量统计。`"
                 />
 
                 <div class="funnel-viewport">
@@ -353,6 +353,8 @@
     let toggleRequestId = 0;
     let lastAutoError = '';
     let pageActive = false;
+    let inFlightRequestId = null;
+    let refreshRequested = false;
 
     const normalizeResult = payload => {
         const source = payload && typeof payload === 'object' ? payload : {};
@@ -407,8 +409,9 @@
     const isTransientAnalysisState = message => /正在初始化|正在重新同步/.test(String(message || ''));
 
     const loadAssurance = async ({ page = 1, pageSize = 25, silent = false } = {}) => {
-        if (!analysisEnabled.value) return;
+        if (!pageActive || !analysisEnabled.value) return;
         const currentRequestId = ++requestId;
+        inFlightRequestId = currentRequestId;
         let retryScheduled = false;
         if (!silent) loading.value = true;
         try {
@@ -416,13 +419,13 @@
                 throw new Error('当前 BMP 服务不支持 Route Assurance，请重启应用后重试。');
             }
             const response = await window.bmpApi.getRouteAssurance(buildRequest(page, pageSize));
-            if (currentRequestId !== requestId || !analysisEnabled.value) return;
+            if (!pageActive || currentRequestId !== requestId || !analysisEnabled.value) return;
             assuranceResult.value = normalizeResult(unwrapResponse(response));
             hasLoaded.value = true;
             lastAutoError = '';
             if (assuranceResult.value.summary.refreshPending) scheduleRefresh(1000);
         } catch (error) {
-            if (currentRequestId !== requestId) return;
+            if (!pageActive || currentRequestId !== requestId) return;
             if (analysisEnabled.value && isTransientAnalysisState(error?.message)) {
                 retryScheduled = true;
                 loading.value = true;
@@ -431,7 +434,12 @@
             }
             showQueryError(error?.message, silent);
         } finally {
+            if (inFlightRequestId === currentRequestId) inFlightRequestId = null;
             if (currentRequestId === requestId && !retryScheduled) loading.value = false;
+            if (inFlightRequestId === null && refreshRequested) {
+                refreshRequested = false;
+                scheduleRefresh();
+            }
         }
     };
 
@@ -455,17 +463,27 @@
     };
 
     const clearRefreshTimer = () => {
+        refreshRequested = false;
         if (!refreshTimer) return;
         clearTimeout(refreshTimer);
         refreshTimer = null;
     };
 
     const scheduleRefresh = (delay = 900) => {
-        if (!analysisEnabled.value) return;
-        clearRefreshTimer();
+        if (!pageActive || !analysisEnabled.value || refreshTimer) return;
+        // A fixed window bounds freshness during continuous updates. If its
+        // query is still running, coalesce further updates into one follow-up.
+        if (inFlightRequestId !== null) {
+            refreshRequested = true;
+            return;
+        }
         refreshTimer = setTimeout(() => {
             refreshTimer = null;
-            if (!analysisEnabled.value) return;
+            if (!pageActive || !analysisEnabled.value) return;
+            if (inFlightRequestId !== null) {
+                refreshRequested = true;
+                return;
+            }
             loadAssurance({
                 page: assuranceResult.value.pagination.page || 1,
                 pageSize: assuranceResult.value.pagination.pageSize || 25,
@@ -495,6 +513,7 @@
         clearRefreshTimer();
         unregisterEvents();
         requestId += 1;
+        inFlightRequestId = null;
         loading.value = false;
         hasLoaded.value = false;
         lastAutoError = '';
@@ -565,7 +584,7 @@
         showQuickJumper: true,
         pageSizeOptions: ['25', '50', '100'],
         position: ['bottomCenter'],
-        showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条异常`,
+        showTotal: (total, range) => `第 ${range[0]}-${range[1]} 条，共 ${total} 条异常明细`,
         onChange: (page, pageSize) => loadAssurance({ page, pageSize })
     }));
 
@@ -797,6 +816,7 @@
     };
 
     onActivated(() => {
+        if (pageActive) return;
         pageActive = true;
         if (analysisEnabled.value) {
             registerEvents();
@@ -809,11 +829,17 @@
     });
     onDeactivated(() => {
         pageActive = false;
+        requestId += 1;
+        inFlightRequestId = null;
+        loading.value = false;
         clearRefreshTimer();
         unregisterEvents();
     });
     onBeforeUnmount(() => {
         pageActive = false;
+        requestId += 1;
+        inFlightRequestId = null;
+        loading.value = false;
         clearRefreshTimer();
         unregisterEvents();
         if (analysisEnabled.value) {

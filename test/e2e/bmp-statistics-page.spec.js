@@ -140,7 +140,27 @@ const instanceReport = (client, value = 17) => ({
 
 const success = data => ({ status: 'success', data });
 
-async function installBmpStatisticsMock(page, client) {
+function withReportDetails(report) {
+    const scope = report.session ? 'session' : 'loc-rib';
+    const ownerField = report.session ? 'session' : 'instance';
+    return {
+        ...report,
+        [ownerField]: {
+            ...report[ownerField],
+            diagnosticMarker: `${scope}-statistics-raw-only-${report.ribType ?? 'loc-rib'}`,
+            diagnosticEntries: Array.from({ length: 40 }, (_, index) => ({
+                index,
+                value: `statistics-diagnostic-${index}-` + 'x'.repeat(160)
+            }))
+        },
+        tlvs: [
+            { type: 65000, name: 'Fixture report context', valueText: `${scope}-tlv-marker` },
+            { type: 65001, name: 'Diagnostic extension', valueText: 'statistics-extension-'.repeat(40) }
+        ]
+    };
+}
+
+async function installBmpStatisticsMock(page, client, { details = false } = {}) {
     const calls = [];
     await page.exposeFunction('__bmpE2eCall', async (method, ...args) => {
         calls.push({ method, args });
@@ -148,9 +168,11 @@ async function installBmpStatisticsMock(page, client) {
             case 'getClientList':
                 return success([client]);
             case 'getBgpStatisticsReports':
-                return success(initialSessionReports(client));
+                return success(
+                    initialSessionReports(client).map(report => (details ? withReportDetails(report) : report))
+                );
             case 'getBgpInstanceStatisticsReports':
-                return success([instanceReport(client)]);
+                return success([details ? withReportDetails(instanceReport(client)) : instanceReport(client)]);
             default:
                 return success(null);
         }
@@ -172,6 +194,16 @@ async function emitBmpEvent(page, eventName, data) {
         },
         { name: eventName, payload: data }
     );
+}
+
+async function captureStatisticsDetail(page, scope, panel) {
+    const screenshotDir = process.env.E2E_BMP_STATISTICS_SCREENSHOT_DIR;
+    if (screenshotDir) {
+        await page.screenshot({
+            path: `${screenshotDir}/bmp-statistics-detail-${scope}-${panel}.png`,
+            animations: 'disabled'
+        });
+    }
 }
 
 async function openSessionPanel(page) {
@@ -295,6 +327,52 @@ async function flushRenderer(page) {
                 requestAnimationFrame(() => requestAnimationFrame(resolve));
             })
     );
+}
+
+async function expectStatisticsRawUsesPanelScroll(panel) {
+    const geometry = await panel.evaluate(element => {
+        const jsonContent = element.querySelector('.nn-json-viewer-content');
+        if (!jsonContent) return null;
+        return {
+            panelOverflow: element.scrollHeight - element.clientHeight,
+            jsonOverflow: jsonContent.scrollHeight - jsonContent.clientHeight
+        };
+    });
+    expect(geometry).not.toBeNull();
+    expect(geometry.panelOverflow).toBeGreaterThan(0);
+    expect(geometry.jsonOverflow).toBeLessThanOrEqual(1);
+    const bottom = await panel.evaluate(element => {
+        const viewer = element.querySelector('.nn-json-viewer');
+        element.scrollTop = element.scrollHeight - element.clientHeight;
+        return {
+            remaining: element.scrollHeight - element.clientHeight - element.scrollTop,
+            viewerGap: element.getBoundingClientRect().bottom - viewer.getBoundingClientRect().bottom
+        };
+    });
+    expect(Math.abs(bottom.remaining)).toBeLessThanOrEqual(1);
+    expect(Math.abs(bottom.viewerGap)).toBeLessThanOrEqual(1);
+}
+
+async function expectStatisticsModalFitsViewport(modal, panel) {
+    const geometry = await modal.evaluate(element => {
+        const rect = element.getBoundingClientRect();
+        return {
+            left: rect.left,
+            right: rect.right,
+            viewportWidth: window.innerWidth,
+            pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
+            modalOverflow: element.scrollWidth - element.clientWidth
+        };
+    });
+    expect(geometry.left).toBeGreaterThanOrEqual(-1);
+    expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+    expect(geometry.pageOverflow).toBeLessThanOrEqual(1);
+    expect(geometry.modalOverflow).toBeLessThanOrEqual(1);
+    const rawOverflow = await panel
+        .locator('.nn-json-viewer-content')
+        .evaluate(element => element.scrollWidth - element.clientWidth);
+    expect(rawOverflow).toBeLessThanOrEqual(1);
+    await expect(modal).toBeVisible();
 }
 
 test('loads one Client statistics and switches between unified monitor tabs', async ({ page }) => {
@@ -422,3 +500,163 @@ test('keeps four session RIB stages stable while reports alternate', async ({ pa
     }
     await expect(sessionPage.getByRole('tab', { name: SESSION_TAB_NAME, exact: true })).toHaveCount(1);
 });
+
+for (const scenario of [
+    {
+        view: 'session-statistics',
+        nextView: 'loc-rib-statistics',
+        pageTestId: 'bmp-session-statistics-page',
+        ownerField: 'session',
+        scope: 'session',
+        client: OFFLINE_CLIENT,
+        typeName: RIB_TYPE_DETAILS[RIB_TYPE.POST_ADJ_RIB_OUT].typeName,
+        value: RIB_TYPE_DETAILS[RIB_TYPE.POST_ADJ_RIB_OUT].initialValue,
+        marker: 'session-statistics-raw-only-5'
+    },
+    {
+        view: 'loc-rib-statistics',
+        nextView: 'session-statistics',
+        pageTestId: 'bmp-loc-rib-statistics-page',
+        ownerField: 'instance',
+        scope: 'loc-rib',
+        client: ONLINE_CLIENT,
+        typeName: 'Loc-RIB 路由数',
+        value: 17,
+        marker: 'loc-rib-statistics-raw-only-loc-rib'
+    }
+]) {
+    test(`${scenario.view} uses the shared categorized detail modal without losing report data`, async ({ page }) => {
+        const calls = await installBmpStatisticsMock(page, scenario.client, { details: true });
+        await page.goto(getMonitorUrl(scenario.view));
+        await expectUnifiedMonitor(page, scenario.view);
+        const reportPage = page.getByTestId(scenario.pageTestId);
+        let reportPanel = reportPage;
+        if (scenario.ownerField === 'session') {
+            reportPanel = await openSessionPanel(reportPage);
+            await selectRibType(page, reportPanel, RIB_TYPE_DETAILS[RIB_TYPE.POST_ADJ_RIB_OUT].label);
+        }
+        await expectStatistic(reportPanel, scenario.typeName, scenario.value);
+        const callsBeforeDetails = calls.length;
+        const detailButton = reportPanel.getByRole('button', { name: '详情', exact: true });
+        await detailButton.click();
+
+        const modal = page.getByTestId('bmp-statistics-detail-modal');
+        await expect(modal).toBeVisible();
+        await expect(modal).toHaveClass(/(^|\s)nn-modal(\s|$)/u);
+        await expect(page.locator('.nn-drawer-content:visible')).toHaveCount(0);
+        const height = async () => Math.round((await modal.boundingBox())?.height || 0);
+        const fixedHeight = await height();
+        expect(fixedHeight).toBeGreaterThan(0);
+        const overview = modal.getByTestId('bmp-statistics-detail-overview');
+        await expect(overview).toBeVisible();
+        await expect(overview).toContainText('BMP 连接');
+        await expect(overview).toContainText(scenario.client.isOnline ? '在线' : '已断开');
+        await expect(overview).toContainText('0:0');
+        await expect(overview.locator('.summary-card').filter({ hasText: '统计项目' }).locator('strong')).toHaveText(
+            '1'
+        );
+        await expect(overview.locator('.summary-card').filter({ hasText: 'TLV' }).locator('strong')).toHaveText('2');
+        if (scenario.ownerField === 'session') {
+            await expect(overview).toContainText('192.0.2.2');
+            await expect(overview).toContainText(RIB_TYPE_DETAILS[RIB_TYPE.POST_ADJ_RIB_OUT].label);
+        } else {
+            await expect(overview).toContainText('global');
+        }
+        const advanced = modal.getByTestId('bmp-statistics-detail-advanced');
+        await expect(advanced.locator('.nn-json-viewer-content')).toHaveCount(0);
+        await expect(modal).not.toContainText(scenario.marker);
+        await captureStatisticsDetail(page, scenario.scope, 'overview');
+
+        await modal.getByRole('tab', { name: '统计明细', exact: true }).click();
+        await expect.poll(height).toBe(fixedHeight);
+        const statistics = modal.getByTestId('bmp-statistics-detail-table');
+        await expect(statistics).toBeVisible();
+        await expectStatistic(statistics, scenario.typeName, scenario.value);
+        const latestValue = scenario.value + 100;
+        const nextReport =
+            scenario.ownerField === 'session'
+                ? sessionReport(scenario.client, RIB_TYPE.POST_ADJ_RIB_OUT, latestValue)
+                : instanceReport(scenario.client, latestValue);
+        await emitBmpEvent(page, 'bmp:statisticsReport', withReportDetails(nextReport));
+        await expectStatistic(statistics, scenario.typeName, latestValue);
+        if (scenario.ownerField === 'session') {
+            await emitBmpEvent(
+                page,
+                'bmp:statisticsReport',
+                withReportDetails(sessionReport(scenario.client, RIB_TYPE.PRE_ADJ_RIB_IN, 777))
+            );
+            await flushRenderer(page);
+            await expectStatistic(statistics, scenario.typeName, latestValue);
+            await expectSelectedRibType(reportPanel, RIB_TYPE_DETAILS[RIB_TYPE.POST_ADJ_RIB_OUT].label);
+        }
+        const otherClientReport =
+            scenario.ownerField === 'session'
+                ? sessionReport(OTHER_CLIENT, RIB_TYPE.POST_ADJ_RIB_OUT, 888)
+                : instanceReport(OTHER_CLIENT, 888);
+        await emitBmpEvent(page, 'bmp:statisticsReport', withReportDetails(otherClientReport));
+        await flushRenderer(page);
+        await expectStatistic(statistics, scenario.typeName, latestValue);
+        await modal.getByRole('tab', { name: 'TLV 扩展 (2)', exact: true }).click();
+        await expect.poll(height).toBe(fixedHeight);
+        const tlvs = modal.getByTestId('bmp-statistics-detail-tlvs');
+        await expect(tlvs).toBeVisible();
+        await expect(tlvs).toContainText(`${scenario.scope}-tlv-marker`);
+        await captureStatisticsDetail(page, scenario.scope, 'tlv');
+
+        await modal.getByRole('tab', { name: '原始数据', exact: true }).click();
+        await expect.poll(height).toBe(fixedHeight);
+        await expect(advanced).toBeVisible();
+        const rawJson = advanced.locator('.nn-json-viewer-content');
+        await expect(rawJson).toBeVisible();
+        const rawReport = JSON.parse(await rawJson.textContent());
+        expect(rawReport[scenario.ownerField].diagnosticMarker).toBe(scenario.marker);
+        expect(rawReport.statistics).toHaveLength(1);
+        expect(rawReport.statistics[0].typeName).toBe(scenario.typeName);
+        expect(rawReport.statistics[0].value).toBe(latestValue);
+        expect(rawReport.tlvs).toHaveLength(2);
+        expect(rawReport.tlvs[0].valueText).toBe(`${scenario.scope}-tlv-marker`);
+        if (scenario.ownerField === 'session') expect(rawReport.ribType).toBe(RIB_TYPE.POST_ADJ_RIB_OUT);
+        await captureStatisticsDetail(page, scenario.scope, 'raw');
+        await expectStatisticsRawUsesPanelScroll(advanced);
+        await page.setViewportSize({ width: 480, height: 720 });
+        await flushRenderer(page);
+        await expectStatisticsModalFitsViewport(modal, advanced);
+        await expectStatisticsRawUsesPanelScroll(advanced);
+
+        await modal.getByRole('button', { name: '关闭', exact: true }).click();
+        await expect(modal).toBeHidden();
+        await detailButton.click();
+        await expect(modal).toBeVisible();
+        await expect(modal.getByRole('tab', { name: '统计概览', exact: true })).toHaveAttribute(
+            'aria-selected',
+            'true'
+        );
+        await expect(overview).toBeVisible();
+        await expect(advanced.locator('.nn-json-viewer-content')).toHaveCount(0);
+        await expect(modal).not.toContainText(scenario.marker);
+        await modal.getByRole('tab', { name: '统计明细', exact: true }).click();
+        await expectStatistic(modal.getByTestId('bmp-statistics-detail-table'), scenario.typeName, latestValue);
+        expect(calls).toHaveLength(callsBeforeDetails);
+
+        // The modal mask blocks clicks on the underlying monitor tabs. Change
+        // only the hash query to exercise the real KeepAlive deactivation,
+        // without reloading the application or its mocked connection.
+        await page.evaluate(view => {
+            const query = new URLSearchParams(window.location.hash.split('?')[1]);
+            query.set('view', view);
+            window.location.hash = `/monitor/bmp-client?${query}`;
+        }, scenario.nextView);
+        await expectUnifiedMonitor(page, scenario.nextView);
+        await expect(modal).toBeHidden();
+        await switchMonitorView(page, scenario.view);
+        await expect(page.getByTestId('bmp-statistics-detail-modal')).toBeHidden();
+        await detailButton.click();
+        await expect(page.getByTestId('bmp-statistics-detail-modal')).toBeVisible();
+        await page.evaluate(sourceId => {
+            const query = new URLSearchParams(window.location.hash.split('?')[1]);
+            query.set('clientKey', `source:${sourceId}`);
+            window.location.hash = `/monitor/bmp-client?${query}`;
+        }, OTHER_CLIENT.persistentSourceId);
+        await expect(page.getByTestId('bmp-statistics-detail-modal')).toBeHidden();
+    });
+}

@@ -430,7 +430,31 @@
             "repeatable": false,
             "section": "nlri",
             "treeGroup": "mpNlri",
-            "addressFamilies": [1, 2, 6, 12]
+            "addressFamilies": [1, 2, 3, 4, 5, 6, 12],
+            "contextDefaults": [
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "encapsulationType",
+                                "equals": "srv6"
+                            }
+                        ]
+                    },
+                    "value": {
+                        "mode": "fixed",
+                        "value": "2001:db8::1",
+                        "start": "2001:db8::1",
+                        "min": "2001:db8::1",
+                        "max": "2001:db8::ffff",
+                        "values": ["2001:db8::1", "2001:db8::2"]
+                    }
+                }
+            ]
         },
         {
             "type": "med",
@@ -806,13 +830,145 @@
             }
         },
         {
+            "type": "rd",
+            "section": "nlri",
+            "valueType": "rd",
+            "label": "RD",
+            "description": "NLRI 的 Route Distinguisher；每条路由按所选规则取值，VPN/EVPN 节点不可删除。",
+            "defaultNode": false,
+            "addressFamilies": [3, 4, 5],
+            "requiredAddressFamilies": [3, 4, 5],
+            "repeatable": false,
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "65000:1",
+                "base": "65000",
+                "start": 1,
+                "step": 1,
+                "min": 1,
+                "max": 100,
+                "values": ["65000:1", "192.0.2.1:1"]
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "RD",
+                        "type": "input",
+                        "help": "ASN:数值或 IPv4:数值。"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "base",
+                        "label": "ASN / IPv4",
+                        "type": "input"
+                    },
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input",
+                        "help": "RD 数值部分按每条前缀递增。"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "base",
+                        "label": "ASN / IPv4",
+                        "type": "input"
+                    },
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "RD 列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个完整 RD；按顺序循环用于每条前缀。"
+                    }
+                ]
+            },
+            "summary": {
+                "fixed": "{value}",
+                "increment": "{base}:{start} · 步长 {step}",
+                "random": "{base}:{min}–{max} · 随机",
+                "list": "{values}"
+            },
+            "resultColumn": {
+                "title": "RD",
+                "key": "rd",
+                "width": 150
+            },
+            "contextDefaults": [
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 4
+                            }
+                        ]
+                    },
+                    "value": {
+                        "value": "192.0.2.1:1",
+                        "base": "192.0.2.1",
+                        "values": ["192.0.2.1:1", "192.0.2.1:2"]
+                    }
+                },
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "ethernetTagId",
+                                "equals": 4294967295
+                            }
+                        ]
+                    },
+                    "value": {
+                        "value": "192.0.2.1:1",
+                        "base": "192.0.2.1",
+                        "values": ["192.0.2.1:1", "192.0.2.1:2"]
+                    }
+                }
+            ]
+        },
+        {
             "type": "label",
             "section": "nlri",
             "valueType": "label",
             "label": "MPLS Label",
-            "description": "IPv4 Label NLRI 的 20 bit MPLS 标签，与前缀一起编码。",
+            "description": "NLRI 的 20 bit MPLS 标签，与前缀一起编码；VPN 地址族的节点不可删除。",
             "defaultNode": true,
-            "addressFamilies": [12],
+            "addressFamilies": [12, 3, 4, 5],
+            "requiredAddressFamilies": [3, 4, 5],
             "modes": ["fixed", "increment", "random", "list"],
             "default": {
                 "mode": "fixed",
@@ -822,6 +978,26 @@
                 "min": 16,
                 "max": 1048575,
                 "values": ["16", "100"]
+            },
+            "familyDefaults": {
+                "3": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                },
+                "4": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                },
+                "5": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                }
             },
             "validation": {
                 "min": 0,
@@ -873,6 +1049,882 @@
                 "title": "Label",
                 "key": "label",
                 "width": 90
+            },
+            "visibleWhen": {
+                "any": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 12
+                    },
+                    {
+                        "field": "addressFamily",
+                        "equals": 4
+                    },
+                    {
+                        "field": "addressFamily",
+                        "equals": 5
+                    },
+                    {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "encapsulationType",
+                                "equals": "mpls"
+                            },
+                            {
+                                "any": [
+                                    {
+                                        "field": "routeType",
+                                        "equals": 1
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 2
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 3
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 5
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "requiredWhen": {
+                "any": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 4
+                    },
+                    {
+                        "field": "addressFamily",
+                        "equals": 5
+                    },
+                    {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "encapsulationType",
+                                "equals": "mpls"
+                            },
+                            {
+                                "any": [
+                                    {
+                                        "field": "routeType",
+                                        "equals": 1
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 2
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 3
+                                    },
+                                    {
+                                        "field": "routeType",
+                                        "equals": 5
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            },
+            "contextDefaults": [
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "ethernetTagId",
+                                "equals": 4294967295
+                            }
+                        ]
+                    },
+                    "value": {
+                        "value": 0,
+                        "start": 0,
+                        "step": 0,
+                        "min": 0,
+                        "max": 0,
+                        "values": ["0"]
+                    }
+                }
+            ]
+        },
+        {
+            "type": "label2",
+            "section": "nlri",
+            "valueType": "label",
+            "label": "MPLS Label 2",
+            "description": "Type 2 可选的第二 MPLS 标签。",
+            "defaultNode": false,
+            "addressFamilies": [3],
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 16,
+                "start": 16,
+                "step": 1,
+                "min": 16,
+                "max": 1048575,
+                "values": ["16", "100"]
+            },
+            "familyDefaults": {
+                "3": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                },
+                "4": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                },
+                "5": {
+                    "value": 1000,
+                    "start": 1000,
+                    "min": 1000,
+                    "values": ["1000", "1001"]
+                }
+            },
+            "validation": {
+                "min": 0,
+                "max": 1048575
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "Label 2",
+                "key": "label2",
+                "width": 110
+            },
+            "visibleWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "mpls"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "type": "vni",
+            "section": "nlri",
+            "valueType": "uint32",
+            "label": "VNI",
+            "description": "VXLAN EVPN NLRI 的 24 bit VNI；按每条路由独立生成。",
+            "defaultNode": false,
+            "addressFamilies": [3],
+            "requiredAddressFamilies": [3],
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 1000,
+                "start": 1000,
+                "step": 1,
+                "min": 1000,
+                "max": 16777215,
+                "values": ["1000", "1001"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 16777215
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "VNI",
+                "key": "vni",
+                "width": 110
+            },
+            "visibleWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "vxlan"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 5
+                            }
+                        ]
+                    }
+                ]
+            },
+            "requiredWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "vxlan"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 5
+                            }
+                        ]
+                    }
+                ]
+            },
+            "contextDefaults": [
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "ethernetTagId",
+                                "equals": 4294967295
+                            }
+                        ]
+                    },
+                    "value": {
+                        "value": 0,
+                        "start": 0,
+                        "step": 0,
+                        "min": 0,
+                        "max": 0,
+                        "values": ["0"]
+                    }
+                }
+            ]
+        },
+        {
+            "type": "vni2",
+            "section": "nlri",
+            "valueType": "uint32",
+            "label": "VNI 2",
+            "description": "Type 2 可选的第二 VXLAN VNI。",
+            "defaultNode": false,
+            "addressFamilies": [3],
+            "modes": ["fixed", "increment", "random", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": 1000,
+                "start": 1000,
+                "step": 1,
+                "min": 1000,
+                "max": 16777215,
+                "values": ["1000", "1001"]
+            },
+            "validation": {
+                "min": 0,
+                "max": 16777215
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "属性值",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "步长",
+                        "type": "input"
+                    }
+                ],
+                "random": [
+                    {
+                        "key": "min",
+                        "label": "最小值",
+                        "type": "input"
+                    },
+                    {
+                        "key": "max",
+                        "label": "最大值",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "值列表",
+                        "type": "textarea",
+                        "array": true,
+                        "help": "每行一个值；按顺序循环用于每条路由。"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "VNI 2",
+                "key": "vni2",
+                "width": 110
+            },
+            "visibleWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "vxlan"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            }
+                        ]
+                    }
+                ]
+            }
+        },
+        {
+            "type": "srv6L2",
+            "section": "nlri",
+            "valueType": "srv6",
+            "label": "SRv6 L2 SID",
+            "description": "RFC 9252 EVPN Service SID；使用完整 IPv6 SID，转置长度与偏移必须为 0。",
+            "defaultNode": false,
+            "addressFamilies": [3],
+            "requiredAddressFamilies": [3],
+            "visibleWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "srv6"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 3
+                            }
+                        ]
+                    }
+                ]
+            },
+            "requiredWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "srv6"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 2
+                            },
+                            {
+                                "field": "routeType",
+                                "equals": 3
+                            }
+                        ]
+                    }
+                ]
+            },
+            "repeatable": false,
+            "modes": ["fixed", "increment", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "2001:db8:1::100",
+                "start": "2001:db8:1::100",
+                "step": 1,
+                "values": ["2001:db8:1::100", "2001:db8:1::101"],
+                "endpointBehavior": 23,
+                "locatorBlockLength": 32,
+                "locatorNodeLength": 32,
+                "functionLength": 64,
+                "argumentLength": 0,
+                "transpositionLength": 0,
+                "transpositionOffset": 0
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "SID",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始 SID",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "SID 步长",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "SID 列表",
+                        "type": "textarea",
+                        "array": true
+                    }
+                ],
+                "common": [
+                    {
+                        "key": "endpointBehavior",
+                        "label": "Endpoint",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "End.DX2",
+                                "value": 21
+                            },
+                            {
+                                "label": "End.DX2V",
+                                "value": 22
+                            },
+                            {
+                                "label": "End.DT2U",
+                                "value": 23
+                            },
+                            {
+                                "label": "End.DT2M",
+                                "value": 24
+                            }
+                        ]
+                    },
+                    {
+                        "key": "locatorBlockLength",
+                        "label": "Locator Block 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "locatorNodeLength",
+                        "label": "Locator Node 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "functionLength",
+                        "label": "Function 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "argumentLength",
+                        "label": "Argument 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionLength",
+                        "label": "Transposition 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionOffset",
+                        "label": "Transposition 偏移",
+                        "type": "input"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "SRv6 L2 SID",
+                "key": "srv6L2",
+                "width": 240
+            },
+            "contextDefaults": [
+                {
+                    "when": {
+                        "field": "routeType",
+                        "equals": 3
+                    },
+                    "value": {
+                        "value": "2001:db8:2::100",
+                        "start": "2001:db8:2::100",
+                        "values": ["2001:db8:2::100", "2001:db8:2::101"],
+                        "endpointBehavior": 24
+                    }
+                },
+                {
+                    "when": {
+                        "all": [
+                            {
+                                "field": "routeType",
+                                "equals": 1
+                            },
+                            {
+                                "field": "ethernetTagId",
+                                "equals": 4294967295
+                            }
+                        ]
+                    },
+                    "value": {
+                        "value": "::",
+                        "start": "::",
+                        "values": ["::"],
+                        "step": 0,
+                        "endpointBehavior": 24
+                    }
+                }
+            ]
+        },
+        {
+            "type": "srv6L3",
+            "section": "nlri",
+            "valueType": "srv6",
+            "label": "SRv6 L3 SID",
+            "description": "RFC 9252 EVPN Service SID；使用完整 IPv6 SID，转置长度与偏移必须为 0。",
+            "defaultNode": false,
+            "addressFamilies": [3],
+            "requiredAddressFamilies": [3],
+            "visibleWhen": {
+                "any": [
+                    {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "encapsulationType",
+                                "equals": "srv6"
+                            },
+                            {
+                                "any": [
+                                    {
+                                        "field": "routeType",
+                                        "equals": 5
+                                    }
+                                ]
+                            }
+                        ]
+                    },
+                    {
+                        "all": [
+                            {
+                                "field": "addressFamily",
+                                "equals": 3
+                            },
+                            {
+                                "field": "encapsulationType",
+                                "equals": "srv6"
+                            },
+                            {
+                                "any": [
+                                    {
+                                        "field": "routeType",
+                                        "equals": 2
+                                    }
+                                ]
+                            },
+                            {
+                                "field": "ipAddress",
+                                "enabled": true
+                            }
+                        ]
+                    }
+                ]
+            },
+            "requiredWhen": {
+                "all": [
+                    {
+                        "field": "addressFamily",
+                        "equals": 3
+                    },
+                    {
+                        "field": "encapsulationType",
+                        "equals": "srv6"
+                    },
+                    {
+                        "any": [
+                            {
+                                "field": "routeType",
+                                "equals": 5
+                            }
+                        ]
+                    }
+                ]
+            },
+            "repeatable": false,
+            "modes": ["fixed", "increment", "list"],
+            "default": {
+                "mode": "fixed",
+                "value": "2001:db8:3::100",
+                "start": "2001:db8:3::100",
+                "step": 1,
+                "values": ["2001:db8:3::100", "2001:db8:3::101"],
+                "endpointBehavior": 20,
+                "locatorBlockLength": 32,
+                "locatorNodeLength": 32,
+                "functionLength": 64,
+                "argumentLength": 0,
+                "transpositionLength": 0,
+                "transpositionOffset": 0
+            },
+            "fields": {
+                "fixed": [
+                    {
+                        "key": "value",
+                        "label": "SID",
+                        "type": "input"
+                    }
+                ],
+                "increment": [
+                    {
+                        "key": "start",
+                        "label": "起始 SID",
+                        "type": "input"
+                    },
+                    {
+                        "key": "step",
+                        "label": "SID 步长",
+                        "type": "input"
+                    }
+                ],
+                "list": [
+                    {
+                        "key": "values",
+                        "label": "SID 列表",
+                        "type": "textarea",
+                        "array": true
+                    }
+                ],
+                "common": [
+                    {
+                        "key": "endpointBehavior",
+                        "label": "Endpoint",
+                        "type": "select",
+                        "options": [
+                            {
+                                "label": "End.DX6",
+                                "value": 16
+                            },
+                            {
+                                "label": "End.DX4",
+                                "value": 17
+                            },
+                            {
+                                "label": "End.DT6",
+                                "value": 18
+                            },
+                            {
+                                "label": "End.DT4",
+                                "value": 19
+                            },
+                            {
+                                "label": "End.DT46",
+                                "value": 20
+                            }
+                        ]
+                    },
+                    {
+                        "key": "locatorBlockLength",
+                        "label": "Locator Block 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "locatorNodeLength",
+                        "label": "Locator Node 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "functionLength",
+                        "label": "Function 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "argumentLength",
+                        "label": "Argument 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionLength",
+                        "label": "Transposition 长度",
+                        "type": "input"
+                    },
+                    {
+                        "key": "transpositionOffset",
+                        "label": "Transposition 偏移",
+                        "type": "input"
+                    }
+                ]
+            },
+            "resultColumn": {
+                "title": "SRv6 L3 SID",
+                "key": "srv6L3",
+                "width": 240
             }
         },
         {

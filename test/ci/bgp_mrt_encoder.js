@@ -1,6 +1,6 @@
 const assert = require('node:assert/strict');
 process.env.NODE_ENV = 'test';
-const { createMrtEncoder } = require('../../electron/utils/bgpMrtEncoder');
+const { createMrtEncoder } = require('../../electron/utils/bgp/simulator/bgpMrtEncoder');
 
 // Decode the MRT layout directly, without the product's BGP/MRT parsers.
 function common(buffer) {

@@ -2,19 +2,19 @@
 
 const assert = require('node:assert/strict');
 const BmpConst = require('../../electron/const/bmpConst');
-const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../electron/utils/bmpPersistentRouteKey');
+const { canonicalizeRouteIdentity, formatRouteLookupKey } = require('../../electron/utils/bmp/bmpPersistentRouteKey');
 const {
     buildBmpRouteLensFromPersistedRoutes,
     getQpRouteIdentity,
     getComplexRouteIdentity
-} = require('../../electron/utils/bmpRouteLens');
+} = require('../../electron/utils/bmp/bmpRouteLens');
 const {
     buildBmpRouteAssuranceAnalysisFromPersistedRoutesAsync,
     buildBmpRouteAssuranceAnalysisFromRowStreamAsync,
     makeStreamRunKey,
     refreshBmpRouteAssuranceStreamRun
-} = require('../../electron/utils/bmpRouteAssurance');
-const Service = require('../../electron/utils/bmpRouteAssuranceService');
+} = require('../../electron/utils/bmp/bmpRouteAssurance');
+const Service = require('../../electron/utils/bmp/bmpRouteAssuranceService');
 
 const PRE = BmpConst.BMP_BGP_RIB_TYPE.PRE_ADJ_RIB_IN;
 const POST = BmpConst.BMP_BGP_RIB_TYPE.ADJ_RIB_IN;

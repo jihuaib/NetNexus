@@ -50,7 +50,7 @@ Electron `ELECTRON_RUN_AS_NODE` 的 Node-fork 兜底路径使用 JSON IPC 和 `e
 - 有界 Writer 池、跨线程 fence 和水位：`electron/worker/bmp/bmpClientPersistenceClient.js`
 - 每连接独占解析槽和 FIFO 关闭：`electron/worker/bmp/bmpIngestClientPool.js`
 - 固定分区清单和安全路由：`electron/worker/bmp/bmpRoutePartitionManifest.js`
-- 稳定 source、scope、route ID：`electron/utils/bmpPersistentRouteKey.js`
+- 稳定 source、scope、route ID：`electron/utils/bmp/bmpPersistentRouteKey.js`
 - Mutation 构造：`electron/worker/bmp/bmpPersistenceMutation.js`
 - 异步批量写入：`electron/worker/bmp/bmpPersistenceClient.js`
 - BMP 生命周期：`electron/worker/bmp/bmpSession.js`
@@ -916,7 +916,7 @@ DELETE FROM bmp_route_attributes
 
 Announce/withdraw 的热路径只把键写入持久候选表，不执行反连接；真正的删除在 maintenance sweep、手动清理 stale 路由和删除 Source 时进行。已检查的候选从主表删除，临时工作表随后清空；仍被任何 current row 引用的对象保留，将来再次释放引用时会重新登记候选。候选与对象删除在同一事务内处理，失败会一起回滚。
 
-maintenance 的 `auxiliaryLimit` 默认 5000、上限 50000，每次只检查该有界工作集；未处理候选留在主表，`hasMore` 促使后续维护继续。Writer 关闭、缓存驱逐或 collector 重启不丢候选。手动删除和单 client 清空仍在其事务内执行所需 GC，不受 maintenance 单次工作集的说明替代。
+maintenance 的 `auxiliaryLimit` 默认 5000、上限 50000，每次只检查该有界工作集；未处理候选留在主表，`hasMore` 促使后续维护继续。Writer 关闭、缓存驱逐或 collector 重启不丢候选。手动 stale 清理也在删除事务内处理 GC，但使用独立 `gcLimit`，默认 2000、上限 50000；历史 replace/withdraw 留下的候选不能使一次小批量清理变成无界事务。剩余候选由 maintenance 继续处理。单 client 清空仍执行该库所需的完整 GC。
 
 ## 8. Current-route 分区表
 
@@ -1200,6 +1200,41 @@ node scripts/benchmarks/compare_bmp_repeated_ingest_baseline.js \
 
 固定入口委托现有比较工具，配置、报文哈希、基准脚本或运行时不一致时拒绝比较。轻量 CI `bmp_repeated_ingest_baseline.js` 只检查历史报告完整性、样本/统计一致性和比较入口，不执行百万压测，也不把四组历史耗时当作跨机器阈值或自行增加百分比门禁。后续实现优化应保留此基线；只有明确变更测量协议、fixture、配置或硬件/运行时时，才重新执行同规格三轮实测、校验源码与采集指纹，并新增带日期的基线及更新入口，不能覆盖旧样本或伪改哈希。
 
+### 13.1.3 2026-10-05 全流程 review 修复与回归
+
+本轮修复覆盖接收、协议状态、持久化、路由分析和页面刷新，沿用 schema v14 和现有分库布局。Writer 异常即使发生在没有在线 client 时，也会通知运行状态、关闭监听器及解析/读写 Worker，再退出协议进程；监听端口占用会返回启动失败，运行中的 listener 异常也走统一停止流程。监听器和认证 helper 的并发关闭复用同一个 promise，退出前等待清理完成。
+
+协议侧拒绝缺失、截断或结构不完整的 Peer Down 和 Statistics Report，保留之前的有效状态/统计；完整未知统计类型仍保存原始字节。Loc-RIB 各地址族拥有独立 Add-Path 协商 Map，更新一个地址族不会清空另一个地址族。两字节 ASN 的兼容报文按 AS_PATH/AS4_PATH 重建有效路径，并保留 `wireAsPath`、`as4Path` 供详情检查；不含 AS4_PATH 的普通四字节 ASN 报文不增加这些可选属性字段。已丢失 AS4 信息的历史记录需重新上报才能补齐。
+
+持久化在写 source/connection 元数据前检查 sequence，已拒绝的旧 mutation 不会覆盖新设备描述或连接端点。进度复用当前 batch 的 connection cache，每个连接每批只增加一次索引读取，不为每条路由增加 SQL 查询。手动 stale 清理的对象 GC 使用独立有界预算，剩余候选持久保存并由 maintenance 回收（见 7.4、13.4），不再因历史候选积压扩大一次小批量删除事务。
+
+路由分析修正数字地址族筛选；Community 按集合语义比较，Label 栈及 AS_PATH 保持顺序语义。流式分析的截断明细仍保持证据计数准确，分页按实际保留的明细数计算，多出口证据和属性差异输出也有上限；截断 peer、属性值或多路径样本时仍保留能证明差异的值，避免可见证据全部相同。Route Lens 和 Route Assurance 页面采用固定刷新窗口，持续事件不会反复推迟定时器；查询期间的新事件合并成一次后续刷新，并在离开页面时取消。
+
+回归覆盖以下行为，88 个 BMP CI 脚本、6 个浏览器 E2E 用例及前端生产构建全部通过；新增 CI 用例由现有 runner 自动发现。运行记录见 [validation.json](../scripts/benchmarks/reports/bmp_review_20261005/validation.json)：
+
+| 用例 | 验证重点 |
+| --- | --- |
+| `bmp_runtime_failure.js` | 空闲 Writer 异常完整停止、端口占用失败后重试、运行中 listener 异常、退出等待 helper 清理、重复故障只通知一次 |
+| `bmp_protocol_review_regressions.js` | BMPv3/v4 非法生命周期和统计不产生 mutation、多地址族 Add-Path 隔离、AS4 重建及 SQLite 往返 |
+| `bmp_persistence_storage_regressions.js`、`bmp_persistence_bulk_refresh.js` | 跨批/批内 replay 不回退元数据、1000 条同连接路由只读一次 sequence、批量刷新守卫与回滚 |
+| `bmp_manual_stale_purge_sqlite.js`、`bmp_persistence_storage_regressions.js` | 默认/显式 GC 预算、候选重开后保留、maintenance 最终回收、活跃/共享引用和另一 client 数据保持正确 |
+| `bmp_route_analysis_regressions.js`、`bmp_monitor_ui_lifecycle.js` | 地址族及属性比较、截断证据增量计数/分页/输出上限、持续事件和查询期间事件刷新、页面离开取消 |
+
+最终分析实现还通过百万路径性能用例：首次聚合 5292.4 ms，缓存分页 0.2 ms、分类分页 0.1 ms，保留堆 400.7 MiB、峰值 RSS 775.6 MiB。仍沿用原来的 15 s / 100 ms / 512 MiB / 1536 MiB 预算，未放宽阈值；缓存翻页不重新扫描 RIB，新增增量回归也禁止遍历全部 run records。
+
+同一会话在 Apple M4 Pro / macOS arm64 / Electron 22.3.27 上分别运行修复前后代码，peer 和 Loc-RIB 各 100 万条路由、各 3 轮独立新库。使用与 13.1.2 相同的 1 个解析 Worker、1 个 Writer、5000 条攒批、20 ms flush、每 UPDATE 50 条 NLRI 和 100 组属性，关闭 Route Assurance；fixture、配置、基准脚本及运行时一致。计时仍从 loopback TCP 发送到末尾独特 marker 路由提交，以下为三轮中位数：
+
+| Scope | 上报 | 同会话修复前 | 本次修复后 | 相对同会话耗时下降 | 相对 2026-10-03 固定基线耗时变化 |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Peer | 首次 | 22.663775 s | 22.604033 s | 0.26% | +1.46% |
+| Peer | 重复 | 9.779913 s | 9.671867 s | 1.10% | +0.13% |
+| Loc-RIB | 首次 | 24.479772 s | 23.660635 s | 3.35% | -0.41% |
+| Loc-RIB | 重复 | 11.904294 s | 11.615164 s | 2.43% | +0.21% |
+
+同会话四组中位数均低于修复前；相对固定历史基线则有三组略慢、一组略快，不能宣称所有项目都比历史测量更快。这是当前硬件、fixture 和关闭分析的百万 IPv4 路径实测，不构成其他地址族、磁盘、并发 client 或 UI/分析耗时的保证，也不将小幅差异解释为统计显著的吞吐提升。
+
+原始样本和源码指纹保留在 [before.json](../scripts/benchmarks/reports/bmp_review_20261005/before.json)、[after.json](../scripts/benchmarks/reports/bmp_review_20261005/after.json)，同会话比较见 [before_after.json](../scripts/benchmarks/reports/bmp_review_20261005/before_after.json)，固定历史基线比较见 [historical_comparison.json](../scripts/benchmarks/reports/bmp_review_20261005/historical_comparison.json)。13.1.2 的历史报告、原始基准脚本和固定基线保持原采集内容。
+
 ### 13.2 Withdraw
 
 1. 规范化完整 NLRI，定位已有 route identity 和 current path；未知路由不新增 identity、payload 或 attributes。
@@ -1226,7 +1261,7 @@ Peer 和 Loc-RIB 的“清理过期”只作用于选定的 `source_id + scope_i
 1. 用 `bmp_scope_route_counts` 定位有效状态为 stale 的 connection/epoch/state 桶，而不是每批从 scope 的正常路由头部重新过滤。
 2. 经目标分区的 `scope_epoch` 索引选择窄引用键，放入 `temp.bmp_stale_purge_candidates`；这是本批删除工作集，不是持久对象 GC 候选表。不读取 payload、属性或 NLRI JSON，不构造逐路由 `routes/deltas`。
 3. 在同一事务内重新检查物理路径、引用键和有效 stale 状态，集合式登记 GC 候选、删除 current rows。计数 trigger 仍正常执行，共享 identity/payload/attributes 仍按所有分区的实际引用回收；异常时整个批次回滚。
-4. 只返回删除数量、是否还有候选和受影响的 scopes。每个已提交批次广播 scope 刷新事件；页面通过现有节流刷新读取最新已提交数量。
+4. 只返回删除数量、是否还有 stale 路由候选和受影响的 scopes。`hasMore` 不表示对象 GC 候选已经清空；每批默认最多处理 2000 个对象候选，剩余工作由 maintenance 继续处理。每个已提交批次广播 scope 刷新事件；页面通过现有节流刷新读取最新已提交数量。
 
 同一 source/scope 的后台任务互斥，前端立即显示“清理中”并禁止重复提交。切换 Client、AF、RIB 或实例不会把旧任务的完成/失败状态写到新范围。服务停止或运行实例改变时取消后续批次，已提交批次不会回滚；失败展示具体后台原因并释放清理状态。
 
@@ -1243,6 +1278,16 @@ ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --expose-gc \
 
 脚本使用独立临时合成数据库，对相同 seed 的副本比较原详细清理和新手动批量清理。建库不计时，结果是 SQLite Store 清理耗时，不包含 TCP、线程消息传输、界面渲染或 Route Assurance 最终重建。`--sparse` 可测试 90% 当前路由与 10% 旧 epoch 路由混合的情况；`--kind=peer` 或 `--kind=loc-rib` 可单独运行。
 
+当前代码默认每批只处理最多 2000 个对象 GC 候选，原始脚本计时结束只要求 stale 路由为零，可能仍有候选等待 maintenance。这个默认结果反映路由删除延迟，不能直接用来宣称包含完整对象回收的清理更快。复测完整 GC 口径时，保留原始脚本并加载独立 adapter：
+
+```sh
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --expose-gc \
+  --require ./scripts/benchmarks/bmp_stale_purge_full_gc.js \
+  scripts/benchmarks/bmp_stale_purge_benchmark.js --routes=1000000 --rounds=3
+```
+
+该 adapter 为详细路径和批量路径都设置 `gcLimit: 50000`。此合成 fixture 每批删除 20000 条、共享 payload/attributes，最多产生约 20002 个不同对象候选，因此这个预算包含该批完整回收；最后一批还断言候选表为空，identity、payload、attribute 都不存在无引用对象，断言计入测量时间。它只用于上述合成基准，不改变产品默认预算；已有大量历史 backlog 的应用库不具备相同上限假设。
+
 2026-10-03 在 Apple M4 Pro、Electron 22.3.27 / Node 16.17.1 / SQLite 3.49.2 上，以每批 20,000 条、全部 stale、共享小 payload/属性的合成路由执行 3 轮，交替原路径/优化路径顺序，取中位数：
 
 | 范围 | 过期路由数 | 原详细清理 | 新手动批量清理 | 耗时下降 |
@@ -1251,6 +1296,19 @@ ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --expose-gc \
 | Loc-RIB | 1,000,000 | 45.632 s | 6.003 s | 86.84% |
 
 每次均完成 50 批，并验证无残留 stale 和外键异常。真实 Worker + 两个独立 client Writer 的集成测试另验证分批事件、当前活跃路由、其他 scope、另一 client 和共享对象保持正确；真实页面测试验证清理期间数量刷新及切换范围后的状态隔离。这些存储层数字不代表真实 BMP 报文或 UI 的端到端耗时，也不外推 EVPN/FlowSpec 的具体秒数。
+
+2026-10-05 在同一环境分别用修复前后代码加载上述完整 GC adapter，对 Peer、Loc-RIB 各执行 3 轮百万路由清理，仍取中位数。这里“详细/批量”指两条 Store 清理路径，“修复前/后”指代码版本，两者不能混淆：
+
+| Scope | 路径 | 同会话修复前 | 本次修复后 | 耗时变化 |
+| --- | --- | ---: | ---: | ---: |
+| Peer | 详细 | 45.495220 s | 45.433817 s | -0.13% |
+| Peer | 批量 | 6.369531 s | 6.375678 s | +0.10% |
+| Loc-RIB | 详细 | 45.276380 s | 45.661565 s | +0.85% |
+| Loc-RIB | 批量 | 6.401598 s | 6.411073 s | +0.15% |
+
+两组批量完整 GC 的修复前后样本范围重叠，没有把延后回收计作性能收益。相对 2026-10-03 文档中的批量历史值，修复后分别慢约 7.48% 和 6.80%；同会话修复前也分别慢约 7.38% 和 6.64%，因此需结合本次前后比较评估代码影响，不能宣称本次比历史值更快。上述小幅前后差异不作统计显著性结论。
+
+每次均验证 stale 路由、GC 候选、无引用 identity/payload/attribute 和外键异常为零。12 个修复后原始样本见 [stale_full_gc.json](../scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json)，12 个修复前样本见 [stale_full_gc_before.json](../scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc_before.json)，包含范围和脚本/源码指纹的比较见 [stale_full_gc_comparison.json](../scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc_comparison.json)。
 
 ### 13.5 入站路由提交后的页面刷新
 

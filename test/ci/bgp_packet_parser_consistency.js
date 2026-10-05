@@ -1,6 +1,6 @@
 const assert = require('assert');
 const { parseBgpPacket: parsePacketTree } = require('../../electron/pktParser/bgpPacketParser');
-const { parseBgpPacket: parsePacketObject, getBgpPacketSummary } = require('../../electron/utils/bgpPacketParser');
+const { parseBgpPacket: parsePacketObject, getBgpPacketSummary } = require('../../electron/utils/bgp/bgpPacketParser');
 const BgpConst = require('../../electron/const/bgpConst');
 
 function u16(value) {

@@ -11,8 +11,8 @@ const BgpInstance = require('../../electron/worker/bgp/bgpInstance');
 const BgpPeer = require('../../electron/worker/bgp/bgpPeer');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
-const { parseBgpPacket } = require('../../electron/utils/bgpPacketParser');
-const { attributeRegistry } = require('../../electron/utils/bgpAttributeRegistry');
+const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
+const { attributeRegistry } = require('../../electron/utils/bgp/bgpAttributeRegistry');
 
 const family = BgpConst.BGP_ADDR_FAMILY.IPV4_UNC;
 const afi = BgpConst.BGP_AFI_TYPE.AFI_IPV4;
