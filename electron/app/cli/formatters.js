@@ -17,7 +17,7 @@ function formatPrefix(row) {
     if (!row || !row.ip) {
         return '-';
     }
-    return `${row.ip}/${row.mask ?? '-'}`;
+    return row.ip;
 }
 
 function formatJson(value) {
@@ -49,7 +49,9 @@ function formatTable(rows, columns) {
     const header = columns.map((column, index) => padCell(column.title, widths[index])).join('  ');
     const separator = widths.map(width => '-'.repeat(width)).join('  ');
     const body = renderedRows
-        .map(row => row.map((value, index) => padCell(truncateCell(value, widths[index]), widths[index])).join('  '))
+        .map(row =>
+            row.map((value, index) => padCell(value, widths[index], columns[index].truncate !== false)).join('  ')
+        )
         .join('\r\n');
 
     return `${header}\r\n${separator}\r\n${body}\r\n`;
@@ -78,8 +80,9 @@ function truncateCell(value, width) {
     return `${value.slice(0, width - 3)}...`;
 }
 
-function padCell(value, width) {
-    return truncateCell(String(value), width).padEnd(width, ' ');
+function padCell(value, width, truncate = true) {
+    const text = String(value);
+    return (truncate ? truncateCell(text, width) : text).padEnd(width, ' ');
 }
 
 module.exports = {

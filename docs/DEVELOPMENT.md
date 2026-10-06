@@ -160,6 +160,70 @@ npm run build:ui -- /absolute/path/to/NetNexusUI
 - 纯通用工具不引入 BGP/BMP 常量或会话状态；已有 `shared/` 定义继续共用，避免在新目录维护第二份定义。
 - `electron/pktParser/` 输出抓包展示树，工具目录中的 packet parser 输出供业务使用的解析对象。两者输出职责不同，目录整理不合并这两套接口。
 
+## CLI 动态参数扩展
+
+CLI 的动态候选由 `electron/app/cli/dynamicParameters.js` 统一管理。命令定义声明 provider 名称，业务模块注册数据查询函数；命令树、帮助展示和 Tab 补全不依赖具体协议。
+
+在 `electron/app/cli/commands.xml` 的 parameter 元素上设置 `completion-provider`，并保留原有参数类型。例如：
+
+```xml
+<element id="7" cfg-id="2" type="parameter" completion-provider="inventory.targets">
+    <name>&lt;target&gt;</name>
+    <description>Target name</description>
+    <type>string(1-128)</type>
+</element>
+```
+
+业务模块通过 `CliAccessServer.registerParameterProvider(name, provider)` 注册同步或异步函数。以下示例中的 `inventory` 是业务自己的数据查询接口，`siteId` 来自前面已经输入的参数：
+
+```js
+const unregister = server.registerParameterProvider('inventory.targets', async ({ args }) => {
+    const targets = await inventory.listTargets(args.siteId);
+    return targets.map(target => ({
+        value: target.name,
+        description: target.address
+    }));
+});
+
+// 业务模块卸载时取消本次注册。
+unregister();
+```
+
+Provider 接收以下上下文：
+
+| 字段 | 内容 |
+| --- | --- |
+| `server` / `session` | CLI 服务和当前终端会话。 |
+| `node` | 正在提示的参数节点，包含 `paramType` 和 `completionProvider`。 |
+| `args` | 已输入的参数；XML 参数同时保留 `<clientId>` 等名称和原始 `cfg1` 等键。 |
+| `cfgArgs` | 已匹配的 `cfg-id` 值，包含关键字和参数。 |
+| `tokens` | 当前参数之前已经匹配的命令 token。 |
+| `prefix` / `view` | 当前输入的参数前缀和 CLI 视图。 |
+
+返回值为字符串数组，或 `{ value, description }` 数组，其中 `value` 可为字符串或数字。框架按前缀筛选、去重并应用原有 `paramType` 校验，拒绝含终端控制字符的候选值。含空格或引号的值在 Tab 插入时自动加引号，执行时仍得到原始值。动态候选用于提示，手工输入其他合法值仍按原有命令流程执行。
+
+`?` 和 Tab 查询当前候选，同时显示原参数类型提示、候选值及说明，例如 `<uint(1-65535)>` 与已有 ID。类型提示只用于展示，不参与 Tab 插入或候选切换；有多个候选时，连续 Tab 依次切换真实值。Provider 不存在、报错、返回无效结果、超时或没有匹配候选时，`?` 和 Tab 仍显示原参数类型，Tab 保留当前输入。命令执行不受候选查询影响。默认超时为 3000 ms，可通过 `CliAccessServer` 构造参数 `dynamicParameterTimeoutMs` 调整。同名注册会替换旧函数；旧注册返回的卸载函数不会删除后来的注册。
+
+查询期间修改输入、移动光标、切换视图、执行命令或关闭会话后，框架丢弃过期展示结果。候选查询尚未结束时重复按 Tab 共用本次请求，保留切换次数。
+
+BMP 在 `CliHandlers.registerParameterProviders` 中注册 `bmp.clients`、`bmp.sessions` 和 `bmp.instances`。后两者读取 `args.clientId`，只查询对应 client 的对象；三者与列表和详情共用会话内的 ID 分配，提示只显示本次查询仍存在的对象。
+
+### 保留原文的参数
+
+普通参数使用默认的 `input-mode="normal"` 分词规则。需要逐字保留 JSON、引号、反斜线或空格的字符串参数，可以声明 `input-mode="opaque"`，例如两处 RouteKey 参数：
+
+```xml
+<element id="17" cfg-id="7" type="parameter" input-mode="opaque">
+    <name>&lt;routeKey&gt;</name>
+    <description>Route key</description>
+    <type>string(1-262144)</type>
+</element>
+```
+
+`commandTokenizer.js` 根据当前命令树的参数节点选择解析方式，执行、帮助和补全共用该分词器。Opaque 参数可以直接粘贴原文，也可以在整段值外包一层单引号或双引号；框架只去掉这层外部引号，内部字符不解码、不转义。后续关键字选项从命令树识别，例如 RouteKey 后面的 `verbose` 及其缩写；这些选项直接输入关键字，不添加引号。
+
+若通用自由文本值本身以合法的后续选项结尾，使用整段外层引号区分该值与命令选项。Opaque 参数之后仅允许关键字序列；后续包含其他参数的命令在注册时拒绝，避免不确定的文本分界。Opaque 参数的动态补全也保留候选原文，普通参数继续使用原有字符串引用规则。未声明输入模式的参数保持 `normal`；共享参数节点的显式输入模式冲突会在命令注册时报错。
+
 ## 常用脚本
 
 | 命令 | 用途 |

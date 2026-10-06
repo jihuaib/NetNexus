@@ -102,6 +102,38 @@ class CliHandlers {
         ].forEach(name => this.handlers.set(name, this[name].bind(this)));
     }
 
+    registerParameterProviders(registry) {
+        registry.register('bmp.clients', async context => {
+            const clients = this.assignClientIds(context.session, await this.queryClients());
+            return clients.map(client => ({
+                value: String(client.__cliId),
+                description: `SysName: ${client.sysName || '-'} Remote: ${client.remoteIp || '-'}:${client.remotePort || '-'}`
+            }));
+        });
+        registry.register('bmp.sessions', async context => {
+            if (!context.args || !context.args.clientId) {
+                return [];
+            }
+            const client = await this.resolveClient(context.session, context.args.clientId);
+            const sessions = await this.querySessionRows(context.session, client);
+            return sessions.map(bmpSession => ({
+                value: String(bmpSession.__cliId),
+                description: `PeerIP: ${bmpSession.sessionIp || '-'} AS: ${bmpSession.sessionAs ?? '-'} RD: ${bmpSession.sessionRd || '-'} State: ${bmpSession.sessionState ?? '-'}`
+            }));
+        });
+        registry.register('bmp.instances', async context => {
+            if (!context.args || !context.args.clientId) {
+                return [];
+            }
+            const client = await this.resolveClient(context.session, context.args.clientId);
+            const instances = await this.queryInstanceRows(context.session, client);
+            return instances.map(instance => ({
+                value: String(instance.__cliId),
+                description: `RD: ${instance.instanceRd || '-'} AF: ${formatKeyword(instance.addrFamilyType, BGP_ADDR_FAMILY_LABELS)} State: ${instance.instanceState ?? '-'}`
+            }));
+        });
+    }
+
     async dispatch(session, match) {
         const group = CLI_GROUPS[match.command.groupId];
         if (!group) {
@@ -258,7 +290,7 @@ class CliHandlers {
                     routeKey
                 })
             );
-            const normalizedRoute = normalizeRouteForCli(route);
+            const normalizedRoute = normalizeRouteForCli(filterRouteByState(route, args.routeState));
             session.write(
                 isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute)
             );
@@ -290,7 +322,7 @@ class CliHandlers {
                     routeKey
                 })
             );
-            const normalizedRoute = normalizeRouteForCli(route);
+            const normalizedRoute = normalizeRouteForCli(filterRouteByState(route, args.routeState));
             session.write(
                 isVerboseCommand(match) ? formatJson(normalizedRoute) : this.formatSingleRoute(normalizedRoute)
             );
@@ -574,7 +606,7 @@ class CliHandlers {
             { key: 'prefix', title: 'Prefix', formatter: row => formatPrefix(row) },
             { key: 'rd', title: 'RD' },
             { key: 'nextHop', title: 'NextHop' },
-            { key: 'routeKey', title: 'RouteKey' }
+            { key: 'routeKey', title: 'RouteKey', truncate: false }
         ]);
         return output;
     }
@@ -614,6 +646,11 @@ function parseRouteKeyArg(routeKey) {
         throw new CliCommandError('route-key path-id must use 0 instead of null.');
     }
     return normalizeRouteKey(text);
+}
+
+function filterRouteByState(route, requestedState) {
+    const state = parseRouteStateKeyword(requestedState);
+    return route && (state === BmpConst.BMP_ROUTE_STATE_FILTER.ALL || route.routeState === state) ? route : null;
 }
 
 function normalizeRouteForCli(route) {

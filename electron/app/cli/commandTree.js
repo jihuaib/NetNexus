@@ -1,13 +1,25 @@
 const ParamType = require('./paramTypes');
 
 class CommandTreeNode {
-    constructor({ name = '', description = '', type = 'command', argName = null, cfgId = null, paramType = null }) {
+    constructor({
+        name = '',
+        description = '',
+        type = 'command',
+        argName = null,
+        cfgId = null,
+        paramType = null,
+        completionProvider = null,
+        inputMode = null
+    }) {
         this.name = name;
         this.description = description;
         this.type = type;
         this.argName = argName;
         this.cfgId = cfgId;
         this.paramType = paramType;
+        this.completionProvider = completionProvider;
+        this.inputMode = normalizeInputMode(inputMode, name);
+        this._inputModeDeclared = inputMode !== null && inputMode !== undefined;
         this.children = [];
         this.command = null;
     }
@@ -54,6 +66,7 @@ class CliCommandTree {
     }
 
     registerSequence(root, sequence, command) {
+        validateOpaqueSequence(root, sequence);
         let current = root;
         sequence.forEach((token, index) => {
             current = addOrMergeChild(current, token);
@@ -68,16 +81,16 @@ class CliCommandTree {
     }
 
     getContexts(viewName, words) {
+        return this.getContextMatches(viewName, words).map(match => match.node);
+    }
+
+    getContextMatches(viewName, words) {
         const roots = [this.getView(viewName)?.root, this.globalRoot].filter(Boolean);
         const contexts = [];
         roots.forEach(root => {
-            if (words.length === 0) {
-                contexts.push(root);
-                return;
-            }
             const match = matchRoot(root, words);
             if (match && match.node) {
-                contexts.push(match.node);
+                contexts.push(match);
             }
         });
         return contexts;
@@ -94,8 +107,26 @@ class CliCommandTree {
 function addOrMergeChild(parent, token) {
     const existing = parent.children.find(child => isSameToken(child, token));
     if (existing) {
+        const inputMode = getMergedInputMode(existing, token);
+        const inputModeDeclared = token.inputMode !== null && token.inputMode !== undefined;
+        if (
+            existing.completionProvider &&
+            token.completionProvider &&
+            existing.completionProvider !== token.completionProvider
+        ) {
+            throw new Error(
+                `Conflicting dynamic parameter providers for ${token.name}: ${existing.completionProvider} and ${token.completionProvider}`
+            );
+        }
         if (!existing.description && token.description) {
             existing.description = token.description;
+        }
+        if (!existing.completionProvider && token.completionProvider) {
+            existing.completionProvider = token.completionProvider;
+        }
+        if (inputModeDeclared) {
+            existing.inputMode = inputMode;
+            existing._inputModeDeclared = true;
         }
         return existing;
     }
@@ -103,6 +134,64 @@ function addOrMergeChild(parent, token) {
     const child = new CommandTreeNode(token);
     parent.children.push(child);
     return child;
+}
+
+function validateOpaqueSequence(root, sequence) {
+    let current = root;
+    let opaqueParameter = null;
+    sequence.forEach(token => {
+        if (opaqueParameter && token.type === 'argument') {
+            throw opaqueSuffixError(opaqueParameter, token);
+        }
+        const existing = current ? current.children.find(child => isSameToken(child, token)) : null;
+        const inputMode = getMergedInputMode(existing, token);
+        if (token.type === 'argument' && inputMode === 'opaque') {
+            const argument = existing && findArgumentDescendant(existing);
+            if (argument) {
+                throw opaqueSuffixError(token, argument);
+            }
+            opaqueParameter = token;
+        }
+        current = existing;
+    });
+}
+
+function findArgumentDescendant(node) {
+    for (const child of node.children) {
+        if (child.type === 'argument') {
+            return child;
+        }
+        const argument = findArgumentDescendant(child);
+        if (argument) {
+            return argument;
+        }
+    }
+    return null;
+}
+
+function opaqueSuffixError(opaqueParameter, argument) {
+    return new Error(
+        `Opaque parameter ${opaqueParameter.name} only supports keyword suffixes; ${argument.name} is an argument`
+    );
+}
+
+function getMergedInputMode(existing, token) {
+    const inputMode = normalizeInputMode(token.inputMode, token.name);
+    const inputModeDeclared = token.inputMode !== null && token.inputMode !== undefined;
+    if (existing && existing._inputModeDeclared && inputModeDeclared && existing.inputMode !== inputMode) {
+        throw new Error(`Conflicting parameter input modes for ${token.name}: ${existing.inputMode} and ${inputMode}`);
+    }
+    return inputModeDeclared || !existing ? inputMode : existing.inputMode;
+}
+
+function normalizeInputMode(inputMode, name) {
+    if (inputMode === null || inputMode === undefined) {
+        return 'normal';
+    }
+    if (inputMode !== 'normal' && inputMode !== 'opaque') {
+        throw new Error(`Unsupported parameter input mode for ${name}: ${inputMode}`);
+    }
+    return inputMode;
 }
 
 function isSameToken(node, token) {

@@ -445,7 +445,11 @@ Session/Loc-RIB **列表**不会把这个对象的所有字段发给表格；Wor
 
 详情调用若只提供路由对象而没有 `routeKey`，服务端使用其地址族和完整 NLRI 生成同一 key；复杂地址族缺少 NLRI 时明确报错，不用展示前缀猜测。64 字符数据库 ID 不作为 `routeKey` 的别名。
 
-CLI 仍使用原来的 `route-key` 参数；复杂 key 含 JSON 双引号时，将整个 key 放在单引号内原样传入，避免命令分词改变其中的引号。
+CLI 路由列表完整显示 `RouteKey`，不截断为省略号；`route-key` 参数最多接受 262144 个字符。所有地址族统一直接粘贴列表里的完整 RouteKey，无需加外层引号，例如 `show bmp route client-id 1 instance-id 7 route-key 0|0:0|203.0.113.0|24`。复杂 key 中的 JSON 引号、空格和反斜线原样保留，无需转义；也兼容将完整 key 包在一层单引号或双引号中的输入。在命令末尾追加 `verbose` 可查看完整路由详情。
+
+`prefix` 和 `route-key` 位于同一过滤位置，两者择一使用，都可以接在 `state active|stale|all` 后面。不指定 `state` 时，两种过滤都默认查询 `active`；要查询 stale 路由或同时查询两种状态，分别指定 `state stale` 或 `state all`，例如 `show bmp route client-id 1 instance-id 7 state all route-key <完整 RouteKey>`。过滤作用于所选 client 下的 session 或 instance 整个 scope，不限当前显示页。Session 路由命令中的过滤位置在 `af <地址族> rib <RIB类型>` 之后；`verbose` 仍放在完整 RouteKey 之后。
+
+CLI 的 `client-id`、`session-id` 和 `instance-id` 参数支持动态帮助和 Tab 补全。例如输入 `show bmp route client-id ` 后按 `?` 或 Tab，可查看当前 client ID、SysName 和远端地址；输入 `show bmp route client-id 1 instance-id ` 后按 `?` 或 Tab，可查看该 client 下的 instance ID、RD、地址族和状态。`session-id` 提示包含 Peer IP、AS、RD 和状态。动态候选中始终保留原来的 `<uint(1-65535)>` 参数类型提示；该提示只用于展示，Tab 只补全实际 ID。已输入的数字前缀会筛选候选，连续 Tab 在多个候选间切换。提示实时读取数据，并与列表、详情共用当前 CLI 会话的 ID；查询失败或没有候选时仍显示类型提示，可手工输入 ID。
 
 HTTP `routeKey` 长度上限为 256 KiB，容纳完整 raw NLRI 的十六进制 key；超过上限的输入在数据库查询前拒绝。仅 `/api/v1/bmp/routes/detail`、`/api/v1/bmp/instances/routes/detail` 和 `/api/v1/bmp/persistence/routes` 使用 512 KiB 请求体额度，其余 API 保持原 64 KiB 上限。
 

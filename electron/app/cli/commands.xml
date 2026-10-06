@@ -270,7 +270,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="5" cfg-id="1" type="parameter">
+                <element id="5" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -319,7 +319,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="5" cfg-id="1" type="parameter">
+                <element id="5" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -328,7 +328,7 @@
                     <name>session-id</name>
                     <description>BGP session ID</description>
                 </element>
-                <element id="7" cfg-id="2" type="parameter">
+                <element id="7" cfg-id="2" type="parameter" completion-provider="bmp.sessions">
                     <name>&lt;sessionId&gt;</name>
                     <description>BGP session ID</description>
                     <type>uint(1-65535)</type>
@@ -377,7 +377,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="5" cfg-id="1" type="parameter">
+                <element id="5" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -386,7 +386,7 @@
                     <name>instance-id</name>
                     <description>Loc-RIB instance ID</description>
                 </element>
-                <element id="7" cfg-id="2" type="parameter">
+                <element id="7" cfg-id="2" type="parameter" completion-provider="bmp.instances">
                     <name>&lt;instanceId&gt;</name>
                     <description>Loc-RIB instance ID</description>
                     <type>uint(1-65535)</type>
@@ -435,7 +435,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="5" cfg-id="1" type="parameter">
+                <element id="5" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -444,7 +444,7 @@
                     <name>session-id</name>
                     <description>BGP session ID</description>
                 </element>
-                <element id="7" cfg-id="2" type="parameter">
+                <element id="7" cfg-id="2" type="parameter" completion-provider="bmp.sessions">
                     <name>&lt;sessionId&gt;</name>
                     <description>BGP session ID</description>
                     <type>uint(1-65535)</type>
@@ -456,7 +456,9 @@
                 <element id="9" cfg-id="3" type="parameter">
                     <name>&lt;af&gt;</name>
                     <description>Address family</description>
-                    <type>enum(ipv4-unc,ipv6-unc,ipv4-multicast,ipv6-multicast,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)</type>
+                    <type>
+                        enum(ipv4-unc,ipv6-unc,ipv4-multicast,ipv6-multicast,l2vpn-evpn,vpnv4,vpnv6,ipv4-mvpn,ipv6-mvpn,ipv4-qp,ipv6-qp,ipv4-flowspec,ipv6-flowspec,ipv4-label-unicast,ipv6-label-unicast,link-state,link-state-vpn)
+                    </type>
                 </element>
                 <element id="10" type="keyword">
                     <name>rib</name>
@@ -487,12 +489,12 @@
                 </element>
                 <element id="16" type="keyword">
                     <name>route-key</name>
-                    <description>Route key</description>
+                    <description>Route key filter</description>
                 </element>
-                <element id="17" cfg-id="7" type="parameter">
+                <element id="17" cfg-id="7" type="parameter" input-mode="opaque">
                     <name>&lt;routeKey&gt;</name>
-                    <description>Route key</description>
-                    <type>string(1-2048)</type>
+                    <description>Route key filter</description>
+                    <type>string(1-262144)</type>
                 </element>
                 <element id="18" cfg-id="8" type="keyword">
                     <name>verbose</name>
@@ -531,6 +533,16 @@
                     <views>global</views>
                     <description>Display BMP session route verbose information by route key</description>
                 </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 12 13 16 17</expression>
+                    <views>global</views>
+                    <description>Display BMP session route summary by state and route key</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 10 11 12 13 16 17 18</expression>
+                    <views>global</views>
+                    <description>Display BMP session route verbose information by state and route key</description>
+                </command>
             </commands>
         </group>
 
@@ -553,7 +565,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="5" cfg-id="1" type="parameter">
+                <element id="5" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -562,7 +574,7 @@
                     <name>instance-id</name>
                     <description>Loc-RIB instance ID</description>
                 </element>
-                <element id="7" cfg-id="2" type="parameter">
+                <element id="7" cfg-id="2" type="parameter" completion-provider="bmp.instances">
                     <name>&lt;instanceId&gt;</name>
                     <description>Loc-RIB instance ID</description>
                     <type>uint(1-65535)</type>
@@ -587,12 +599,12 @@
                 </element>
                 <element id="12" type="keyword">
                     <name>route-key</name>
-                    <description>Route key</description>
+                    <description>Route key filter</description>
                 </element>
-                <element id="13" cfg-id="5" type="parameter">
+                <element id="13" cfg-id="5" type="parameter" input-mode="opaque">
                     <name>&lt;routeKey&gt;</name>
-                    <description>Route key</description>
-                    <type>string(1-2048)</type>
+                    <description>Route key filter</description>
+                    <type>string(1-262144)</type>
                 </element>
                 <element id="14" cfg-id="6" type="keyword">
                     <name>verbose</name>
@@ -631,6 +643,16 @@
                     <views>global</views>
                     <description>Display BMP Loc-RIB route verbose information by route key</description>
                 </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 12 13</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB route summary by state and route key</description>
+                </command>
+                <command>
+                    <expression>1 2 3 4 5 6 7 8 9 12 13 14</expression>
+                    <views>global</views>
+                    <description>Display BMP Loc-RIB route verbose information by state and route key</description>
+                </command>
             </commands>
         </group>
 
@@ -657,7 +679,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="6" cfg-id="1" type="parameter">
+                <element id="6" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>
@@ -719,7 +741,7 @@
                     <name>client-id</name>
                     <description>BMP client ID</description>
                 </element>
-                <element id="6" cfg-id="1" type="parameter">
+                <element id="6" cfg-id="1" type="parameter" completion-provider="bmp.clients">
                     <name>&lt;clientId&gt;</name>
                     <description>BMP client ID</description>
                     <type>uint(1-65535)</type>

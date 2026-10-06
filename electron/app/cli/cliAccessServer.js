@@ -8,6 +8,8 @@ const CliSession = require('./session');
 const { TELNET, negotiationBuffer } = require('./telnet');
 const { formatDate, formatTable } = require('./formatters');
 const { CliCommandError } = require('./errors');
+const DynamicParameterRegistry = require('./dynamicParameters');
+const tokenizeCommand = require('./commandTokenizer');
 
 const DEFAULT_CLI_ACCESS_SETTINGS = {
     host: '127.0.0.1',
@@ -35,7 +37,7 @@ function normalizeCliSettings(settings = {}) {
 }
 
 class CliAccessServer {
-    constructor({ bmpApp, externalApiServer, settings = {} } = {}) {
+    constructor({ bmpApp, externalApiServer, settings = {}, dynamicParameterTimeoutMs = 3000 } = {}) {
         this.bmpApp = bmpApp;
         this.externalApiServer = externalApiServer;
         this.settings = normalizeCliSettings(settings);
@@ -45,6 +47,7 @@ class CliAccessServer {
         this.globalHistory = [];
         this.tree = null;
         this.handlers = null;
+        this.parameterProviders = new DynamicParameterRegistry({ timeoutMs: dynamicParameterTimeoutMs });
     }
 
     getRunning() {
@@ -98,6 +101,11 @@ class CliAccessServer {
         this.tree = new CliCommandTree();
         new XmlCommandLoader(this.tree).load(path.join(__dirname, 'commands.xml'));
         this.handlers = new CliHandlers(this);
+        this.handlers.registerParameterProviders(this.parameterProviders);
+    }
+
+    registerParameterProvider(name, provider) {
+        return this.parameterProviders.register(name, provider);
     }
 
     releaseRuntimeData() {
@@ -149,6 +157,7 @@ class CliAccessServer {
         this.sessions.forEach(session => {
             session.writeLine('');
             session.writeLine('CLI session closed.');
+            session.closed = true;
             session.socket.destroy();
         });
         this.sessions.clear();
@@ -268,7 +277,7 @@ class CliAccessServer {
             return;
         }
         if (byte === 9) {
-            this.completeLine(session);
+            this.completeLine(session).catch(error => logger.error(`CLI completion failed: ${error.message}`));
             return;
         }
         if (byte === 27) {
@@ -276,7 +285,7 @@ class CliAccessServer {
             return;
         }
         if (byte === 63) {
-            this.showInlineHelp(session);
+            this.showInlineHelp(session).catch(error => logger.error(`CLI help failed: ${error.message}`));
             return;
         }
         if (byte >= 32 && byte <= 126) {
@@ -449,24 +458,46 @@ class CliAccessServer {
         session.redrawLine();
     }
 
-    completeLine(session) {
+    async completeLine(session) {
+        if (session.closed || session.busy || session.pager) {
+            return;
+        }
+        const pending = session.pendingAssistance;
+        if (pending && pending.kind === 'completion' && this.isAssistanceCurrent(session, pending)) {
+            pending.count += 1;
+            return pending.promise;
+        }
+
         const sourceLine = session.tabCycle ? session.tabCycle.originalLine : session.line;
         const sourceCursor = session.tabCycle ? session.tabCycle.originalCursor : session.cursor;
-        const completion = this.getCompletion(session, sourceLine.slice(0, sourceCursor));
+        const request = this.beginAssistance(session, 'completion');
+        request.count = 1;
+        request.promise = this.getCompletion(session, sourceLine.slice(0, sourceCursor));
+        let completion;
+        try {
+            completion = await request.promise;
+        } finally {
+            if (session.pendingAssistance === request) {
+                session.pendingAssistance = null;
+            }
+        }
+        if (!this.isAssistanceCurrent(session, request)) {
+            return;
+        }
 
         if (completion.candidates.length === 0) {
             this.resetTabCycle(session);
-            this.redrawLineOnNewPrompt(session);
+            this.redrawLineOnNewPrompt(session, completion.dynamic ? completion.rows : []);
             return;
         }
         if (completion.candidates.length === 1) {
             if (session.tabCycle) {
-                session.line = session.tabCycle.originalLine.slice(0, session.tabCycle.originalCursor);
-                session.cursor = session.line.length;
+                session.line = sourceLine;
+                session.cursor = sourceCursor;
             }
             this.resetTabCycle(session);
             this.applyTabCandidate(session, completion.candidates[0], true);
-            this.redrawLineOnNewPrompt(session);
+            this.redrawLineOnNewPrompt(session, completion.dynamic ? completion.rows : []);
             return;
         }
 
@@ -474,42 +505,95 @@ class CliAccessServer {
             session.tabCycle = {
                 originalLine: session.line,
                 originalCursor: session.cursor,
-                matchIndex: 0
+                matchIndex: (request.count - 1) % completion.candidates.length
             };
         } else {
-            session.tabCycle.matchIndex = (session.tabCycle.matchIndex + 1) % completion.candidates.length;
+            session.tabCycle.matchIndex = (session.tabCycle.matchIndex + request.count) % completion.candidates.length;
         }
 
-        session.line = session.tabCycle.originalLine.slice(0, session.tabCycle.originalCursor);
-        session.cursor = session.line.length;
+        session.line = session.tabCycle.originalLine;
+        session.cursor = session.tabCycle.originalCursor;
         this.applyTabCandidate(session, completion.candidates[session.tabCycle.matchIndex], false);
-        this.redrawLineOnNewPrompt(session);
+        this.redrawLineOnNewPrompt(session, completion.dynamic ? completion.rows : []);
     }
 
     resetTabCycle(session) {
         session.tabCycle = null;
+        session.assistanceRevision = (session.assistanceRevision || 0) + 1;
+        session.pendingAssistance = null;
     }
 
-    redrawLineOnNewPrompt(session) {
+    beginAssistance(session, kind) {
+        session.assistanceRevision = (session.assistanceRevision || 0) + 1;
+        const request = {
+            kind,
+            revision: session.assistanceRevision,
+            line: session.line,
+            cursor: session.cursor,
+            view: session.view,
+            tree: this.tree
+        };
+        session.pendingAssistance = request;
+        return request;
+    }
+
+    isAssistanceCurrent(session, request) {
+        return (
+            !session.closed &&
+            !session.busy &&
+            !session.pager &&
+            this.tree === request.tree &&
+            session.assistanceRevision === request.revision &&
+            session.line === request.line &&
+            session.cursor === request.cursor &&
+            session.view === request.view
+        );
+    }
+
+    redrawLineOnNewPrompt(session, rows = []) {
         session.writeLine('');
+        if (rows.length > 0) {
+            session.write(formatParameterRows(rows));
+        }
         session.sendPrompt();
         session.write(session.line);
+        const moveLeft = session.line.length - session.cursor;
+        if (moveLeft > 0) {
+            session.write(`\x1b[${moveLeft}D`);
+        }
     }
 
     applyTabCandidate(session, candidate, appendSpace) {
-        let start = session.cursor;
-        while (start > 0 && !/\s/u.test(session.line[start - 1])) {
-            start -= 1;
-        }
-
-        session.line = `${session.line.slice(0, start)}${candidate}${appendSpace ? ' ' : ''}`;
-        session.cursor = session.line.length;
+        const parsed = this.tokenizeLine(session, session.line);
+        const range = parsed.ranges.find(token => token.start <= session.cursor && session.cursor <= token.end);
+        const { start, end } = range || { start: session.cursor, end: session.cursor };
+        const suffix = session.line.slice(end);
+        const inputMode = range ? range.inputMode : parsed.nextInputMode;
+        const value = inputMode === 'opaque' ? `"${candidate}"` : quoteCompletionValue(candidate);
+        const replacement = `${value}${appendSpace && !/^\s/u.test(suffix) ? ' ' : ''}`;
+        session.line = `${session.line.slice(0, start)}${replacement}${suffix}`;
+        session.cursor = start + replacement.length;
         session.historyIndex = null;
     }
 
-    showInlineHelp(session) {
+    async showInlineHelp(session) {
+        if (session.closed || session.busy || session.pager) {
+            return;
+        }
+        const request = this.beginAssistance(session, 'help');
+        let output;
+        try {
+            output = await this.getHelpText(session, session.line.slice(0, session.cursor));
+        } finally {
+            if (session.pendingAssistance === request) {
+                session.pendingAssistance = null;
+            }
+        }
+        if (!this.isAssistanceCurrent(session, request)) {
+            return;
+        }
         session.writeLine('');
-        session.write(this.getHelpText(session, session.line.slice(0, session.cursor)));
+        session.write(output);
         session.redrawLine();
     }
 
@@ -563,11 +647,11 @@ class CliAccessServer {
             return;
         }
         if (line === '?' || line.toLowerCase() === 'help') {
-            session.write(this.getHelpText(session, ''));
+            session.write(await this.getHelpText(session, ''));
             return;
         }
 
-        const parsed = tokenizeCommand(line);
+        const parsed = this.tokenizeLine(session, line);
         if (!parsed.ok) {
             session.writeLine(parsed.error);
             return;
@@ -612,78 +696,119 @@ class CliAccessServer {
         });
     }
 
-    getCompletion(session, line) {
-        if (!line.trim() || /\s$/u.test(line)) {
-            return { candidates: [] };
-        }
-        const parsed = tokenizeCommand(line);
-        if (!parsed.ok) {
-            return { candidates: [] };
-        }
-        const tokens = parsed.tokens;
-        const prefix = tokens.pop() || '';
-        const contexts = this.tree.getContexts(session.view, tokens);
-        const candidates = new Set();
-
-        contexts.forEach(node => {
-            node.children.forEach(child => {
-                if (child.type === 'command' && child.name.toLowerCase().startsWith(prefix.toLowerCase())) {
-                    candidates.add(child.name);
-                } else if (child.type === 'argument' && child.paramType) {
-                    child.paramType.completionCandidates(prefix).forEach(candidate => candidates.add(candidate));
-                }
-            });
-        });
-
-        return { candidates: Array.from(candidates) };
+    tokenizeLine(session, line) {
+        return tokenizeCommand(line, { tree: this.tree, view: session.view });
     }
 
-    getHelpText(session, line) {
+    async getParameterSuggestions(session, line) {
         const hasTrailingSpace = /\s$/u.test(line);
-        const parsed = tokenizeCommand(line.trimEnd());
+        const parsed = this.tokenizeLine(session, line.trimEnd());
         if (!parsed.ok) {
-            return `${parsed.error}\r\n`;
+            return { rows: [], candidates: [], dynamic: false, error: parsed.error };
         }
 
         const tokens = parsed.tokens;
         const prefix = hasTrailingSpace ? '' : tokens.pop() || '';
-        const contexts = this.tree.getContexts(session.view, tokens);
-        const rows = [];
-
-        contexts.forEach(node => {
-            node.children.forEach(child => {
-                if (child.type === 'argument' && child.paramType) {
-                    const candidates = child.paramType.completionCandidates(prefix);
-                    if (candidates.length > 0) {
-                        candidates.forEach(candidate => {
-                            rows.push({
-                                token: candidate,
-                                description: getEnumCandidateDescription(child)
-                            });
+        const view = session.view;
+        const contexts = this.tree.getContextMatches(view, tokens);
+        const includeStaticCompletion = Boolean(line.trim()) && !hasTrailingSpace;
+        const groups = await Promise.all(
+            contexts.flatMap(match =>
+                match.node.children.map(async child => {
+                    if (child.type === 'argument' && child.completionProvider) {
+                        const result = await this.parameterProviders.resolve(child.completionProvider, {
+                            server: this,
+                            session,
+                            node: child,
+                            args: buildParameterArgs(match),
+                            cfgArgs: { ...match.cfgArgs },
+                            tokens: [...tokens],
+                            prefix,
+                            view
                         });
-                        return;
+                        if (result.diagnostic) {
+                            logger.debug(
+                                `CLI parameter provider ${result.diagnostic.provider}: ${result.diagnostic.code}`
+                            );
+                        }
+                        return {
+                            dynamic: true,
+                            candidates: result.candidates.map(candidate => candidate.value),
+                            rows: [
+                                {
+                                    token: displayNode(child),
+                                    description: child.description || '',
+                                    isParameterType: true
+                                },
+                                ...result.candidates.map(candidate => ({
+                                    token: candidate.value,
+                                    description: candidate.description || child.description || ''
+                                }))
+                            ]
+                        };
                     }
-                }
 
-                if (nodeMatchesPrefix(child, prefix)) {
-                    rows.push({
-                        token: displayNode(child),
-                        description: child.description || ''
-                    });
+                    if (child.type === 'argument' && child.paramType) {
+                        const candidates = child.paramType.completionCandidates(prefix);
+                        if (candidates.length > 0) {
+                            return {
+                                candidates: includeStaticCompletion ? candidates : [],
+                                rows: candidates.map(candidate => ({
+                                    token: candidate,
+                                    description: getEnumCandidateDescription(child)
+                                }))
+                            };
+                        }
+                    }
+                    if (!nodeMatchesPrefix(child, prefix)) {
+                        return { rows: [], candidates: [] };
+                    }
+                    return {
+                        candidates: includeStaticCompletion && child.type === 'command' ? [child.name] : [],
+                        rows: [{ token: displayNode(child), description: child.description || '' }]
+                    };
+                })
+            )
+        );
+
+        const rows = [];
+        const seenRows = new Set();
+        if (prefix === '' && contexts.some(match => match.node.command)) {
+            rows.push({ token: '<cr>', description: 'Execute command' });
+            seenRows.add('<cr>');
+        }
+        groups.forEach(group => {
+            group.rows.forEach(row => {
+                if (!seenRows.has(row.token)) {
+                    rows.push(row);
+                    seenRows.add(row.token);
                 }
             });
-            if (node.command && prefix === '') {
-                rows.unshift({ token: '<cr>', description: 'Execute command' });
-            }
         });
+        return {
+            rows,
+            candidates: [...new Set(groups.flatMap(group => group.candidates))],
+            dynamic: groups.some(group => group.dynamic),
+            error: null
+        };
+    }
 
-        if (rows.length === 0) {
-            return 'Error: Invalid command.\r\n';
+    async getCompletion(session, line) {
+        const result = await this.getParameterSuggestions(session, line);
+        const candidates = new Set(result.candidates);
+        return {
+            candidates: result.candidates,
+            rows: result.rows.filter(row => row.isParameterType || candidates.has(row.token)),
+            dynamic: result.dynamic
+        };
+    }
+
+    async getHelpText(session, line) {
+        const result = await this.getParameterSuggestions(session, line);
+        if (result.error || result.rows.length === 0) {
+            return `${result.error || 'Error: Invalid command.'}\r\n`;
         }
-        return formatTable(rows, [
-            { key: 'token', title: 'Token' },
-            { key: 'description', title: 'Description' }
-        ]);
+        return formatParameterRows(result.rows);
     }
 
     formatSessions() {
@@ -702,6 +827,33 @@ class CliAccessServer {
             { key: 'busy', title: 'Busy' }
         ]);
     }
+}
+
+function buildParameterArgs(match) {
+    const args = { ...match.args };
+    match.path.forEach(node => {
+        if (node.type !== 'argument') {
+            return;
+        }
+        const namedParameter = /^<([^>]+)>$/u.exec(node.name);
+        const name = namedParameter ? namedParameter[1] : node.argName;
+        if (name) {
+            args[name] = match.args[node.argName];
+        }
+    });
+    return args;
+}
+
+function formatParameterRows(rows) {
+    return formatTable(rows, [
+        { key: 'token', title: 'Token', truncate: false },
+        { key: 'description', title: 'Description', truncate: false }
+    ]);
+}
+
+function quoteCompletionValue(value) {
+    const text = String(value);
+    return /[\s"']/u.test(text) ? `'${text.replace(/'/gu, `'"'"'`)}'` : text;
 }
 
 function nodeMatchesPrefix(node, prefix) {
@@ -732,44 +884,6 @@ function humanizeArgName(value) {
         .replace(/[-_]+/gu, ' ')
         .trim()
         .toLowerCase();
-}
-
-function tokenizeCommand(line) {
-    const tokens = [];
-    let current = '';
-    let quote = null;
-
-    for (let i = 0; i < line.length; i += 1) {
-        const char = line[i];
-        if (quote) {
-            if (char === quote) {
-                quote = null;
-            } else {
-                current += char;
-            }
-            continue;
-        }
-        if (char === '"' || char === "'") {
-            quote = char;
-            continue;
-        }
-        if (/\s/u.test(char)) {
-            if (current) {
-                tokens.push(current);
-                current = '';
-            }
-            continue;
-        }
-        current += char;
-    }
-
-    if (quote) {
-        return { ok: false, error: 'Error: Unclosed quote.' };
-    }
-    if (current) {
-        tokens.push(current);
-    }
-    return { ok: true, tokens };
 }
 
 module.exports = CliAccessServer;

@@ -34,6 +34,8 @@ class CliSession {
         this.peer = `${normalizeRemoteAddress(socket.remoteAddress)}:${socket.remotePort || 0}`;
         this.pager = null;
         this.tabCycle = null;
+        this.assistanceRevision = 0;
+        this.pendingAssistance = null;
         this.bmpIds = {
             client: createIdStore(),
             session: new Map(),

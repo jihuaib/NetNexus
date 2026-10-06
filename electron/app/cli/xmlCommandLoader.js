@@ -99,7 +99,9 @@ class XmlCommandLoader {
                 description,
                 argName: `cfg${cfgId}`,
                 cfgId,
-                paramType: new ParamType(typeStr)
+                paramType: new ParamType(typeStr),
+                completionProvider: elementNode.attr('completion-provider') || null,
+                inputMode: elementNode.attr('input-mode') || null
             };
         }
 
