@@ -182,9 +182,7 @@ class BmpClientPersistenceStore {
             // Recover every existing owned client even if no new packet arrives
             // for that client after a collector restart.
             if (!this.readOnly) {
-                for (const sourceId of this.discoverSourceIds()) {
-                    if (this.owns(sourceId)) this.getStore(sourceId);
-                }
+                for (const sourceId of this.discoverSourceIds(true)) this.getStore(sourceId);
             }
         } catch (error) {
             this.close();
@@ -193,9 +191,11 @@ class BmpClientPersistenceStore {
         return this;
     }
 
-    discoverSourceIds() {
-        const ids = listClientDatabases(this.dbPath).map(item => item.sourceId);
-        return this.sourceId ? ids.filter(id => id === this.sourceId) : ids;
+    discoverSourceIds(ownedOnly = false) {
+        return listClientDatabases(this.dbPath, {
+            sourceIdFilter: sourceId =>
+                (!this.sourceId || sourceId === this.sourceId) && (!ownedOnly || this.owns(sourceId))
+        }).map(item => item.sourceId);
     }
 
     getStore(sourceId, create = false) {
@@ -309,7 +309,7 @@ class BmpClientPersistenceStore {
             const id = this.findIdentitySource('scope', String(query.scopeId));
             sourceIds = id ? [id] : [];
         } else {
-            sourceIds = this.discoverSourceIds();
+            sourceIds = this.discoverSourceIds(ownedOnly);
         }
         if (this.sourceId) sourceIds = sourceIds.filter(id => id === this.sourceId);
         if (ownedOnly) sourceIds = sourceIds.filter(id => this.owns(id));

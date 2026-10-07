@@ -26,9 +26,9 @@ function prepareBmpDatabaseVersions(dbPath, options = {}) {
     ) {
         throw new Error('BMP database version check writer lane is invalid');
     }
-    const clients = listClientDatabases(dbPath).filter(
-        client => !ownedOnly || getClientWorkerIndex(client.sourceId, workerCount) === workerIndex
-    );
+    const clients = listClientDatabases(dbPath, {
+        sourceIdFilter: sourceId => !ownedOnly || getClientWorkerIndex(sourceId, workerCount) === workerIndex
+    });
     const paths = [...(!ownedOnly || workerIndex === 0 ? [dbPath] : []), ...clients.map(client => client.dbPath)];
     // Inspect the entire selected set before deleting anything, so an unreadable
     // or unsafe sibling cannot cause a partial version-reset pass.

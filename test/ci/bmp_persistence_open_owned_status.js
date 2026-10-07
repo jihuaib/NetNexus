@@ -9,7 +9,13 @@ const Database = require('better-sqlite3');
 const BmpClientPersistenceStore = require('../../electron/worker/bmp/bmpClientPersistenceStore');
 const BmpPersistenceClient = require('../../electron/worker/bmp/bmpPersistenceClient');
 const BmpPersistenceStore = require('../../electron/worker/bmp/bmpPersistenceStore');
-const { getClientDatabasePath, getClientWorkerIndex } = require('../../electron/worker/bmp/bmpClientPersistencePaths');
+const {
+    getClientDatabasePath,
+    getClientWorkerIndex,
+    assertClientDatabaseArtifacts,
+    listClientDatabases,
+    listClientDatabaseArtifacts
+} = require('../../electron/worker/bmp/bmpClientPersistencePaths');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bmp-owned-status-'));
 const dbPath = path.join(tempDir, 'bmp.sqlite3');
@@ -42,10 +48,76 @@ function seedClients() {
     }
 }
 
+function verifyDiscoveryIsolation() {
+    const originalLstat = fs.lstatSync;
+    const foreignPaths = new Set(sourceIds.slice(1).map(id => getClientDatabasePath(dbPath, id)));
+    const ownPath = getClientDatabasePath(dbPath, sourceIds[0]);
+    const orphanSidecar = `${getClientDatabasePath(dbPath, 'f'.repeat(64))}-wal`;
+    fs.writeFileSync(orphanSidecar, 'another writer may be deleting this sidecar');
+    const denyLstat = predicate => {
+        fs.lstatSync = function (filePath, ...args) {
+            if (predicate(String(filePath))) {
+                const error = new Error(`EPERM: simulated inaccessible artifact: ${filePath}`);
+                error.code = 'EPERM';
+                throw error;
+            }
+            return originalLstat.call(this, filePath, ...args);
+        };
+    };
+    let lane;
+    try {
+        denyLstat(
+            filename =>
+                filename === orphanSidecar ||
+                [...foreignPaths].some(
+                    databasePath => filename === databasePath || filename.startsWith(`${databasePath}-`)
+                )
+        );
+        lane = new BmpClientPersistenceStore({ dbPath, workerIndex: 0, workerCount }).open();
+        assert.equal(
+            lane.getStatus({ ownedOnly: true }).clientDatabaseCount,
+            0,
+            'owned startup and status must not inspect foreign main files or unrelated sidecars'
+        );
+        assert.throws(
+            () => listClientDatabases(dbPath),
+            { code: 'EPERM' },
+            'global discovery still reports an inaccessible main file'
+        );
+        lane.getStore(sourceIds[0], true);
+        denyLstat(filename => filename === orphanSidecar);
+        assert.equal(listClientDatabases(dbPath).length, workerCount, 'main discovery must not inspect any sidecar');
+        assert.throws(
+            () => listClientDatabaseArtifacts(dbPath, { sourceIdFilter: id => id === 'f'.repeat(64) }),
+            { code: 'EPERM' },
+            'explicit artifact enumeration still validates sidecars'
+        );
+        denyLstat(filename => filename === ownPath);
+        assert.throws(
+            () => listClientDatabases(dbPath, { sourceIdFilter: id => id === sourceIds[0] }),
+            { code: 'EPERM' },
+            'owned main file errors must not be swallowed'
+        );
+        denyLstat(filename => filename === `${ownPath}-wal`);
+        assert.throws(
+            () => assertClientDatabaseArtifacts(dbPath, sourceIds[0]),
+            { code: 'EPERM' },
+            'owned sidecar errors must not be swallowed'
+        );
+    } finally {
+        fs.lstatSync = originalLstat;
+        lane?.close();
+        fs.rmSync(orphanSidecar, { force: true });
+    }
+}
+
 async function main() {
     assert.equal(BmpPersistenceStore.SCHEMA_VERSION, 14, 'this regression exercises schema 13 -> 14 startup reset');
     seedClients();
 
+    downgrade();
+    verifyDiscoveryIsolation();
+    seedClients();
     downgrade();
     const firstLane = new BmpClientPersistenceStore({ dbPath, workerIndex: 0, workerCount }).open();
     try {
@@ -86,6 +158,12 @@ async function main() {
         } finally {
             await reader.close({ suppressErrors: true });
             await writers.close({ suppressErrors: true });
+            assert.equal(reader.workerAlive, false, 'reader shutdown is awaited before deleting test files');
+            assert.equal(
+                writers.clients.every(client => !client.workerAlive),
+                true,
+                'all writer shutdowns are awaited before the next fixture or cleanup'
+            );
         }
     }
     console.log('BMP writer-owned startup status tests passed');
@@ -96,4 +174,4 @@ main()
         console.error(error);
         process.exitCode = 1;
     })
-    .finally(() => fs.rmSync(tempDir, { recursive: true, force: true }));
+    .finally(() => fs.rmSync(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }));

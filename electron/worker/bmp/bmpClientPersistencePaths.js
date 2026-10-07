@@ -61,6 +61,9 @@ function listClientDatabaseArtifacts(dbPath, options = {}) {
     for (const name of fs.readdirSync(directory)) {
         const match = CLIENT_ARTIFACT_PATTERN.exec(name);
         if (!match) continue;
+        const suffix = match[2] || '';
+        if (options.databaseOnly === true && suffix) continue;
+        if (options.sourceIdFilter && !options.sourceIdFilter(match[1])) continue;
         const artifactPath = path.join(directory, name);
         let stats;
         try {
@@ -74,7 +77,6 @@ function listClientDatabaseArtifacts(dbPath, options = {}) {
         if (!isFile && options.strict !== false) {
             throw new Error(`BMP client database artifact is not a regular file: ${artifactPath}`);
         }
-        const suffix = match[2] || '';
         artifacts.push({
             sourceId: match[1],
             kind: ARTIFACT_KINDS[suffix],
@@ -90,7 +92,9 @@ function listClientDatabaseArtifacts(dbPath, options = {}) {
 }
 
 function listClientDatabases(dbPath, options = {}) {
-    return listClientDatabaseArtifacts(dbPath, options)
+    // Discovery only needs main files. A different writer may be deleting its
+    // sidecars, and Windows can report EPERM while those files are delete-pending.
+    return listClientDatabaseArtifacts(dbPath, { ...options, databaseOnly: true })
         .filter(artifact => artifact.kind === 'database' && artifact.isFile)
         .map(artifact => ({ sourceId: artifact.sourceId, dbPath: artifact.databasePath }));
 }
