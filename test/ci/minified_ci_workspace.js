@@ -12,6 +12,7 @@ try {
         'shared',
         'src/view/bgp',
         'test/ci',
+        'test/fixtures',
         '.github/workflows',
         'docs',
         'resources/grpc',
@@ -36,6 +37,14 @@ try {
         path.join(sourceRoot, 'src/view/bgp/workspaceProbe.js'),
         'module.exports = { registry: require("../../../shared/bgpAttributes.json"), kind: "source-workspace" };'
     );
+    fs.writeFileSync(
+        path.join(sourceRoot, 'test/fixtures/routeProbe.js'),
+        'module.exports = require("../../electron/utils/sharedProbe");'
+    );
+    fs.writeFileSync(
+        path.join(sourceRoot, 'test/ci/fixtureProbe.js'),
+        'module.exports = require("../fixtures/routeProbe");'
+    );
 
     workspace = prepareWorkspace(sourceRoot);
     assert.equal(fs.lstatSync(path.join(workspace, 'shared')).isDirectory(), true);
@@ -46,6 +55,14 @@ try {
     );
     const probe = require(path.join(workspace, 'electron/utils/sharedProbe.js'));
     assert.deepEqual(probe, { registry: { name: 'shared-fixture' }, parser: { value: 'shared-module' } });
+    assert.deepEqual(require(path.join(workspace, 'test/ci/fixtureProbe.js')), probe);
+    assert.equal(fs.lstatSync(path.join(workspace, 'test/fixtures')).isSymbolicLink(), false);
+    fs.writeFileSync(path.join(workspace, 'test/fixtures/routeProbe.js'), 'module.exports = {};');
+    assert.match(
+        fs.readFileSync(path.join(sourceRoot, 'test/fixtures/routeProbe.js'), 'utf8'),
+        /sharedProbe/,
+        'copied test fixture edits must not affect the source project'
+    );
     assert.equal(fs.lstatSync(path.join(workspace, 'src')).isDirectory(), true);
     assert.equal(fs.lstatSync(path.join(workspace, 'src')).isSymbolicLink(), false);
     assert.deepEqual(require(path.join(workspace, 'src/view/bgp/workspaceProbe.js')), {
@@ -64,7 +81,7 @@ try {
         { name: 'shared-fixture' },
         'workspace edits must not affect the source project'
     );
-    console.log('Minified CI workspace shared JSON/JS and src-model resource isolation tests passed');
+    console.log('Minified CI workspace shared JSON/JS, src-model and test-fixture isolation tests passed');
 } finally {
     if (workspace) fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(sourceRoot, { recursive: true, force: true });

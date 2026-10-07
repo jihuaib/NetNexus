@@ -25,6 +25,7 @@ function prepareWorkspace(sourceRoot = projectRoot) {
     copyDirectory(path.join(sourceRoot, 'shared'), path.join(tempRoot, 'shared'));
     copyDirectory(path.join(sourceRoot, 'src'), path.join(tempRoot, 'src'));
     copyDirectory(path.join(sourceRoot, 'test', 'ci'), path.join(tempRoot, 'test', 'ci'));
+    copyDirectory(path.join(sourceRoot, 'test', 'fixtures'), path.join(tempRoot, 'test', 'fixtures'));
     copyDirectory(path.join(sourceRoot, '.github', 'workflows'), path.join(tempRoot, '.github', 'workflows'));
     copyDirectory(path.join(sourceRoot, 'docs'), path.join(tempRoot, 'docs'));
     copyDirectory(path.join(sourceRoot, 'resources', 'grpc'), path.join(tempRoot, 'resources', 'grpc'));
