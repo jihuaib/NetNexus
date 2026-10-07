@@ -48,7 +48,9 @@ async function addNode(page, profile, type) {
     await page.getByTestId(`${prefix}-tree-${section}-${await groupId(page, profile)}`).click({ button: 'right' });
     await expect(page.getByTestId(`${prefix}-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`)).toBeVisible();
     await page.getByTestId(`${prefix}-add-attribute-button`).click();
-    await page.getByTestId(`${prefix}-add-attribute-${type}`).click();
+    const add = page.getByTestId(`${prefix}-add-attribute-${type}`);
+    await expect(add).toBeVisible();
+    await add.click({ force: true });
 }
 async function removeNode(page, profile, type) {
     const prefix = prefixFor(profile);

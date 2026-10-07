@@ -20,6 +20,8 @@ contextBridge.exposeInMainWorld('commonApi', {
     selectDirectory: () => ipcRenderer.invoke('common:selectDirectory'),
     saveUpdateSettings: settings => ipcRenderer.invoke('common:saveUpdateSettings', settings),
     getUpdateSettings: () => ipcRenderer.invoke('common:getUpdateSettings'),
+    getChangelogState: () => ipcRenderer.invoke('common:getChangelogState'),
+    markChangelogSeen: version => ipcRenderer.invoke('common:markChangelogSeen', version),
     getWiresharkBmpPluginStatus: () => ipcRenderer.invoke('common:getWiresharkBmpPluginStatus'),
     installWiresharkBmpPlugin: () => ipcRenderer.invoke('common:installWiresharkBmpPlugin'),
     uninstallWiresharkBmpPlugin: () => ipcRenderer.invoke('common:uninstallWiresharkBmpPlugin'),

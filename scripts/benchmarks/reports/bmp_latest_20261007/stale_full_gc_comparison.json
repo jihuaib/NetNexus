@@ -1,0 +1,94 @@
+{
+    "method": "synthetic SQLite store cleanup; all stale; same seed copied for detailed and compact paths; includes full object reclamation",
+    "routeCount": 1000000,
+    "rounds": 3,
+    "batchRouteLimit": 20000,
+    "gcLimit": 50000,
+    "system": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
+    },
+    "baselineLabel": "bmp-review-after-full-gc-20261005",
+    "latestLabel": "latest-full-gc-20261007-5d273d2",
+    "baselineFingerprints": {
+        "scripts/benchmarks/bmp_stale_purge_benchmark.js": "1fe0d984863b75504e89a3874a4e1ec84e4f94b982e8bcb88465217fe3ec99bb",
+        "scripts/benchmarks/bmp_stale_purge_full_gc.js": "c38990dac02ac5a61bc46938e045a3601a6c809c976013e74b47fe9ef3c20c8c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9"
+    },
+    "latestFingerprints": {
+        "scripts/benchmarks/bmp_stale_purge_benchmark.js": "1fe0d984863b75504e89a3874a4e1ec84e4f94b982e8bcb88465217fe3ec99bb",
+        "scripts/benchmarks/bmp_stale_purge_full_gc.js": "c38990dac02ac5a61bc46938e045a3601a6c809c976013e74b47fe9ef3c20c8c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "003b08762a99bb39490272a2c3227df1af29eccbd0b2309ae8ec011055b9f845"
+    },
+    "durationChangePercentSemantics": "(latest duration / baseline duration - 1) * 100; positive means slower.",
+    "sampleFieldSemantics": "optimized=false means detailed path; optimized=true means compact path. It does not refer to the code revision. Original summary beforeMs/afterMs mean detailed/compact, respectively.",
+    "rows": [
+        {
+            "benchmark": "stale-full-gc",
+            "kind": "peer",
+            "path": "detailed",
+            "baselineSource": "scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json",
+            "latestSource": "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.json",
+            "baselineMedianMs": 45433.81650006771,
+            "latestMedianMs": 52029.61379098892,
+            "durationChangePercent": 14.517374499919855,
+            "baselineRangeMs": [45282.79929089546, 45901.535875082016],
+            "latestRangeMs": [51041.88508400321, 52862.04733297229]
+        },
+        {
+            "benchmark": "stale-full-gc",
+            "kind": "peer",
+            "path": "compact",
+            "baselineSource": "scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json",
+            "latestSource": "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.json",
+            "baselineMedianMs": 6375.678125023842,
+            "latestMedianMs": 6320.839958012104,
+            "durationChangePercent": -0.8601150487271947,
+            "baselineRangeMs": [6367.993207931519, 6405.361457943916],
+            "latestRangeMs": [6291.625916004181, 6511.8771250247955]
+        },
+        {
+            "benchmark": "stale-full-gc",
+            "kind": "loc-rib",
+            "path": "detailed",
+            "baselineSource": "scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json",
+            "latestSource": "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.json",
+            "baselineMedianMs": 45661.56475007534,
+            "latestMedianMs": 52296.43029099703,
+            "durationChangePercent": 14.530526006362376,
+            "baselineRangeMs": [45359.75450003147, 47097.11600005627],
+            "latestRangeMs": [51877.65775001049, 52621.115209013224]
+        },
+        {
+            "benchmark": "stale-full-gc",
+            "kind": "loc-rib",
+            "path": "compact",
+            "baselineSource": "scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json",
+            "latestSource": "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.json",
+            "baselineMedianMs": 6411.073083996773,
+            "latestMedianMs": 6408.06329202652,
+            "durationChangePercent": -0.04694677366517963,
+            "baselineRangeMs": [6384.615167021751, 6435.136083960533],
+            "latestRangeMs": [6398.7004579901695, 6441.301707983017]
+        }
+    ]
+}

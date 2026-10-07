@@ -51,10 +51,14 @@ async function expectStatisticsValue(panel, typeName, value) {
 
 async function expectNlriDetailValues(modal, values) {
     await modal.getByRole('tab', { name: 'NLRI / TLV', exact: true }).click();
-    const cards = modal.getByTestId('bmp-route-detail-nlri');
-    await expect(cards).toBeVisible();
-    await expect(cards.getByTestId('bmp-route-detail-nlri-card').first()).toBeVisible();
-    for (const value of values) await expect(cards).toContainText(value);
+    const panel = modal.getByTestId('bmp-route-detail-nlri');
+    await expect(panel).toBeVisible();
+    const table = panel.getByRole('table').first();
+    await expect(table).toBeVisible();
+    await expect(table.locator('tbody').getByRole('row').first()).toBeVisible();
+    for (const value of values) {
+        await expect(panel.locator('tbody').getByRole('row').filter({ hasText: value }).first()).toBeVisible();
+    }
 }
 
 function formatRouteStep(route, index) {

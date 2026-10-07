@@ -36,6 +36,7 @@ const WiresharkPluginInstaller = require('./wiresharkPluginInstaller');
 const { clearMajorVersionData } = require('../utils/majorVersionDataCleanup');
 const SecureCredentialStore = require('../utils/secureCredentialStore');
 const TcpAoSettingsLifecycleGate = require('./tcpAoSettingsLifecycleGate');
+const ChangelogState = require('../utils/changelogState');
 
 const DEFAULT_SHUTDOWN_STEP_TIMEOUT_MS = 45000;
 const BMP_SHUTDOWN_STEP_TIMEOUT_MS = 6 * 60 * 1000;
@@ -59,6 +60,7 @@ class SystemApp {
         this.updateSettingsFileKey = 'UpdateSettings';
         this.appVersionFileKey = 'appVersion';
         this.currentLogLevel = DEFAULT_LOG_SETTINGS.logLevel;
+        this.changelogState = new ChangelogState(app.getPath('userData'), packageJson.version);
 
         this.store = new Store({
             name: 'Settings Data',
@@ -304,11 +306,31 @@ class SystemApp {
         ipc.handle('common:getApiServerStatus', () => this.handleGetApiServerStatus());
         ipc.handle('common:saveUpdateSettings', (event, settings) => this.handleSaveUpdateSettings(settings));
         ipc.handle('common:getUpdateSettings', () => this.handleGetUpdateSettings());
+        ipc.handle('common:getChangelogState', () => this.handleGetChangelogState());
+        ipc.handle('common:markChangelogSeen', (event, version) => this.handleMarkChangelogSeen(version));
         ipc.handle('common:selectDirectory', () => this.handleSelectDirectory());
         ipc.handle('common:getWiresharkBmpPluginStatus', () => this.handleGetWiresharkBmpPluginStatus());
         ipc.handle('common:installWiresharkBmpPlugin', () => this.handleInstallWiresharkBmpPlugin());
         ipc.handle('common:uninstallWiresharkBmpPlugin', () => this.handleUninstallWiresharkBmpPlugin());
         ipc.handle('common:openWiresharkPluginDirectory', () => this.handleOpenWiresharkPluginDirectory());
+    }
+
+    handleGetChangelogState() {
+        try {
+            return successResponse(this.changelogState.getState(), '更新日志状态获取成功');
+        } catch (error) {
+            logger.error('Error getting changelog state:', error.message);
+            return errorResponse(error.message);
+        }
+    }
+
+    handleMarkChangelogSeen(version) {
+        try {
+            return successResponse(this.changelogState.markSeen(version), '更新日志已记录');
+        } catch (error) {
+            logger.error('Error marking changelog as seen:', error.message);
+            return errorResponse(error.message);
+        }
     }
 
     async handleGetWiresharkBmpPluginStatus() {

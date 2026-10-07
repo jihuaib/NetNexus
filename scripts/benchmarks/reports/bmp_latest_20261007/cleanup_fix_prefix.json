@@ -1,0 +1,28 @@
+{
+    "directory": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/prefix-probe-GSB6eW",
+    "seed": "/var/folders/dv/85y7f3n14_qfm_570y6csylm0000gn/T/netnexus-bmp-stale-purge-benchmark-ZgTiSF/peer-seed.sqlite3",
+    "scopeRoutes": 1000000,
+    "matchingRoutes": 1,
+    "results": [
+        {
+            "variant": "current",
+            "round": 0,
+            "milliseconds": 1.6600840091705322
+        },
+        {
+            "variant": "fixed",
+            "round": 0,
+            "milliseconds": 1.8190840184688568
+        },
+        {
+            "variant": "fixed",
+            "round": 1,
+            "milliseconds": 1.1085000038146973
+        },
+        {
+            "variant": "current",
+            "round": 1,
+            "milliseconds": 0.7726249992847443
+        }
+    ]
+}

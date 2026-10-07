@@ -10,7 +10,11 @@
         @cancel="onClose"
     >
         <keep-alive>
-            <component :is="currentSettingComponent" ref="currentSettingRef" />
+            <component
+                :is="currentSettingComponent"
+                ref="currentSettingRef"
+                @open-changelog="emit('open-changelog', $event)"
+            />
         </keep-alive>
     </nn-navigation-modal>
 </template>
@@ -36,7 +40,7 @@
         }
     });
 
-    const emit = defineEmits(['update:open', 'close']);
+    const emit = defineEmits(['update:open', 'close', 'open-changelog']);
 
     // Use a local state instead of relying solely on the computed property
     const isOpen = ref(props.open);

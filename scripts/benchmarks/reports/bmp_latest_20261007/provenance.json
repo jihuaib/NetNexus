@@ -1,0 +1,88 @@
+{
+    "jsonFormatting": {
+        "description": "JSON whitespace was normalized with repository Prettier settings. Measurement values, runtime data, source fingerprints and original temporary artifacts are unchanged. Current artifact hashes reflect the formatted repository files; captured hashes preserve the original measured bytes.",
+        "originalSha256": {
+            "cleanup_ab1mPeer.json": "03271d31d4f1fc76b3a885d5f246f50a94a04c3566214ac4e2ec2136cefb1b75",
+            "cleanup_ab200k.json": "e56097a186224a92a8a2db85b51cd96d202ebd7d15403814defd64940707f6ea",
+            "cleanup_diagnosis.json": "e89a15a70dd4778709655570a3090f224c5381c70ac379a2b7cf3e27b468e3d8",
+            "cleanup_fix_epoch.json": "06e4095b27d43a6822137691bf10c1a46e9b76f7e5668a1cb5d6d0b287af7a9b",
+            "cleanup_fix_loc_rib.json": "6f0de7ae0a6e19518b3a54069223c556f68927c2aefbbc65bea84bd9eccd17df",
+            "cleanup_fix_peer.json": "4e3d6a6c2e895d783f0c038e9938de3e39215ce9cce4d2958de710fd61cb9744",
+            "cleanup_fix_prefix.json": "267f08debcea5763662b26a13e5a14601f098cc2b092d54fac57f6618ab6be57",
+            "cleanup_fix_summary.json": "ed7bbddb3d02658ecc52593b6751eac6d0ad5da3dec55dd8ccb741418628335d",
+            "cleanup_fullAnalyze1mPeer.json": "3f5de990a1548ce2fd79be0827b0ed99a15df7d09e54d5f56af52992b33980d2",
+            "cleanup_locRibPlan1m.json": "7f5973dc0bd2cabd0c22fc0b2f235ba58d8c70cc4196869ae1c4649147871a96",
+            "cleanup_orderedIndex1mPeer.json": "3944526e62beab76ecb43ef8b285dd4ab19d4bea511e2b3e5d7cccbb12c04343",
+            "ingest.json": "d480571b8fd322fd88bc2800f0dba134490c467d259d9f1a7d24a1cac15eb110",
+            "ingest_comparison.json": "9bdf8d2dbbb1fe764dfbf33786828af9f14d3d27220347fc8bf471a2969d046d",
+            "invocations.json": "2987b429276dc8f6c3324e55f57c3bd87eac0770ae22a3377278a1a04b7d2ea4",
+            "provenance.json": "c7e957889377c8ed6903b23814b6f61dc980310f6a9d49efdceb7a3bea164847",
+            "run_status.json": "b971aa8ff5e623ae3db0b494d48e8ed9ffa24a4ce65e20458fa0ba73e237bed8",
+            "stale_full_gc.json": "c5c419ea7ee6172504594fea6b16f3bc526ead8ddab3f94fdf8971e24bb79df1",
+            "stale_full_gc_comparison.json": "d58a910dd2623e029bda83d57fc06dbdf6495b467e5e1ae8873d6f237332ced2",
+            "summary.json": "d883eb0e60faac3078c4865bc5eff46a822da54aa3d25f4437d6b8bd0eb7a32c"
+        }
+    },
+    "capturedSourceArtifactSha256": {
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest.json": "d480571b8fd322fd88bc2800f0dba134490c467d259d9f1a7d24a1cac15eb110",
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest_comparison.json": "9bdf8d2dbbb1fe764dfbf33786828af9f14d3d27220347fc8bf471a2969d046d",
+        "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.log": "013048512ef2b36b3f8407c41816ac852a2b15d2a5c420ede4bc218b1b0fee12",
+        "scripts/benchmarks/reports/bmp_latest_20261007/run_status.json": "b971aa8ff5e623ae3db0b494d48e8ed9ffa24a4ce65e20458fa0ba73e237bed8",
+        "scripts/benchmarks/reports/bmp_latest_20261007/route_assurance.log": "867331f6e793d01c62e022795d4cf90f4b54f785d652ac4543bb77ac026f90f8",
+        "scripts/benchmarks/reports/bmp_latest_20261007/invocations.json": "2987b429276dc8f6c3324e55f57c3bd87eac0770ae22a3377278a1a04b7d2ea4"
+    },
+    "sourceCommit": "5d273d2a15d119d7782d4bf7e13d86a65431a94e",
+    "isolatedCheckout": "/tmp/netnexus-bmp-perf-20261007.TtWKD4/latest",
+    "sourceTrackedTreeClean": true,
+    "runStatusSource": "scripts/benchmarks/reports/bmp_latest_20261007/run_status.json",
+    "exitCodes": {
+        "ingest": 0,
+        "staleFullGc": 0,
+        "routeAssurance": 0
+    },
+    "measuredRuntimeProbe": {
+        "sqlite": "3.49.2",
+        "electron": "22.3.27",
+        "node": "16.17.1"
+    },
+    "ingestSourceFingerprints": {
+        "electron/worker/bmp/bmpSession.js": "c3fb6bf3f1b61e3cca1b048f8461ed741e9dd05b8ca829ac6a4de4d2c6756dc5",
+        "electron/worker/bmp/bmpBgpRoute.js": "d623f1f5835f9f96dc29e1f3c194a72242db37292919c17ad64b1c3bcf2a5f80",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "bbbe875bfb8618627b12fc6b2a51af1661749dcb9559066d15d36563befdd043",
+        "electron/worker/bmp/bmpPersistenceStore.js": "003b08762a99bb39490272a2c3227df1af29eccbd0b2309ae8ec011055b9f845",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+    },
+    "gcSourceFingerprints": {
+        "scripts/benchmarks/bmp_stale_purge_benchmark.js": "1fe0d984863b75504e89a3874a4e1ec84e4f94b982e8bcb88465217fe3ec99bb",
+        "scripts/benchmarks/bmp_stale_purge_full_gc.js": "c38990dac02ac5a61bc46938e045a3601a6c809c976013e74b47fe9ef3c20c8c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "003b08762a99bb39490272a2c3227df1af29eccbd0b2309ae8ec011055b9f845"
+    },
+    "commands": {
+        "ingest": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron scripts/benchmarks/bmp_repeated_ingest_benchmark.js --routes=1000000 --rounds=3 --label=latest_20261007_5d273d2 --output=/Users/jihuaibin/code/NetNexus/scripts/benchmarks/reports/bmp_latest_20261007/ingest.json",
+        "ingestComparison": "node scripts/benchmarks/compare_bmp_repeated_ingest_benchmarks.js scripts/benchmarks/baselines/bmp_repeated_ingest_1m_m4pro_20261003.json scripts/benchmarks/reports/bmp_latest_20261007/ingest.json scripts/benchmarks/reports/bmp_latest_20261007/ingest_comparison.json",
+        "staleFullGc": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron --expose-gc --require ./scripts/benchmarks/bmp_stale_purge_full_gc.js scripts/benchmarks/bmp_stale_purge_benchmark.js --routes=1000000 --rounds=3",
+        "routeAssurance": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron test/ci/bmp_route_assurance_performance.js"
+    },
+    "commandNote": "Benchmark entry points and default settings are unchanged; run_status.json records actual successful process exit codes and the measured runtime probe.",
+    "sources": [
+        "scripts/benchmarks/baselines/bmp_repeated_ingest_1m_m4pro_20261003.json",
+        "scripts/benchmarks/reports/bmp_review_20261005/after.json",
+        "scripts/benchmarks/reports/bmp_review_20261005/stale_full_gc.json",
+        "scripts/benchmarks/reports/bmp_review_20261005/validation.json",
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest.json",
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest_comparison.json",
+        "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.log",
+        "scripts/benchmarks/reports/bmp_latest_20261007/run_status.json",
+        "scripts/benchmarks/reports/bmp_latest_20261007/route_assurance.log"
+    ],
+    "sourceArtifactSha256": {
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest.json": "d27f90f976aebe6c9642921879c4f096fdeaed400405e1f53a21061cce4057b1",
+        "scripts/benchmarks/reports/bmp_latest_20261007/ingest_comparison.json": "61ae106927ee1b97b80f027d41c0a1a9772746040351e5026cac8a3f988911c3",
+        "scripts/benchmarks/reports/bmp_latest_20261007/stale_full_gc.log": "013048512ef2b36b3f8407c41816ac852a2b15d2a5c420ede4bc218b1b0fee12",
+        "scripts/benchmarks/reports/bmp_latest_20261007/run_status.json": "68d90b3dd44a03424f9de28bc4cfe6fcca84f81c2605118630ad83020e927463",
+        "scripts/benchmarks/reports/bmp_latest_20261007/route_assurance.log": "867331f6e793d01c62e022795d4cf90f4b54f785d652ac4543bb77ac026f90f8",
+        "scripts/benchmarks/reports/bmp_latest_20261007/invocations.json": "73b468ec8c3e877338b241810f8a8d5c58eb2d9135cbf85e362993a50c37b72d"
+    },
+    "actualInvocationsSource": "scripts/benchmarks/reports/bmp_latest_20261007/invocations.json",
+    "historicalComparisonNote": "The fixed historical report and its measured source fingerprints are preserved. No currently reachable Git ref or reflog commit matches all five historical ingest fingerprints; this comparison does not claim a same-session remeasurement of that historical code revision."
+}

@@ -95,6 +95,7 @@
         "predist:linux:arm64": "node scripts/prepare-linux-package.js --arch arm64",
         "format": "prettier --write .",
         "release": "node scripts/release.js",
+        "release:notes": "node scripts/generate-release-notes.js",
         "release:linux": "node scripts/release.js --linux",
         "release:linux:x64": "node scripts/release.js --linux --x64",
         "release:linux:arm64": "node scripts/release.js --linux --arm64",

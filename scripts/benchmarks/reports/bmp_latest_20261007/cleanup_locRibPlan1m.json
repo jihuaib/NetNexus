@@ -1,0 +1,267 @@
+{
+    "directory": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/loc-plan-y2riiw",
+    "seed": "/var/folders/dv/85y7f3n14_qfm_570y6csylm0000gn/T/netnexus-bmp-stale-purge-benchmark-ZgTiSF/loc-rib-seed.sqlite3",
+    "sourceCommit": "5d273d2a15d119d7782d4bf7e13d86a65431a94e",
+    "scope": "loc-rib",
+    "results": [
+        {
+            "variant": "current",
+            "plan": [
+                {
+                    "id": 14,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN s"
+                },
+                {
+                    "id": 18,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN src"
+                },
+                {
+                    "id": 25,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN conn"
+                },
+                {
+                    "id": 27,
+                    "parent": 0,
+                    "notused": 117,
+                    "detail": "SEARCH current USING INDEX idx_bmp_current_routes_loc_rib_ipv4_unicast_scope_epoch (scope_pk=? AND connection_pk=?)"
+                },
+                {
+                    "id": 49,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH identity USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 52,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN payload"
+                },
+                {
+                    "id": 57,
+                    "parent": 0,
+                    "notused": 10,
+                    "detail": "SCAN last_conn USING COVERING INDEX sqlite_autoindex_bmp_connections_1 LEFT-JOIN"
+                },
+                {
+                    "id": 64,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN route_attr LEFT-JOIN"
+                },
+                {
+                    "id": 164,
+                    "parent": 0,
+                    "notused": 0,
+                    "detail": "USE TEMP B-TREE FOR ORDER BY"
+                }
+            ],
+            "statistics": [
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "idx_bmp_connections_source_time",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "sqlite_autoindex_bmp_connections_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_loc_rib_ipv4_unicast_attr",
+                    "stat": "1000000 690"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_loc_rib_ipv4_unicast_payload",
+                    "stat": "1000000 690"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_loc_rib_ipv4_unicast_route",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_loc_rib_ipv4_unicast_scope_epoch",
+                    "stat": "1000000 690 690 690 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_loc_rib_ipv4_unicast_scope_first_seen",
+                    "stat": "1000000 690 690 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_loc_rib_ipv4_unicast",
+                    "idx": "sqlite_autoindex_bmp_current_routes_loc_rib_ipv4_unicast_1",
+                    "stat": "1000000 690 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "bmp_ingest_batches",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "idx_bmp_ingest_batches_created",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_cleanup_pending",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_refresh_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_source_af",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_stale_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_state",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_2",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_attributes",
+                    "idx": "sqlite_autoindex_bmp_route_attributes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_legacy",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_prefix",
+                    "stat": "1000000 1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "sqlite_autoindex_bmp_route_identities_1",
+                    "stat": "1000000 1"
+                },
+                {
+                    "tbl": "bmp_route_payloads",
+                    "idx": "sqlite_autoindex_bmp_route_payloads_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "bmp_scope_route_counts",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "idx_bmp_scope_route_counts_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_sources",
+                    "idx": "sqlite_autoindex_bmp_sources_1",
+                    "stat": "1 1"
+                }
+            ],
+            "params": {
+                "sourceId": "bd5e38b57c4afc518d9dd00b5be81f72a22ab506b36479de1e89bb4c23dd3010",
+                "scopeId": "30208ec08526fb64db0cdc90779a31db7ec6cc54ea81ffe920b7dc0b5edf6415",
+                "limit": 20001
+            },
+            "querySql": "\n                    SELECT r.*, s.scope_id, src.source_id, s.source_pk, s.scope_kind, s.owner_key,\n                           s.scope_identity_json,\n                           s.peer_type, s.peer_rd, s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,\n                           s.current_epoch, s.eor_epoch, s.scope_state,\n                           s.last_connection_pk, last_conn.connection_id AS last_connection_id,\n                           s.stale_reason AS scope_stale_reason,\n                           s.stale_since_ms, s.refresh_started_ms, s.updated_at_ms AS scope_updated_at_ms,\n                           s.cleanup_pending_epoch,\n                           route_attr.attr_id, route_attr.attr_json AS attr_json,\n                           src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,\n                           conn.connection_id,\n                           conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,\n                           conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,\n                           CASE\n            WHEN r.explicit_state = 'stale'\n              OR s.scope_state IN ('stale', 'down')\n              OR r.connection_pk IS NOT s.last_connection_pk\n              OR r.rib_epoch < s.current_epoch\n            THEN 'stale' ELSE 'active' END AS effective_state\n                      FROM (SELECT current.partition_id, current.path_pk, current.scope_pk,\n                   current.route_pk AS route_pk, identity.route_id,\n                   identity.route_key_version,\n                   identity.legacy_route_key, identity.afi, identity.safi,\n                   identity.path_id, identity.rd, identity.prefix, identity.prefix_length,\n                   identity.nlri_kind, identity.nlri_json, identity.nlri_flags,\n                   current.payload_id, payload.route_json,\n                   current.attr_pk, current.connection_pk, current.rib_epoch,\n                   current.explicit_state, current.first_seen_ms, current.last_seen_ms,\n                   current.source_timestamp_ms, current.last_sequence\n              FROM \"bmp_current_routes_loc_rib_ipv4_unicast\" current\n              JOIN bmp_route_identities identity ON identity.route_pk = current.route_pk\n              JOIN bmp_route_payloads payload ON payload.payload_id = current.payload_id) r\n                      JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk\n                      JOIN bmp_sources src ON src.source_pk = s.source_pk\n                      JOIN bmp_connections conn ON conn.connection_pk = r.connection_pk\n                      LEFT JOIN bmp_connections last_conn ON last_conn.connection_pk = s.last_connection_pk\n                      LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_pk = r.attr_pk\n                      WHERE CASE\n            WHEN r.explicit_state = 'stale'\n              OR s.scope_state IN ('stale', 'down')\n              OR r.connection_pk IS NOT s.last_connection_pk\n              OR r.rib_epoch < s.current_epoch\n            THEN 'stale' ELSE 'active' END = 'stale' AND src.source_id = @sourceId AND s.scope_id = @scopeId\n                     ORDER BY r.scope_pk, r.route_pk\n                     LIMIT @limit\n                ",
+            "note": "Plan-only: candidate SELECT and deletion never executed; all 1,000,000 stale rows preserved."
+        },
+        {
+            "variant": "no-optimize",
+            "plan": [
+                {
+                    "id": 15,
+                    "parent": 0,
+                    "notused": 46,
+                    "detail": "SEARCH s USING INDEX sqlite_autoindex_bmp_rib_scopes_1 (scope_id=?)"
+                },
+                {
+                    "id": 22,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH src USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 27,
+                    "parent": 0,
+                    "notused": 61,
+                    "detail": "SEARCH current USING INDEX sqlite_autoindex_bmp_current_routes_loc_rib_ipv4_unicast_1 (scope_pk=?)"
+                },
+                {
+                    "id": 48,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH identity USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 51,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH payload USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 54,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH conn USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 57,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH last_conn USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+                },
+                {
+                    "id": 62,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH route_attr USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+                }
+            ],
+            "statistics": [],
+            "params": {
+                "sourceId": "bd5e38b57c4afc518d9dd00b5be81f72a22ab506b36479de1e89bb4c23dd3010",
+                "scopeId": "30208ec08526fb64db0cdc90779a31db7ec6cc54ea81ffe920b7dc0b5edf6415",
+                "limit": 20001
+            },
+            "querySql": "\n                    SELECT r.*, s.scope_id, src.source_id, s.source_pk, s.scope_kind, s.owner_key,\n                           s.scope_identity_json,\n                           s.peer_type, s.peer_rd, s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,\n                           s.current_epoch, s.eor_epoch, s.scope_state,\n                           s.last_connection_pk, last_conn.connection_id AS last_connection_id,\n                           s.stale_reason AS scope_stale_reason,\n                           s.stale_since_ms, s.refresh_started_ms, s.updated_at_ms AS scope_updated_at_ms,\n                           s.cleanup_pending_epoch,\n                           route_attr.attr_id, route_attr.attr_json AS attr_json,\n                           src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,\n                           conn.connection_id,\n                           conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,\n                           conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,\n                           CASE\n            WHEN r.explicit_state = 'stale'\n              OR s.scope_state IN ('stale', 'down')\n              OR r.connection_pk IS NOT s.last_connection_pk\n              OR r.rib_epoch < s.current_epoch\n            THEN 'stale' ELSE 'active' END AS effective_state\n                      FROM (SELECT current.partition_id, current.path_pk, current.scope_pk,\n                   current.route_pk AS route_pk, identity.route_id,\n                   identity.route_key_version,\n                   identity.legacy_route_key, identity.afi, identity.safi,\n                   identity.path_id, identity.rd, identity.prefix, identity.prefix_length,\n                   identity.nlri_kind, identity.nlri_json, identity.nlri_flags,\n                   current.payload_id, payload.route_json,\n                   current.attr_pk, current.connection_pk, current.rib_epoch,\n                   current.explicit_state, current.first_seen_ms, current.last_seen_ms,\n                   current.source_timestamp_ms, current.last_sequence\n              FROM \"bmp_current_routes_loc_rib_ipv4_unicast\" current\n              JOIN bmp_route_identities identity ON identity.route_pk = current.route_pk\n              JOIN bmp_route_payloads payload ON payload.payload_id = current.payload_id) r\n                      JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk\n                      JOIN bmp_sources src ON src.source_pk = s.source_pk\n                      JOIN bmp_connections conn ON conn.connection_pk = r.connection_pk\n                      LEFT JOIN bmp_connections last_conn ON last_conn.connection_pk = s.last_connection_pk\n                      LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_pk = r.attr_pk\n                      WHERE CASE\n            WHEN r.explicit_state = 'stale'\n              OR s.scope_state IN ('stale', 'down')\n              OR r.connection_pk IS NOT s.last_connection_pk\n              OR r.rib_epoch < s.current_epoch\n            THEN 'stale' ELSE 'active' END = 'stale' AND src.source_id = @sourceId AND s.scope_id = @scopeId\n                     ORDER BY r.scope_pk, r.route_pk\n                     LIMIT @limit\n                ",
+            "note": "Plan-only: candidate SELECT and deletion never executed; all 1,000,000 stale rows preserved."
+        }
+    ]
+}

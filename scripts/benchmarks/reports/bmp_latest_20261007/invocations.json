@@ -1,0 +1,19 @@
+{
+    "workdir": "/tmp/netnexus-bmp-perf-20261007.TtWKD4/latest",
+    "sequentialWorkloads": true,
+    "ingest": {
+        "command": "env ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron scripts/benchmarks/bmp_repeated_ingest_benchmark.js --routes=1000000 --rounds=3 --label=latest_20261007_5d273d2 --output=/Users/jihuaibin/code/NetNexus/scripts/benchmarks/reports/bmp_latest_20261007/ingest.json",
+        "stdout": "ingest.log",
+        "exitCode": 0
+    },
+    "staleFullGc": {
+        "command": "env ELECTRON_RUN_AS_NODE=1 node_modules/.bin/electron --expose-gc --require ./scripts/benchmarks/bmp_stale_purge_full_gc.js scripts/benchmarks/bmp_stale_purge_benchmark.js --routes=1000000 --rounds=3",
+        "stdout": "stale_full_gc.log",
+        "exitCode": 0
+    },
+    "routeAssurance": {
+        "command": "env ELECTRON_RUN_AS_NODE=1 BMP_ASSURANCE_PERF_ROUTES=1000000 BMP_ASSURANCE_PERF_ANOMALIES=100000 BMP_ASSURANCE_FIRST_BUILD_BUDGET_MS=15000 BMP_ASSURANCE_CACHED_PAGE_BUDGET_MS=100 BMP_ASSURANCE_RETAINED_HEAP_BUDGET_BYTES=536870912 BMP_ASSURANCE_PEAK_RSS_BUDGET_BYTES=1610612736 node_modules/.bin/electron --expose-gc test/ci/bmp_route_assurance_performance.js",
+        "stdout": "route_assurance.log",
+        "exitCode": 0
+    }
+}

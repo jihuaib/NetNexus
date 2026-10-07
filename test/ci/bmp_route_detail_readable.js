@@ -5,6 +5,8 @@ const Module = require('node:module');
 const { transformSync } = require('esbuild');
 const BmpSession = require('../../electron/worker/bmp/bmpSession');
 const { parsePathAttributes } = require('../../electron/utils/bgp/bgpPacketParser');
+const { parseBgpLsNlri } = require('../../electron/utils/bgp/addressFamily/bgpLs');
+const { parseFlowSpecNlri } = require('../../electron/utils/bgp/addressFamily/flowSpec');
 const { builders } = require('../../scripts/mockBmpClient');
 const { pathAttribute, richAttributes, evpnRoute, bgpLsRoute, flowSpecRoute } = require('../fixtures/bmpRouteDetail');
 
@@ -16,7 +18,8 @@ helper._compile(
     transformSync(fs.readFileSync(filename, 'utf8'), { loader: 'js', format: 'cjs', target: 'node16' }).code,
     filename
 );
-const { buildReadableRouteDetailModel, formatReadableAsPath, formatReadableRouteIdentity } = helper.exports;
+const { buildReadableRouteDetailModel, buildRouteDetailModel, formatReadableAsPath, formatReadableRouteIdentity } =
+    helper.exports;
 const text = groups =>
     groups
         .map(group =>
@@ -59,6 +62,9 @@ const unknown = model.attributes.find(group => group.raw === 'deadbeef');
 assert.ok(unknown, 'unknown attribute retains its uninterpreted raw value');
 assert.ok(unknown.title.includes('99'));
 assert.equal(unknown.items.length, 0);
+assert.ok(!attributes.includes('展开原始'));
+assert.ok(!attributes.includes('原始编码'));
+assert.ok(buildRouteDetailModel(route).attributes.some(item => item.value === 'deadbeef'));
 assert.equal(JSON.stringify(route), original, 'presentation must not mutate the complete original route');
 
 for (const [value, expected] of [
@@ -187,6 +193,87 @@ for (const [record, expected] of nlriCases) {
     assert.ok(!nlri.includes('bgp-ls:Link:'));
     assert.equal(JSON.stringify(record), before);
 }
+
+// Parser fallback strings must not turn undecoded payloads into apparent semantic values.
+const flowNlri = parseFlowSpecNlri(Buffer.from('0563deadbeef', 'hex'), 0, 1).route;
+assert.equal(flowNlri.valid, false);
+const opaqueFlow = { afi: 1, safi: 133, ip: flowNlri.prefix, nlriDetail: flowNlri };
+const flowModel = buildReadableRouteDetailModel(opaqueFlow);
+assert.ok(!text(flowModel.nlri).includes('deadbeef'));
+assert.ok(!formatReadableRouteIdentity(opaqueFlow).summary.includes('deadbeef'));
+assert.ok(text(flowModel.nlri).includes('类型 99'));
+assert.ok(text(flowModel.overviewGroups).includes('Unknown FlowSpec component type: 99'));
+assert.equal(flowModel.nlri[0].raw, flowNlri.rawNlri);
+
+const lsTlv = (type, value) => Buffer.concat([builders.u16(type), builders.u16(value.length), value]);
+const lsBody = Buffer.concat([
+    Buffer.from([1]),
+    builders.u32(0),
+    builders.u32(0),
+    lsTlv(
+        256,
+        Buffer.concat([
+            lsTlv(512, builders.u32(65000)),
+            lsTlv(515, Buffer.from('010203040506', 'hex')),
+            lsTlv(900, Buffer.from('deadbeef', 'hex'))
+        ])
+    ),
+    lsTlv(512, Buffer.from('000001', 'hex'))
+]);
+const lsNlri = parseBgpLsNlri(Buffer.concat([builders.u16(1), builders.u16(lsBody.length), lsBody]), 0).route;
+const opaqueLs = { afi: 16388, safi: 71, nlriDetail: lsNlri };
+const lsModel = buildReadableRouteDetailModel(opaqueLs);
+assert.ok(text(lsModel.nlri).includes('65000'));
+assert.ok(text(lsModel.nlri).includes('010203040506'), 'valid hexadecimal IGP identifiers remain readable');
+assert.ok(text(lsModel.nlri).includes('类型 900'));
+assert.ok(!text(lsModel.nlri).includes('deadbeef'));
+assert.ok(!text(lsModel.nlri).includes('000001'));
+assert.ok(!formatReadableRouteIdentity(opaqueLs).summary.includes('deadbeef'));
+
+const sidHex = '20010db8000000000000000000000001';
+const partialSid = {
+    pathAttributes: [
+        {
+            typeCode: 40,
+            rawValueHex: 'deadbeef',
+            prefixSid: {
+                formatted: `SRv6 L3 ${sidHex}`,
+                errors: ['SID address was not decoded'],
+                srv6Services: [
+                    {
+                        serviceType: 'l3',
+                        sidInfos: [{ sidHex, endpointBehaviorName: 'End.DT6', sidStructure: { functionLength: 0 } }]
+                    }
+                ]
+            }
+        }
+    ]
+};
+const sidModel = buildReadableRouteDetailModel(partialSid);
+assert.ok(!text(sidModel.attributes).includes(sidHex));
+assert.ok(text(sidModel.attributes).includes('End.DT6'));
+assert.ok(sidModel.attributes[0].items.some(item => item.value === '0'));
+assert.ok(text(sidModel.overviewGroups).includes('SID address was not decoded'));
+const decodedSid = JSON.parse(JSON.stringify(partialSid));
+decodedSid.pathAttributes[0].prefixSid.srv6Services[0].sidInfos[0].sid = '2001:db8::1';
+assert.ok(text(buildReadableRouteDetailModel(decodedSid).attributes).includes('2001:db8::1'));
+
+const tlvRoute = {
+    routeTlvs: [
+        { type: 99, rawValueHex: 'deadbeef', value: { type: 'Buffer', data: [222, 173, 190, 239] } },
+        { type: 3, name: 'VRF/Table Name', value: 'deadbeef-vrf' },
+        { type: 4, decoded: { flags: 0, status: 0, knownFlag: false, error: 'Path status is truncated' } }
+    ],
+    source: { sysName: 'router', payload: { type: 'Buffer', data: [222, 173, 190, 239] } }
+};
+const tlvModel = buildReadableRouteDetailModel(tlvRoute);
+assert.equal(tlvModel.tlvs[0].items.length, 0, 'opaque Buffer values must not be displayed as parsed TLV content');
+assert.ok(tlvModel.tlvs[0].title.includes('99'));
+assert.ok(text(tlvModel.tlvs).includes('deadbeef-vrf'), 'decoded text remains even when it resembles a hex value');
+assert.ok(tlvModel.tlvs[2].items.some(item => item.label === '扩展 Flags' && item.value === '0'));
+assert.ok(tlvModel.tlvs[2].items.some(item => item.value === '否'));
+assert.ok(text(tlvModel.overviewGroups).includes('Path status is truncated'));
+assert.ok(!text(tlvModel.overviewGroups).includes('222'));
 
 for (const partial of [
     null,

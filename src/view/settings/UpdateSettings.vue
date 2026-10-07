@@ -36,6 +36,7 @@
             >
                 <template #actions>
                     <nn-space wrap>
+                        <nn-button @click="emit('open-changelog', currentVersion)">查看更新日志</nn-button>
                         <nn-button
                             type="primary"
                             :loading="isChecking"
@@ -102,13 +103,15 @@
     import { notify } from '../../utils/notify';
     import EventBus from '../../utils/eventBus';
     import { TOOLS_EVENT_PAGE_ID } from '../../const/toolsConst';
+    import { version as appVersion } from '../../../package.json';
 
     defineOptions({
         name: 'UpdateSettings'
     });
+    const emit = defineEmits(['open-changelog']);
 
     // 响应式数据
-    const currentVersion = ref('');
+    const currentVersion = ref(appVersion);
     const updateAvailable = ref(false);
     const updateDownloaded = ref(false);
     const isChecking = ref(false);

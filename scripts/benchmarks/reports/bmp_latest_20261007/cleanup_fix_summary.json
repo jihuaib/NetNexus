@@ -1,0 +1,157 @@
+{
+    "artifactFormatting": "Archived JSON copies use the repository Prettier configuration. Only whitespace and hash-tracking metadata changed; all measurement values are preserved. Artifact sha256 hashes refer to formatted repository copies, while originalSha256 hashes refer to unchanged original measurement files.",
+    "baseCommit": "5d273d2a15d119d7782d4bf7e13d86a65431a94e",
+    "codeState": "base commit plus working-tree detailed purge fix; not committed",
+    "backendSha256": "2121bedb4fd030231fe862fb21d3e4d9357bbbc0c7fbc15fcdd79a5aafcbcb50",
+    "runtime": {
+        "node": "16.17.1",
+        "v8": "10.8.168.25-electron.0",
+        "uv": "1.43.0",
+        "zlib": "1.2.12.1-motley",
+        "brotli": "1.0.9",
+        "ares": "1.18.1",
+        "modules": "110",
+        "nghttp2": "1.47.0",
+        "napi": "8",
+        "llhttp": "6.0.9",
+        "openssl": "1.1.1",
+        "cldr": "41.0",
+        "icu": "71.1",
+        "tz": "2022e",
+        "unicode": "14.0",
+        "electron": "22.3.27"
+    },
+    "implementation": [
+        "Scope filters and route filters are applied before the candidate limit, in the deletion transaction.",
+        "Select at most routeLimit+1 narrow physical keys; discard the sentinel without reading its details.",
+        "Regular selection uses the existing ordered scope/route unique index; exact prefix uses the identity prefix index and current point lookups.",
+        "Small eligible epoch buckets use existing scope/connection/epoch counts and index, without scanning the newer RIB.",
+        "Details are driven by the bounded temporary keys and physical path primary keys, retaining candidate key order without temporary sorting.",
+        "No schema version change, new persistent index, or disabling query statistics."
+    ],
+    "configuration": {
+        "routes": 1000000,
+        "roundsPerKind": 2,
+        "routeLimit": 20000,
+        "gcLimit": 50000,
+        "scope": "all-stale synthetic SQLite fixtures",
+        "load": "all benchmark cases run sequentially without competing benchmark loads"
+    },
+    "timing": "Store open/statistics and initial GC excluded. Includes deletion, full synchronous object GC, projections/deltas and the original full-GC adapter orphan checks in the last batch. Low frequency aggregate stage timing added identically to before and after.",
+    "comparison": [
+        {
+            "kind": "peer",
+            "fixedRounds": 2,
+            "statistic": "fixed=mean of two samples; original/historical=median of three samples; see paired Peer comparison below",
+            "detailedSamplesMs": [44170.61562502384, 45287.0958340168],
+            "detailedMeanMs": 44728.85572952032,
+            "detailSelectMeanMs": 14435.42855899036,
+            "compactSamplesMs": [6309.551041007042, 6372.2025409936905],
+            "compactMeanMs": 6340.876791000366,
+            "originalDetailedMedianMs": 52029.61379098892,
+            "historicalDetailedMedianMs": 45433.81650006771,
+            "originalCompactMedianMs": 6320.839958012104,
+            "historicalCompactMedianMs": 6375.678125023842,
+            "originalDetailedReductionPercent": 14.031928222256052
+        },
+        {
+            "kind": "loc-rib",
+            "fixedRounds": 2,
+            "statistic": "fixed=mean of two samples; original/historical=median of three samples; see paired Peer comparison below",
+            "detailedSamplesMs": [45606.99733299017, 45953.03887498379],
+            "detailedMeanMs": 45780.01810398698,
+            "detailSelectMeanMs": 14648.732353448868,
+            "compactSamplesMs": [6398.575207978487, 6362.421917021275],
+            "compactMeanMs": 6380.498562499881,
+            "originalDetailedMedianMs": 52296.43029099703,
+            "historicalDetailedMedianMs": 45661.56475007534,
+            "originalCompactMedianMs": 6408.06329202652,
+            "historicalCompactMedianMs": 6411.073083996773,
+            "originalDetailedReductionPercent": 12.460529620760497
+        }
+    ],
+    "sameSessionPeerComparison": {
+        "originalMeanMs": 50493.759207993746,
+        "fixedMeanMs": 44728.85572952032,
+        "reductionPercent": 11.417061373320713,
+        "note": "Same machine/runtime and exact seed, same profiling harness, two rounds each, run sequentially during this session. Before and after were not interleaved."
+    },
+    "selectionProbes": {
+        "prefix": {
+            "current": {
+                "samplesMs": [1.6600840091705322, 0.7726249992847443],
+                "meanMs": 1.2163545042276382
+            },
+            "fixed": {
+                "samplesMs": [1.8190840184688568, 1.1085000038146973],
+                "meanMs": 1.463792011141777
+            }
+        },
+        "epoch": {
+            "current": {
+                "samplesMs": [1.4727090001106262, 0.7671670019626617],
+                "meanMs": 1.119938001036644
+            },
+            "fixed": {
+                "samplesMs": [1.8002909719944, 1.0145829916000366],
+                "meanMs": 1.4074369817972183
+            }
+        }
+    },
+    "checks": [
+        "Eight targeted BMP regressions passed",
+        "Every million-route sample deleted exactly 1000000 rows in 50 batches",
+        "Remaining stale=0, GC candidates=0, identity/payload/attribute orphan=0",
+        "foreign_key_check empty",
+        "Query statistics remained populated",
+        "Fixed detailed execution plans have no temporary ORDER BY sorting",
+        "Benchmark Store source SHA256 matches the final working-tree source"
+    ],
+    "regressionCoverage": [
+        "cross-scope/partition order and shared identities",
+        "exact batch boundary and lookahead",
+        "source/owner/scope/last-connection intersections",
+        "AFI/SAFI and fallback partitions",
+        "prefix with and without prefix length",
+        "sparse epoch buckets and remaining budgets",
+        "complete route/delta projections and nullable attributes",
+        "full GC, transaction rollback and retry"
+    ],
+    "tests": [
+        "bmp_detailed_stale_purge",
+        "bmp_persistence_store",
+        "bmp_persistence_storage_regressions",
+        "bmp_persistence_stale_purge",
+        "bmp_persistence_partitions",
+        "bmp_persistence_query_statistics",
+        "bmp_manual_stale_purge",
+        "bmp_v4_parser"
+    ],
+    "limitations": "Synthetic SQLite Store timings exclude parser/writer IPC, TCP, renderer and final Route Assurance rebuild. Small millisecond probes are regression checks, not statistically significant speedup claims.",
+    "artifacts": [
+        {
+            "file": "cleanup_fix_peer.json",
+            "sha256": "667e930d898dbdda9896163f31853a17ab32695fdc33b7805fb30e86cb28a75b",
+            "originalSha256": "4e3d6a6c2e895d783f0c038e9938de3e39215ce9cce4d2958de710fd61cb9744",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-D0zp4g/results.json"
+        },
+        {
+            "file": "cleanup_fix_loc_rib.json",
+            "sha256": "1498f62548d7b44b804c594dfc1d39d847ae72ee4d0ea367a52d6f79081b40cd",
+            "originalSha256": "6f0de7ae0a6e19518b3a54069223c556f68927c2aefbbc65bea84bd9eccd17df",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-JWU6ra/results.json"
+        },
+        {
+            "file": "cleanup_fix_prefix.json",
+            "sha256": "012115d21a0651a9519df8d86622ccfb44731b5a5465daccc654c0d62ba278d9",
+            "originalSha256": "267f08debcea5763662b26a13e5a14601f098cc2b092d54fac57f6618ab6be57",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/prefix-probe-GSB6eW/results.json"
+        },
+        {
+            "file": "cleanup_fix_epoch.json",
+            "sha256": "f7e4d46f27116acfdd763dd651a5f1ad7461a98a87b308a9d6595d71d29a92fe",
+            "originalSha256": "06e4095b27d43a6822137691bf10c1a46e9b76f7e5668a1cb5d6d0b287af7a9b",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/epoch-probe-s4syoh/results.json"
+        }
+    ]
+}

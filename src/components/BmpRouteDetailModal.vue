@@ -14,156 +14,101 @@
             <nn-tabs v-else v-model:active-key="activeTabKey" size="small" class="route-detail-tabs">
                 <nn-tab-pane v-for="tab in readableTabs" :key="tab.key" :tab="tab.label">
                     <div v-if="open && activeTabKey === tab.key" class="route-detail-panel" :data-testid="tab.testId">
-                        <template v-if="activeTabKey === tab.key">
-                            <template v-if="tab.key === 'overview'">
-                                <div class="route-identity">
-                                    <span class="route-family">{{ familyText }}</span>
-                                    <h3>{{ prefixText }}</h3>
-                                    <p>{{ ownerText }}</p>
+                        <template v-if="tab.key === 'overview'">
+                            <div class="route-identity">
+                                <span class="route-family">{{ familyText }}</span>
+                                <h3>{{ prefixText }}</h3>
+                                <p>{{ ownerText }}</p>
+                            </div>
+                            <div class="summary-grid">
+                                <div class="summary-card">
+                                    <span class="summary-label">路由状态</span>
+                                    <nn-tag :color="routeStateColor">{{ routeStateText }}</nn-tag>
                                 </div>
-                                <div class="summary-grid">
-                                    <div class="summary-card">
-                                        <span class="summary-label">路由状态</span>
-                                        <nn-tag :color="routeStateColor">{{ routeStateText }}</nn-tag>
-                                    </div>
-                                    <div class="summary-card">
-                                        <span class="summary-label">解析状态</span>
-                                        <nn-tag :color="parseStatusColor">{{ parseStatusText }}</nn-tag>
-                                    </div>
-                                    <div class="summary-card">
-                                        <span class="summary-label">路径状态信息</span>
-                                        <nn-tag :color="hasPathMarking ? 'green' : 'orange'">
-                                            {{ hasPathMarking ? '设备上报' : '观测缺失' }}
-                                        </nn-tag>
-                                    </div>
-                                    <div class="summary-card">
-                                        <span class="summary-label">路由属性</span>
-                                        <strong>{{ readableModel.attributes.length }}</strong>
-                                    </div>
+                                <div class="summary-card">
+                                    <span class="summary-label">解析状态</span>
+                                    <nn-tag :color="parseStatusColor">{{ parseStatusText }}</nn-tag>
                                 </div>
-                                <section class="detail-section">
-                                    <div class="section-title">路由与来源</div>
-                                    <nn-descriptions :column="2" bordered size="small">
-                                        <nn-descriptions-item
-                                            v-for="item in overviewDetails"
-                                            :key="item.label"
-                                            :label="item.label"
-                                            :span="item.span || 1"
-                                        >
-                                            <code v-if="item.kind === 'path'" class="readable-code readable-path">
-                                                {{ item.value }}
-                                            </code>
-                                            <span v-else class="detail-value">{{ item.value }}</span>
-                                        </nn-descriptions-item>
-                                    </nn-descriptions>
-                                </section>
-                                <nn-alert
-                                    class="evidence-alert"
-                                    :type="hasPathMarking ? 'success' : 'warning'"
-                                    show-icon
-                                    :message="hasPathMarking ? 'Path Marking：设备上报' : 'Path Marking：观测缺失'"
-                                    :description="
-                                        hasPathMarking
-                                            ? '路径状态与原因来自设备上报的路由扩展信息。'
-                                            : '当前没有设备上报的路径状态，阶段关联及未选中原因只能作为推测。'
-                                    "
-                                />
-                            </template>
-
-                            <section
-                                v-for="section in tab.sections"
-                                :key="section.key"
-                                class="detail-section readable-section"
-                                :data-testid="section.testId"
-                            >
-                                <div v-if="section.title" class="section-heading">
-                                    <h3>{{ section.title }}</h3>
-                                    <span>{{ section.groups.length }} 项</span>
+                                <div class="summary-card">
+                                    <span class="summary-label">路径状态信息</span>
+                                    <nn-tag :color="hasPathMarking ? 'green' : 'orange'">
+                                        {{ hasPathMarking ? '设备上报' : '观测缺失' }}
+                                    </nn-tag>
                                 </div>
-                                <div v-if="section.groups.length" class="readable-grid">
-                                    <article
-                                        v-for="group in section.groups"
-                                        :key="group.key"
-                                        class="readable-card"
-                                        :class="{
-                                            'readable-card-wide':
-                                                group.tags?.length > 8 ||
-                                                group.items?.some(item => item.kind === 'path' || item.kind === 'list')
-                                        }"
-                                        :data-testid="section.cardTestId"
-                                        :data-group-key="group.key"
-                                    >
-                                        <div class="readable-card-heading">
-                                            <h4>{{ group.title }}</h4>
-                                            <p v-if="group.description">{{ group.description }}</p>
-                                        </div>
-                                        <nn-descriptions
-                                            v-if="group.items?.length"
-                                            :column="1"
-                                            size="small"
-                                            class="readable-descriptions"
-                                        >
-                                            <nn-descriptions-item
-                                                v-for="(item, index) in group.items"
-                                                :key="item.key || index"
-                                                :label="item.label"
-                                            >
-                                                <ul
-                                                    v-if="item.kind === 'list' && Array.isArray(item.value)"
-                                                    class="readable-list"
-                                                >
-                                                    <li v-for="(value, valueIndex) in item.value" :key="valueIndex">
-                                                        {{ value }}
-                                                    </li>
-                                                </ul>
-                                                <code
-                                                    v-else-if="item.kind === 'path' || item.kind === 'code'"
-                                                    class="readable-code"
-                                                    :class="{ 'readable-path': item.kind === 'path' }"
-                                                >
-                                                    {{ item.value }}
-                                                </code>
-                                                <span v-else class="detail-value">{{ item.value }}</span>
-                                            </nn-descriptions-item>
-                                        </nn-descriptions>
-                                        <div v-if="group.tags?.length" class="community-tags">
-                                            <nn-tag
-                                                v-for="(tag, index) in visibleTags(section.key, group)"
-                                                :key="index"
-                                            >
-                                                {{ tag }}
-                                            </nn-tag>
-                                            <nn-button
-                                                v-if="group.tags.length > 8"
-                                                type="link"
-                                                size="small"
-                                                class="tags-toggle"
-                                                :aria-expanded="isGroupExpanded(section.key, group.key)"
-                                                data-testid="bmp-route-detail-tags-toggle"
-                                                @click="toggleGroupTags(section.key, group.key)"
-                                            >
-                                                {{
-                                                    isGroupExpanded(section.key, group.key)
-                                                        ? '收起'
-                                                        : '展开全部（' + group.tags.length + '）'
-                                                }}
-                                            </nn-button>
-                                        </div>
-                                        <details
-                                            v-if="group.raw !== null && group.raw !== undefined"
-                                            class="raw-content"
-                                        >
-                                            <summary>查看原始内容</summary>
-                                            <code>{{ group.raw || '无属性值' }}</code>
-                                        </details>
-                                    </article>
+                                <div class="summary-card">
+                                    <span class="summary-label">路由属性</span>
+                                    <strong>{{ readableModel.attributes.length }}</strong>
                                 </div>
-                                <nn-empty v-else-if="section.emptyText" :description="section.emptyText" />
+                            </div>
+                            <section class="detail-section">
+                                <h3 class="section-title">路由与来源</h3>
+                                <nn-table
+                                    :columns="overviewColumns"
+                                    :data-source="overviewDetails"
+                                    :pagination="false"
+                                    row-key="label"
+                                    bordered
+                                    size="small"
+                                    class="detail-table overview-table"
+                                >
+                                    <template #bodyCell="{ column, record: item }">
+                                        <span v-if="column.key === 'value'" class="detail-value">{{ item.value }}</span>
+                                    </template>
+                                </nn-table>
                             </section>
+                            <nn-alert
+                                class="evidence-alert"
+                                :type="hasPathMarking ? 'success' : 'warning'"
+                                show-icon
+                                :message="hasPathMarking ? 'Path Marking：设备上报' : 'Path Marking：观测缺失'"
+                                :description="
+                                    hasPathMarking
+                                        ? '路径状态与原因来自设备上报的路由扩展信息。'
+                                        : '当前没有设备上报的路径状态，阶段关联及未选中原因只能作为推测。'
+                                "
+                            />
                         </template>
+
+                        <section
+                            v-for="section in tab.sections"
+                            :key="section.key"
+                            class="detail-section"
+                            :data-testid="section.testId"
+                        >
+                            <h3 v-if="section.title" class="section-title">{{ section.title }}</h3>
+                            <nn-table
+                                v-if="section.rows.length"
+                                :columns="tab.key === 'attributes' ? attributeColumns : groupColumns"
+                                :data-source="section.rows"
+                                :pagination="false"
+                                :row-class-name="item => (item.groupStart ? 'detail-group-start' : '')"
+                                row-key="key"
+                                bordered
+                                size="small"
+                                class="detail-table"
+                            >
+                                <template #bodyCell="{ column, record: item }">
+                                    <template v-if="column.key === 'value'">
+                                        <div v-if="item.kind === 'tags'" class="community-tags">
+                                            <nn-tag v-for="(tag, index) in item.value" :key="index">{{ tag }}</nn-tag>
+                                        </div>
+                                        <ul v-else-if="item.kind === 'list'" class="readable-list">
+                                            <li v-for="(value, index) in item.value" :key="index">{{ value }}</li>
+                                        </ul>
+                                        <code
+                                            v-else-if="item.kind === 'path' || item.kind === 'code'"
+                                            class="readable-code"
+                                        >
+                                            {{ item.value }}
+                                        </code>
+                                        <span v-else class="detail-value">{{ item.value }}</span>
+                                    </template>
+                                </template>
+                            </nn-table>
+                            <nn-empty v-else-if="section.emptyText" :description="section.emptyText" />
+                        </section>
                     </div>
                 </nn-tab-pane>
-
                 <nn-tab-pane key="advanced" tab="原始数据">
                     <div class="route-detail-panel">
                         <nn-json-viewer
@@ -187,8 +132,6 @@
     import { getRouteParseStatusColor, getRouteParseStatusText } from '../utils/bmp/routeParseStatus';
     import {
         buildReadableRouteDetailModel,
-        formatReadableAsPath,
-        formatReadableNextHop,
         formatReadableRouteIdentity,
         formatRouteDetailValue,
         getRouteDetailRecord
@@ -203,7 +146,6 @@
     });
     const emit = defineEmits(['update:open']);
     const activeTabKey = ref('overview');
-    const expandedTagGroups = ref(new Set());
     const readableModel = computed(() => buildReadableRouteDetailModel(props.route));
     const record = computed(() => getRouteDetailRecord(props.route));
     const displayValue = value =>
@@ -266,32 +208,43 @@
             owner.instanceRd;
         return { owner, client, stage: props.stageLabel || stage || displayValue(route.scopeKind), vrf };
     });
+    const overviewColumns = [
+        { title: '信息', key: 'label', dataIndex: 'label', width: '26%' },
+        { title: '内容', key: 'value', dataIndex: 'value' }
+    ];
+    const groupColumns = [
+        { title: '分组', key: 'group', dataIndex: 'group', width: '26%' },
+        { title: '字段', key: 'label', dataIndex: 'label', width: '24%' },
+        { title: '解析结果', key: 'value', dataIndex: 'value' }
+    ];
+    const attributeColumns = [{ ...groupColumns[0], title: '属性' }, ...groupColumns.slice(1)];
     const ownerText = computed(() => {
         const { owner, client } = routeContext.value;
         const address = owner.sessionIp ?? owner.instanceIp ?? owner.ip;
         return [formatBmpClientLabel(client), address].filter(value => value && value !== '-').join(' · ');
     });
     const overviewDetails = computed(() => {
-        const route = record.value;
         const { owner, client, stage, vrf } = routeContext.value;
         return [
             { label: 'RIB 阶段', value: stage },
             { label: 'VRF / RD', value: displayValue(vrf) },
             { label: 'BMP Client', value: formatBmpClientLabel(client) },
             { label: 'Peer / 实例地址', value: displayValue(owner.sessionIp ?? owner.instanceIp ?? owner.ip) },
-            { label: 'Peer / 实例 AS', value: displayValue(owner.sessionAs ?? owner.instanceAs ?? owner.as) },
-            { label: '下一跳', value: formatReadableNextHop(route.nextHop) || '-' },
-            { label: '本地优先级', value: displayValue(route.localPref) },
-            { label: 'MED', value: displayValue(route.med) },
-            {
-                label: 'AS 路径（生效）',
-                value:
-                    route.asPath === null || route.asPath === undefined ? '未上报' : formatReadableAsPath(route.asPath),
-                kind: 'path',
-                span: 2
-            }
+            { label: 'Peer / 实例 AS', value: displayValue(owner.sessionAs ?? owner.instanceAs ?? owner.as) }
         ];
     });
+    const buildGroupRows = groups =>
+        groups.flatMap(group => {
+            const items = [...(group.items || [])];
+            if (group.tags?.length) items.push({ label: 'Community', value: group.tags, kind: 'tags' });
+            if (!items.length) items.push({ label: '解析状态', value: '无可读解析结果' });
+            return items.map((item, index) => ({
+                ...item,
+                key: `${group.key}-${index}`,
+                group: index === 0 ? group.title : '',
+                groupStart: index === 0
+            }));
+        });
     const readableTabs = computed(() => [
         {
             key: 'overview',
@@ -300,8 +253,8 @@
             sections: [
                 {
                     key: 'overview',
-                    groups: readableModel.value.overviewGroups,
-                    cardTestId: 'bmp-route-detail-overview-card'
+                    title: '观测信息',
+                    rows: buildGroupRows(readableModel.value.overviewGroups)
                 }
             ]
         },
@@ -313,9 +266,8 @@
                 {
                     key: 'attributes',
                     title: '路由携带的 BGP 属性',
-                    groups: readableModel.value.attributes,
-                    emptyText: '暂无 BGP 路径属性',
-                    cardTestId: 'bmp-route-detail-attribute-card'
+                    rows: buildGroupRows(readableModel.value.attributes),
+                    emptyText: '暂无 BGP 路径属性'
                 }
             ]
         },
@@ -327,31 +279,19 @@
                 {
                     key: 'nlri',
                     title: '路由内容（NLRI）',
-                    groups: readableModel.value.nlri,
-                    emptyText: '暂无 NLRI 明细',
-                    cardTestId: 'bmp-route-detail-nlri-card'
+                    rows: buildGroupRows(readableModel.value.nlri),
+                    emptyText: '暂无 NLRI 明细'
                 },
                 {
                     key: 'tlvs',
                     title: '设备上报的路由扩展',
-                    groups: readableModel.value.tlvs,
+                    rows: buildGroupRows(readableModel.value.tlvs),
                     emptyText: '暂无路由扩展',
-                    testId: 'bmp-route-detail-tlvs',
-                    cardTestId: 'bmp-route-detail-tlv-card'
+                    testId: 'bmp-route-detail-tlvs'
                 }
             ]
         }
     ]);
-    const tagGroupKey = (section, key) => section + ':' + key;
-    const isGroupExpanded = (section, key) => expandedTagGroups.value.has(tagGroupKey(section, key));
-    const visibleTags = (section, group) => (isGroupExpanded(section, group.key) ? group.tags : group.tags.slice(0, 8));
-    const toggleGroupTags = (section, key) => {
-        const groups = new Set(expandedTagGroups.value);
-        const groupKey = tagGroupKey(section, key);
-        if (groups.has(groupKey)) groups.delete(groupKey);
-        else groups.add(groupKey);
-        expandedTagGroups.value = groups;
-    };
     const close = () => emit('update:open', false);
     const handleOpenChange = value => emit('update:open', value);
     watch(
@@ -359,7 +299,6 @@
         value => {
             if (value) {
                 activeTabKey.value = 'overview';
-                expandedTagGroups.value = new Set();
             }
         }
     );
@@ -394,7 +333,7 @@
     }
 
     .route-detail-tabs :deep(.nn-tabs-nav) {
-        margin-bottom: 14px;
+        margin-bottom: 12px;
     }
 
     .route-detail-tabs :deep(.nn-tabs-content-holder) {
@@ -478,88 +417,36 @@
         margin-top: 18px;
     }
 
-    .section-title,
-    .section-heading h3 {
-        margin: 0 0 8px;
-        color: var(--nn-color-text-strong);
-        font-size: 13px;
-        font-weight: 650;
-    }
-
-    .section-heading {
-        display: flex;
-        align-items: baseline;
-        justify-content: space-between;
-        gap: 12px;
-        margin-bottom: 12px;
-    }
-
-    .section-heading h3 {
-        margin-bottom: 0;
-        font-size: 14px;
-    }
-
-    .section-heading span {
-        color: var(--nn-color-text-muted);
-        font-size: 12px;
-    }
-
     .evidence-alert {
         margin-top: 16px;
     }
 
-    .readable-section:first-child {
-        margin-top: 2px;
-    }
-
-    .readable-grid {
-        display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
-        grid-auto-flow: dense;
-        align-items: start;
-        gap: 12px;
-    }
-
-    .readable-card {
-        min-width: 0;
-        padding: 14px 16px;
-        border: 1px solid var(--nn-color-border-light);
-        border-radius: 8px;
-        background: var(--nn-color-bg-muted);
-    }
-
-    .readable-card-wide {
-        grid-column: 1 / -1;
-    }
-
-    .readable-card-heading h4 {
-        margin: 0;
+    .section-title {
+        margin: 0 0 8px;
         color: var(--nn-color-text-strong);
-        font-size: 14px;
-        line-height: 1.5;
-        font-weight: 650;
+        font-size: 13px;
+        font-weight: 600;
     }
 
-    .readable-card-heading p {
-        margin: 4px 0 0;
-        color: var(--nn-color-text-secondary);
+    .detail-table :deep(table) {
+        width: 100%;
+        table-layout: fixed;
+    }
+
+    .detail-table :deep(.nn-table-cell) {
+        padding: 7px 10px;
         font-size: 12px;
         line-height: 1.6;
+        vertical-align: top;
+        overflow-wrap: anywhere;
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: clip !important;
     }
 
-    .readable-descriptions {
-        margin-top: 12px;
-    }
-
-    .readable-descriptions :deep(.nn-descriptions-item-label) {
-        width: 118px;
-        color: var(--nn-color-text-secondary);
-        font-size: 12px;
-    }
-
-    .readable-descriptions :deep(.nn-descriptions-item-content) {
+    .detail-table :deep(.detail-group-start > .nn-table-cell:first-child) {
         color: var(--nn-color-text-strong);
-        font-size: 12px;
+        font-weight: 500;
     }
 
     .detail-value,
@@ -570,19 +457,12 @@
 
     .readable-code {
         font-family: var(--nn-font-family-monospace, Consolas, monospace);
-        line-height: 1.8;
-    }
-
-    .readable-path {
-        display: block;
-        font-size: 14px;
-        font-weight: 500;
+        font-size: inherit;
     }
 
     .readable-list {
         margin: 0;
         padding-left: 16px;
-        line-height: 1.8;
         overflow-wrap: anywhere;
     }
 
@@ -590,58 +470,23 @@
         display: flex;
         flex-wrap: wrap;
         align-items: center;
-        gap: 7px;
-        margin-top: 12px;
+        gap: 4px;
     }
 
-    .community-tags :deep(.nn-tag) {
+    .detail-table :deep(.nn-tag) {
         margin: 0;
         max-width: 100%;
-        padding: 3px 8px;
-        font-family: var(--nn-font-family-monospace, Consolas, monospace);
         font-size: 12px;
         overflow-wrap: anywhere;
         white-space: normal;
     }
 
-    .tags-toggle {
-        padding: 0 2px;
+    .community-tags :deep(.nn-tag) {
+        font-family: var(--nn-font-family-monospace, Consolas, monospace);
     }
-
-    .raw-content {
-        margin-top: 12px;
-        padding-top: 10px;
-        border-top: 1px dashed var(--nn-color-border-light);
-    }
-
-    .raw-content summary {
-        color: var(--nn-color-text-muted);
-        font-size: 11px;
-        cursor: pointer;
-    }
-
-    .raw-content code {
-        display: block;
-        max-height: 180px;
-        overflow: auto;
-        margin-top: 8px;
-        padding: 10px;
-        border-radius: 5px;
-        color: var(--nn-color-text-secondary);
-        background: var(--nn-color-bg-muted);
-        font-size: 11px;
-        line-height: 1.7;
-        overflow-wrap: anywhere;
-        white-space: pre-wrap;
-    }
-
     @media (max-width: 720px) {
         .summary-grid {
             grid-template-columns: repeat(2, minmax(110px, 1fr));
-        }
-
-        .readable-grid {
-            grid-template-columns: minmax(0, 1fr);
         }
     }
 </style>

@@ -1275,6 +1275,8 @@ Route Assurance 开启时，手动批量删除使投影失效，清理完成后�
 
 这条路径不修改 schema，也不执行 `VACUUM`；删除释放的 SQLite 页可被后续写入复用，数据库文件不保证立即变小。带完整路由详情的清理仍用于需要逐路由删除增量的调用。
 
+详细清理在同一事务内先筛选 scope，再通过现有索引选取最多 `routeLimit + 1` 个窄候选键，放入 `temp.bmp_detailed_purge_candidates`。通常沿 `(scope_pk, route_pk)` 唯一索引有序选取；精确前缀由 identity 的前缀索引驱动 current 点查，少量旧 epoch 则通过计数桶和 `scope_epoch` 索引取键，避免扫描范围内大量不匹配路径。所有前缀、epoch、连接和范围条件都在候选边界前生效；额外一条只用于判断 `hasMore`。随后由候选键驱动物理路径主键查找，仅为实际删除的路由读取详情并构建 `routes/deltas`。跨 scope 保持原来的 `scope_pk, route_pk` 顺序，全部详情读取完成后才删除和回收共享对象。这个边界避免优化器统计改变连接顺序时，每批重新展开和排序全部剩余路由；Writer 的统计刷新和 Reader 的统计感知仍然保留。
+
 性能对比脚本：
 
 ```sh

@@ -3,6 +3,7 @@ const path = require('path');
 const childProcess = require('child_process');
 const verifyLibyangBeforePack = require('./verify-libyang-runtime');
 const { PROJECT_ROOT, normalizeArch, normalizePlatform } = require('./libyang-runtime-config');
+const { loadReleaseNotes } = require('./generate-release-notes');
 
 const ELF_MACHINE_BY_ARCH = Object.freeze({
     x64: 62,
@@ -128,7 +129,56 @@ function verifyTcpAuthHelper(options = {}, dependencies = {}) {
     };
 }
 
+function configureReleaseNotes(context = {}, dependencies = {}) {
+    const packager = context.packager;
+    const env = dependencies.env || process.env;
+    const projectRoot = packager?.projectDir || PROJECT_ROOT;
+    const ciTag =
+        env.TRAVIS_TAG ||
+        env.APPVEYOR_REPO_TAG_NAME ||
+        env.CIRCLE_TAG ||
+        env.BITRISE_GIT_TAG ||
+        env.CI_BUILD_TAG ||
+        env.BITBUCKET_TAG ||
+        (env.GITHUB_REF_TYPE === 'tag' ? env.GITHUB_REF_NAME : undefined);
+    const notesLoader = dependencies.loadReleaseNotes || loadReleaseNotes;
+    const release = notesLoader({ projectRoot, tag: env.RELEASE_TAG || ciTag || undefined });
+    if (packager?.appInfo?.version && packager.appInfo.version !== release.version) {
+        throw new Error(
+            `Packaged version ${packager.appInfo.version} does not match release notes version ${release.version}`
+        );
+    }
+
+    const options = packager?.packagerOptions || packager?.info?.options || packager?.options || {};
+    const policy = options.publish;
+    if (policy !== undefined && !['always', 'onTag', 'onTagOrDraft', 'never'].includes(policy)) {
+        throw new Error('Invalid electron-builder publish policy; use --publish never for packaging');
+    }
+    const directoryOnly = Array.isArray(context.targets) && context.targets.every(target => target.name === 'dir');
+    const explicitPublish = policy === 'always' || policy === 'onTagOrDraft' || (policy === 'onTag' && ciTag);
+    const inferredPublish =
+        policy === undefined && (env.npm_lifecycle_event === 'release' || ciTag || (env.CI && env.CI !== 'false'));
+    if (!directoryOnly && policy !== 'never' && (explicitPublish || inferredPublish)) {
+        throw new Error(
+            'Direct electron-builder publishing cannot preserve the application release notes. ' +
+                'Build with --publish never and publish with npm run release or the release workflow.'
+        );
+    }
+    if (packager) {
+        if (!packager.config) packager.config = {};
+        packager.config.releaseInfo = { ...packager.config.releaseInfo, releaseNotes: release.markdown };
+        if (packager.platformSpecificBuildOptions?.releaseInfo) {
+            packager.platformSpecificBuildOptions.releaseInfo = {
+                ...packager.platformSpecificBuildOptions.releaseInfo,
+                releaseNotes: release.markdown
+            };
+        }
+    }
+    return release;
+}
+
 async function beforePack(context = {}, dependencies = {}) {
+    configureReleaseNotes(context, dependencies);
     const libyangVerifier = dependencies.verifyLibyangBeforePack || verifyLibyangBeforePack;
     await libyangVerifier(context, dependencies.libyangDependencies || {});
 
@@ -161,3 +211,4 @@ module.exports = beforePack;
 module.exports.ELF_MACHINE_BY_ARCH = ELF_MACHINE_BY_ARCH;
 module.exports.readElfHeader = readElfHeader;
 module.exports.verifyTcpAuthHelper = verifyTcpAuthHelper;
+module.exports.configureReleaseNotes = configureReleaseNotes;

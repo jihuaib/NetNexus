@@ -1,0 +1,408 @@
+{
+    "directory": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-dqmjTI",
+    "seedPath": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-dqmjTI/seed.sqlite3",
+    "query": {
+        "scopeId": "327a457f058c5b0f5dd26b93070c64a56dd912ffa6e4d2fb38abeff5ee95bc1d",
+        "sourceId": "bd5e38b57c4afc518d9dd00b5be81f72a22ab506b36479de1e89bb4c23dd3010",
+        "stale": 1000000
+    },
+    "variants": ["full-analyze"],
+    "routes": 1000000,
+    "rounds": 1,
+    "kind": "peer",
+    "runtime": {
+        "node": "16.17.1",
+        "v8": "10.8.168.25-electron.0",
+        "uv": "1.43.0",
+        "zlib": "1.2.12.1-motley",
+        "brotli": "1.0.9",
+        "ares": "1.18.1",
+        "modules": "110",
+        "nghttp2": "1.47.0",
+        "napi": "8",
+        "llhttp": "6.0.9",
+        "openssl": "1.1.1",
+        "cldr": "41.0",
+        "icu": "71.1",
+        "tz": "2022e",
+        "unicode": "14.0",
+        "electron": "22.3.27"
+    },
+    "results": [
+        {
+            "variant": "full-analyze",
+            "round": 0,
+            "kind": "peer",
+            "routes": 1000000,
+            "mode": "detailed",
+            "milliseconds": 50322.04062500596,
+            "openMs": 485.5950420200825,
+            "deleted": 1000000,
+            "batchTimes": [
+                1089.4391250014305, 1074.8218339979649, 1078.0959999859333, 1088.9524579942226, 1072.1800419986248,
+                1066.7151249945164, 1091.222540974617, 1069.4402920007706, 1073.4608329832554, 1074.1545000076294,
+                1059.9138750135899, 1066.1502499878407, 1051.03241699934, 1056.7338750064373, 1041.482875019312,
+                1036.3510829806328, 1045.1433340013027, 1029.8229160010815, 1031.7354999780655, 1028.1412499845028,
+                1032.8466250002384, 1019.4904170036316, 1015.7748750150204, 1018.1052919924259, 999.2895829975605,
+                1219.3247500061989, 1002.4461250007153, 1017.2032089829445, 993.2154159843922, 985.3834999799728,
+                979.6562079787254, 976.0192500054836, 979.5848749876022, 970.3682080209255, 961.2089999914169,
+                966.2989999949932, 955.3222080171108, 947.5037499964237, 950.7867089807987, 934.1688749790192,
+                943.4000000059605, 931.2347080111504, 922.8795419931412, 929.2457920014858, 923.7815420031548,
+                908.1073330044746, 908.7177909910679, 907.1777079999447, 905.5314169824123, 892.6356250047684
+            ],
+            "selectMs": 20476.627957820892,
+            "mapMs": 18072.481959968805,
+            "gcMs": 2970.804330945015,
+            "selectCalls": 50,
+            "plans": [
+                {
+                    "id": 14,
+                    "parent": 0,
+                    "notused": 14,
+                    "detail": "SCAN s"
+                },
+                {
+                    "id": 18,
+                    "parent": 0,
+                    "notused": 14,
+                    "detail": "SCAN conn"
+                },
+                {
+                    "id": 20,
+                    "parent": 0,
+                    "notused": 14,
+                    "detail": "SCAN payload"
+                },
+                {
+                    "id": 22,
+                    "parent": 0,
+                    "notused": 214,
+                    "detail": "SEARCH current USING INDEX idx_bmp_current_routes_peer_ipv4_unicast_scope_epoch (scope_pk=? AND connection_pk=?)"
+                },
+                {
+                    "id": 47,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH identity USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 50,
+                    "parent": 0,
+                    "notused": 14,
+                    "detail": "SCAN src"
+                },
+                {
+                    "id": 57,
+                    "parent": 0,
+                    "notused": 10,
+                    "detail": "SCAN last_conn USING COVERING INDEX sqlite_autoindex_bmp_connections_1 LEFT-JOIN"
+                },
+                {
+                    "id": 64,
+                    "parent": 0,
+                    "notused": 14,
+                    "detail": "SCAN route_attr LEFT-JOIN"
+                },
+                {
+                    "id": 164,
+                    "parent": 0,
+                    "notused": 0,
+                    "detail": "USE TEMP B-TREE FOR ORDER BY"
+                }
+            ],
+            "statistics": [
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "idx_bmp_connections_source_time",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "sqlite_autoindex_bmp_connections_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_attr",
+                    "stat": "1000000 1000000"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_payload",
+                    "stat": "1000000 1000000"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_route",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_scope_epoch",
+                    "stat": "1000000 1000000 1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_scope_first_seen",
+                    "stat": "1000000 1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "sqlite_autoindex_bmp_current_routes_peer_ipv4_unicast_1",
+                    "stat": "1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "bmp_ingest_batches",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "idx_bmp_ingest_batches_created",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_cleanup_pending",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_refresh_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_source_af",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_stale_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_state",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_2",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_attributes",
+                    "idx": "sqlite_autoindex_bmp_route_attributes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_legacy",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_prefix",
+                    "stat": "1000000 1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "sqlite_autoindex_bmp_route_identities_1",
+                    "stat": "1000000 1"
+                },
+                {
+                    "tbl": "bmp_route_payloads",
+                    "idx": "sqlite_autoindex_bmp_route_payloads_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "bmp_scope_route_counts",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "idx_bmp_scope_route_counts_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_sources",
+                    "idx": "sqlite_autoindex_bmp_sources_1",
+                    "stat": "1 1"
+                }
+            ],
+            "otherMs": 8802.126376271248
+        },
+        {
+            "variant": "full-analyze",
+            "round": 0,
+            "kind": "peer",
+            "routes": 1000000,
+            "mode": "compact",
+            "milliseconds": 6226.845541000366,
+            "openMs": 493.86945900321007,
+            "deleted": 1000000,
+            "batchTimes": [
+                173.1813330054283, 131.86941599845886, 134.6815829873085, 128.97754201292992, 129.60074999928474,
+                128.36066699028015, 123.14104202389717, 122.75629100203514, 122.00075000524521, 119.37370899319649,
+                120.90695902705193, 122.52124997973442, 118.97699999809265, 119.09116700291634, 119.92633301019669,
+                120.24704200029373, 118.32433399558067, 119.08079099655151, 119.88299998641014, 118.23766699433327,
+                120.07470801472664, 119.61641600728035, 119.75441700220108, 121.4309169948101, 119.6843750178814,
+                334.40654200315475, 115.44133299589157, 116.9613330066204, 117.07287499308586, 117.02370899915695,
+                117.28458300232887, 115.45770797133446, 116.57670798897743, 116.78787499666214, 117.5077919960022,
+                115.34049999713898, 117.063874989748, 116.80645799636841, 114.99733299016953, 116.61320799589157,
+                115.72762501239777, 116.51449999213219, 114.42387500405312, 115.3449999988079, 115.5244579911232,
+                121.44404098391533, 116.04995802044868, 113.8014170229435, 112.03866702318192, 108.69679200649261
+            ],
+            "selectMs": 0,
+            "mapMs": 0,
+            "gcMs": 2979.805248051882,
+            "selectCalls": 0,
+            "plans": [],
+            "statistics": [
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "idx_bmp_connections_source_time",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_connections",
+                    "idx": "sqlite_autoindex_bmp_connections_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_attr",
+                    "stat": "1000000 1000000"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_payload",
+                    "stat": "1000000 1000000"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_route",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_scope_epoch",
+                    "stat": "1000000 1000000 1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "idx_bmp_current_routes_peer_ipv4_unicast_scope_first_seen",
+                    "stat": "1000000 1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_current_routes_peer_ipv4_unicast",
+                    "idx": "sqlite_autoindex_bmp_current_routes_peer_ipv4_unicast_1",
+                    "stat": "1000000 1000000 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "bmp_ingest_batches",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_ingest_batches",
+                    "idx": "idx_bmp_ingest_batches_created",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_cleanup_pending",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_refresh_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_source_af",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_stale_since",
+                    "stat": "1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "idx_bmp_scopes_state",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_rib_scopes",
+                    "idx": "sqlite_autoindex_bmp_rib_scopes_2",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_attributes",
+                    "idx": "sqlite_autoindex_bmp_route_attributes_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_legacy",
+                    "stat": "1000000 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "idx_bmp_route_identities_prefix",
+                    "stat": "1000000 1 1 1"
+                },
+                {
+                    "tbl": "bmp_route_identities",
+                    "idx": "sqlite_autoindex_bmp_route_identities_1",
+                    "stat": "1000000 1"
+                },
+                {
+                    "tbl": "bmp_route_payloads",
+                    "idx": "sqlite_autoindex_bmp_route_payloads_1",
+                    "stat": "1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "bmp_scope_route_counts",
+                    "stat": "1 1 1 1 1"
+                },
+                {
+                    "tbl": "bmp_scope_route_counts",
+                    "idx": "idx_bmp_scope_route_counts_connection",
+                    "stat": "1 1 1"
+                },
+                {
+                    "tbl": "bmp_sources",
+                    "idx": "sqlite_autoindex_bmp_sources_1",
+                    "stat": "1 1"
+                }
+            ],
+            "otherMs": 3247.0402929484844
+        }
+    ]
+}

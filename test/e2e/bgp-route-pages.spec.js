@@ -74,7 +74,9 @@ async function addIpv4Attribute(page, label, forceAdd = false) {
     const menu = page.getByTestId(`${ipv4TestPrefix(page)}-${section === 'nlri' ? 'nlri' : 'attribute'}-context-menu`);
     await expect(menu).toBeVisible();
     await page.getByTestId(`${ipv4TestPrefix(page)}-add-attribute-button`).click();
-    await page.getByTestId(`${ipv4TestPrefix(page)}-add-attribute-${type}`).click();
+    const add = page.getByTestId(`${ipv4TestPrefix(page)}-add-attribute-${type}`);
+    await expect(add).toBeVisible();
+    await add.click({ force: true });
     await expect(menu).toHaveCount(0);
 }
 

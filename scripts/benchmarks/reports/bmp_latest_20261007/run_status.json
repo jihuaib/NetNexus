@@ -1,0 +1,13 @@
+{
+    "sourceCommit": "5d273d2a15d119d7782d4bf7e13d86a65431a94e",
+    "exitCodes": {
+        "ingest": 0,
+        "staleFullGc": 0,
+        "routeAssurance": 0
+    },
+    "runtimeProbe": {
+        "sqlite": "3.49.2",
+        "electron": "22.3.27",
+        "node": "16.17.1"
+    }
+}

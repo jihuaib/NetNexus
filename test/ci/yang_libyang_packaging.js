@@ -1421,6 +1421,8 @@ async function testPackagingBeforePackHook() {
             packager: { projectDir: '/fixture/project' }
         },
         {
+            env: {},
+            loadReleaseNotes: () => ({ version: 'fixture', markdown: 'Fixture release notes\n' }),
             async verifyLibyangBeforePack() {
                 calls.push('libyang');
             },
@@ -1447,6 +1449,8 @@ async function testPackagingBeforePackHook() {
     await packagingBeforePack(
         { electronPlatformName: 'darwin', arch: Arch.arm64 },
         {
+            env: {},
+            loadReleaseNotes: () => ({ version: 'fixture', markdown: 'Fixture release notes\n' }),
             async verifyLibyangBeforePack() {
                 calls.push('libyang');
             },

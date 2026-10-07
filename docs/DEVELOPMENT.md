@@ -327,6 +327,25 @@ npm run frr:bmp:lab -- stop
 
 `status` 和 `stop` 只匹配当前工作区专属的 Docker label，不会清理自动 E2E 或其他 FRR 容器。
 
+## 更新日志维护
+
+应用内更新日志与 GitHub Release 说明共用 `src/data/releaseNotes.json`，按版本号维护条目，并随渲染层打包。修改根 `package.json` 的版本号时，同步新增对应版本的中文更新说明，保留已有版本条目。每个条目包含 `summary` 和 `sections`；`sections` 的 `title` 使用 BGP、BMP、CLI、gRPC、设置等模块名称，`items` 列出该模块的变化。
+
+发布前校验并预览当前版本日志，或生成指定标签的 Markdown 文件：
+
+```bash
+npm run release:notes
+node scripts/generate-release-notes.js --tag v5.0.5 --output /tmp/netnexus-release-notes.md
+```
+
+打包也会校验当前版本日志，并将生成的内容写入更新元数据。缺少当前版本条目或日志格式不合法时，打包和发布会停止；发布标签还必须与根 `package.json` 版本匹配。
+
+GitHub 发布统一通过 `scripts/release.js` 或 GitHub Release workflow 执行：先以 `--publish never` 构建，再创建或更新草稿、写入生成的说明、回读验证后发布。已有草稿的说明会同步更新。直接使用 electron-builder 的发布策略会被拒绝；普通本地打包仍可使用原有命令。
+
+本地发布到 GitHub 前安装 [GitHub CLI](https://cli.github.com/) 并设置 `GH_TOKEN`；发布脚本会检查 CLI 和认证状态。未设置 `GH_TOKEN` 时，脚本跳过 GitHub 发布。修正源数据后重新执行发布，保证应用内日志和 GitHub 发布说明一致。
+
+每个版本首次启动后会在本机记录已展示状态，后续可通过“设置 → 更新 → 查看更新日志”手动查看。未匹配到当前版本时，界面会显示缺少详细日志的提示及 GitHub Releases 入口。
+
 ## 项目结构
 
 ```text

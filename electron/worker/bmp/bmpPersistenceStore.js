@@ -299,9 +299,18 @@ function sha256Buffer(value) {
         .digest();
 }
 
-function buildExpandedPartitionSelect(partition) {
-    return `SELECT current.partition_id, current.path_pk, current.scope_pk,
-                   current.route_pk AS route_pk, identity.route_id,
+function buildExpandedPartitionSelect(partition, options = {}) {
+    const candidates = options.candidates === true;
+    const fromSql = candidates
+        ? `temp.bmp_detailed_purge_candidates candidate
+              CROSS JOIN ${partition.quotedTableName} current
+                 ON current.path_pk = candidate.path_pk
+                AND current.scope_pk = candidate.scope_pk AND current.route_pk = candidate.route_pk`
+        : `${partition.quotedTableName} current`;
+    const join = candidates ? 'CROSS JOIN' : 'JOIN';
+    const keySource = candidates ? 'candidate' : 'current';
+    return `SELECT current.partition_id, current.path_pk, ${keySource}.scope_pk AS scope_pk,
+                   ${keySource}.route_pk AS route_pk, identity.route_id,
                    identity.route_key_version,
                    identity.legacy_route_key, identity.afi, identity.safi,
                    identity.path_id, identity.rd, identity.prefix, identity.prefix_length,
@@ -310,9 +319,10 @@ function buildExpandedPartitionSelect(partition) {
                    current.attr_pk, current.connection_pk, current.rib_epoch,
                    current.explicit_state, current.first_seen_ms, current.last_seen_ms,
                    current.source_timestamp_ms, current.last_sequence
-              FROM ${partition.quotedTableName} current
-              JOIN bmp_route_identities identity ON identity.route_pk = current.route_pk
-              JOIN bmp_route_payloads payload ON payload.payload_id = current.payload_id`;
+              FROM ${fromSql}
+              ${join} bmp_route_identities identity ON identity.route_pk = current.route_pk
+              ${join} bmp_route_payloads payload ON payload.payload_id = current.payload_id
+              ${candidates ? 'WHERE candidate.scope_pk = @candidateScopePk AND candidate.partition_id = @candidatePartitionId' : ''}`;
 }
 
 function buildExpandedCurrentRoutesSql(partitions = BMP_ROUTE_PARTITIONS) {
@@ -328,7 +338,7 @@ function buildExpandedCurrentRoutesSql(partitions = BMP_ROUTE_PARTITIONS) {
                        NULL AS last_seen_ms, NULL AS source_timestamp_ms, NULL AS last_sequence
                  WHERE 0`;
     }
-    return partitions.map(buildExpandedPartitionSelect).join('\nUNION ALL\n');
+    return partitions.map(partition => buildExpandedPartitionSelect(partition)).join('\nUNION ALL\n');
 }
 
 // Lightweight union of every partition's reference columns. Garbage collection
@@ -498,6 +508,7 @@ class BmpPersistenceStore {
         this.statements = null;
         this.partitionStatements = null;
         this.bulkStatements = new Map();
+        this.orderedRouteIndexes = new Map();
         this.insertedAttributesSinceOptimize = 0;
         this.queryStatisticsFingerprint = null;
         this.queryStatisticsDataVersion = null;
@@ -1411,6 +1422,28 @@ class BmpPersistenceStore {
             throw new Error(`BMP route partition statements are unavailable for ${partition.key}`);
         }
         return statements;
+    }
+
+    getOrderedRouteIndex(partition) {
+        let name = this.orderedRouteIndexes.get(partition.partitionId);
+        if (!name) {
+            const quote = value => `"${value.replace(/"/g, '""')}"`;
+            const indexes = this.db.prepare(`PRAGMA index_list(${partition.quotedTableName})`).all();
+            const index = indexes.find(candidate => {
+                if (!candidate.unique || candidate.partial) return false;
+                const columns = this.db
+                    .prepare(`PRAGMA index_info(${quote(candidate.name)})`)
+                    .all()
+                    .map(column => column.name);
+                return columns.length === 2 && columns[0] === 'scope_pk' && columns[1] === 'route_pk';
+            });
+            if (!index) {
+                throw new Error(`BMP ordered scope/route index is missing for ${partition.key}`);
+            }
+            name = quote(index.name);
+            this.orderedRouteIndexes.set(partition.partitionId, name);
+        }
+        return name;
     }
 
     mapDeltaRouteRow(row) {
@@ -3796,33 +3829,162 @@ class BmpPersistenceStore {
 
         const routeLimit = positiveInteger(query.routeLimit, 2000, 20000);
         const gcLimit = positiveInteger(query.gcLimit, DEFAULT_MANUAL_PURGE_GC_LIMIT, 50000);
-        const where = [`${this.buildRouteStateSql()} = 'stale'`];
-        const params = {};
-        const addFilter = (sql, name, value) => {
+        const scopeWhere = [];
+        const scopeParams = {};
+        const routeWhere = [];
+        const routeParams = {};
+        const addFilter = (where, params, sql, name, value) => {
             if (value !== undefined && value !== null && value !== '') {
                 where.push(sql);
                 params[name] = value;
             }
         };
-        addFilter('src.source_id = @sourceId', 'sourceId', query.sourceId);
-        addFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
-        addFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
-        addFilter('last_conn.connection_id = @connectionId', 'connectionId', query.connectionId);
-        addFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
-        addFilter('r.afi = @afi', 'afi', finiteNumber(query.afi));
-        addFilter('r.safi = @safi', 'safi', finiteNumber(query.safi));
-        addFilter('s.rib_type = @ribType', 'ribType', query.ribType);
-        addFilter('r.rib_epoch < @ribEpochBefore', 'ribEpochBefore', finiteNumber(query.ribEpochBefore));
-        addFilter('r.prefix = @prefixExact', 'prefixExact', query.prefixExact);
-        addFilter('r.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
-        const whereSql = `WHERE ${where.join(' AND ')}`;
+        const scopeFilter = (sql, name, value) => addFilter(scopeWhere, scopeParams, sql, name, value);
+        const routeFilter = (sql, name, value) => addFilter(routeWhere, routeParams, sql, name, value);
+        scopeFilter('src.source_id = @sourceId', 'sourceId', query.sourceId);
+        scopeFilter('s.scope_id = @scopeId', 'scopeId', query.scopeId);
+        scopeFilter('s.owner_key = @ownerKey', 'ownerKey', query.ownerKey);
+        scopeFilter('last_conn.connection_id = @connectionId', 'connectionId', query.connectionId);
+        scopeFilter('s.scope_kind = @scopeKind', 'scopeKind', query.scopeKind);
+        scopeFilter('s.rib_type = @ribType', 'ribType', query.ribType);
+        // Partition validation guarantees scope AFI/SAFI match every identity,
+        // including unknown families sharing the fallback physical partition.
+        scopeFilter('s.afi = @afi', 'afi', finiteNumber(query.afi));
+        scopeFilter('s.safi = @safi', 'safi', finiteNumber(query.safi));
+        routeFilter('r.rib_epoch < @ribEpochBefore', 'ribEpochBefore', finiteNumber(query.ribEpochBefore));
+        routeFilter('identity.prefix = @prefixExact', 'prefixExact', query.prefixExact);
+        routeFilter('identity.prefix_length = @prefixLength', 'prefixLength', finiteNumber(query.prefixLength));
+        const needsIdentity = routeWhere.some(predicate => predicate.startsWith('identity.'));
+        const candidateStateSql = this.buildRouteStateSql()
+            .replace(/\bs\.scope_state\b/g, '@scopeState')
+            .replace(/\bs\.last_connection_pk\b/g, '@lastConnectionPk')
+            .replace(/\bs\.current_epoch\b/g, '@currentEpoch');
         const reason = query.reason || 'manual-stale-purge';
-        const currentRoutesSql = `(${buildExpandedCurrentRoutesSql(this.resolveQueryPartitions(query))})`;
+
+        // Keep the LIMIT boundary separate from detail joins: statistics can
+        // otherwise put payload/connection tables first and sort every remaining
+        // stale route again for every batch. No new persistent index is needed.
+        this.db.exec(`CREATE TEMP TABLE IF NOT EXISTS bmp_detailed_purge_candidates (
+            partition_id INTEGER NOT NULL, path_pk INTEGER NOT NULL,
+            scope_pk INTEGER NOT NULL, route_pk INTEGER NOT NULL,
+            PRIMARY KEY (scope_pk, route_pk)
+        ) WITHOUT ROWID`);
 
         const purge = this.db.transaction(() => {
-            const rows = this.db
+            this.db.prepare('DELETE FROM temp.bmp_detailed_purge_candidates').run();
+            const partitions = new Map(
+                this.resolveQueryPartitions(query).map(partition => [partition.partitionId, partition])
+            );
+            const scopes = this.db
                 .prepare(
-                    `
+                    `SELECT s.scope_pk, s.partition_id, s.scope_state, s.last_connection_pk, s.current_epoch
+                       FROM bmp_rib_scopes s
+                       JOIN bmp_sources src ON src.source_pk = s.source_pk
+                       LEFT JOIN bmp_connections last_conn ON last_conn.connection_pk = s.last_connection_pk
+                       ${scopeWhere.length ? `WHERE ${scopeWhere.join(' AND ')}` : ''}
+                      ORDER BY s.scope_pk`
+                )
+                .all(scopeParams);
+            let selected = 0;
+            const selectedScopes = [];
+            for (const scope of scopes) {
+                if (selected > routeLimit) break;
+                const partition = partitions.get(scope.partition_id);
+                if (!partition) continue;
+                const selectionParams = {
+                    ...routeParams,
+                    partitionId: partition.partitionId,
+                    scopePk: scope.scope_pk,
+                    scopeState: scope.scope_state,
+                    lastConnectionPk: scope.last_connection_pk,
+                    currentEpoch: scope.current_epoch,
+                    limit: routeLimit + 1 - selected
+                };
+                // A small epoch cutoff should not scan the scope's newer RIB.
+                // If every eligible bucket fits the remaining budget, insert
+                // all its keys; the temp primary key supplies their final order.
+                if (routeParams.prefixExact === undefined && routeParams.ribEpochBefore !== undefined) {
+                    const buckets = this.db
+                        .prepare(
+                            `SELECT r.connection_pk, r.rib_epoch, r.explicit_state, r.route_count
+                               FROM bmp_scope_route_counts r
+                              WHERE r.scope_pk = @scopePk AND ${candidateStateSql} = 'stale'
+                                AND r.rib_epoch < @ribEpochBefore AND r.route_count > 0`
+                        )
+                        .all(selectionParams);
+                    const eligible = buckets.reduce((total, bucket) => total + bucket.route_count, 0);
+                    if (eligible === 0) continue;
+                    if (eligible <= selectionParams.limit) {
+                        let count = 0;
+                        for (const bucket of buckets) {
+                            count += this.db
+                                .prepare(
+                                    `INSERT INTO temp.bmp_detailed_purge_candidates
+                                          SELECT @partitionId, r.path_pk, r.scope_pk, r.route_pk
+                                            FROM ${partition.quotedTableName} r
+                                                 INDEXED BY idx_${partition.tableName}_scope_epoch
+                                            ${needsIdentity ? 'CROSS JOIN bmp_route_identities identity ON identity.route_pk = r.route_pk' : ''}
+                                           WHERE r.scope_pk = @scopePk AND r.connection_pk = @connectionPk
+                                             AND r.rib_epoch = @epoch AND r.explicit_state = @explicitState
+                                             AND ${candidateStateSql} = 'stale'
+                                             AND ${routeWhere.join(' AND ')} LIMIT @limit`
+                                )
+                                .run({
+                                    ...selectionParams,
+                                    connectionPk: bucket.connection_pk,
+                                    epoch: bucket.rib_epoch,
+                                    explicitState: bucket.explicit_state,
+                                    limit: selectionParams.limit - count
+                                }).changes;
+                        }
+                        if (count > 0) selectedScopes.push({ scope, partition });
+                        selected += count;
+                        continue;
+                    }
+                }
+                const exactPrefix = routeParams.prefixExact !== undefined;
+                const currentSql = `${partition.quotedTableName} r INDEXED BY ${this.getOrderedRouteIndex(partition)}`;
+                // Prefix equality is selective even when the scope has millions
+                // of paths. Probe current keys from the existing identity index
+                // instead of checking the identity of every path in the scope.
+                const candidateFromSql = exactPrefix
+                    ? `bmp_route_identities identity INDEXED BY idx_bmp_route_identities_prefix
+                         CROSS JOIN ${currentSql} ON r.route_pk = identity.route_pk`
+                    : `${currentSql}
+                       ${needsIdentity ? 'CROSS JOIN bmp_route_identities identity ON identity.route_pk = r.route_pk' : ''}`;
+                const candidateKey = exactPrefix ? 'identity.route_pk' : 'r.route_pk';
+                const count = this.db
+                    .prepare(
+                        `INSERT INTO temp.bmp_detailed_purge_candidates
+                              SELECT @partitionId, r.path_pk, r.scope_pk, ${candidateKey}
+                                FROM ${candidateFromSql}
+                               WHERE r.scope_pk = @scopePk AND ${candidateStateSql} = 'stale'
+                                 ${routeWhere.length ? `AND ${routeWhere.join(' AND ')}` : ''}
+                               ORDER BY ${candidateKey} LIMIT @limit`
+                    )
+                    .run(selectionParams).changes;
+                if (count > 0) selectedScopes.push({ scope, partition });
+                selected += count;
+            }
+            const hasMore = selected > routeLimit;
+            if (hasMore) {
+                this.db
+                    .prepare(
+                        `DELETE FROM temp.bmp_detailed_purge_candidates
+                              WHERE (scope_pk, route_pk) IN (
+                                  SELECT scope_pk, route_pk FROM temp.bmp_detailed_purge_candidates
+                                   ORDER BY scope_pk, route_pk LIMIT -1 OFFSET @limit
+                              )`
+                    )
+                    .run({ limit: routeLimit });
+            }
+            const rows = [];
+            for (const { scope, partition } of selectedScopes) {
+                const currentRoutesSql = `(${buildExpandedPartitionSelect(partition, { candidates: true })})`;
+                rows.push(
+                    ...this.db
+                        .prepare(
+                            `
                     SELECT r.*, s.scope_id, src.source_id, s.source_pk, s.scope_kind, s.owner_key,
                            s.scope_identity_json,
                            s.peer_type, s.peer_rd, s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,
@@ -3838,21 +4000,22 @@ class BmpPersistenceStore {
                            conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
                            ${this.buildRouteStateSql()} AS effective_state
                       FROM ${currentRoutesSql} r
-                      JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk
-                      JOIN bmp_sources src ON src.source_pk = s.source_pk
-                      JOIN bmp_connections conn ON conn.connection_pk = r.connection_pk
+                      CROSS JOIN bmp_rib_scopes s ON s.scope_pk = r.scope_pk
+                      CROSS JOIN bmp_sources src ON src.source_pk = s.source_pk
+                      CROSS JOIN bmp_connections conn ON conn.connection_pk = r.connection_pk
                       LEFT JOIN bmp_connections last_conn ON last_conn.connection_pk = s.last_connection_pk
                       LEFT JOIN bmp_route_attributes route_attr ON route_attr.attr_pk = r.attr_pk
-                      ${whereSql}
                      ORDER BY r.scope_pk, r.route_pk
-                     LIMIT @limit
                 `
-                )
-                .all({ ...params, limit: routeLimit + 1 });
-            const hasMore = rows.length > routeLimit;
-            const candidates = hasMore ? rows.slice(0, routeLimit) : rows;
+                        )
+                        .all({ candidateScopePk: scope.scope_pk, candidatePartitionId: partition.partitionId })
+                );
+            }
+            if (rows.length !== Math.min(selected, routeLimit)) {
+                throw new Error('BMP stale route purge candidates changed before reading details');
+            }
             const deletedRows = [];
-            candidates.forEach(row => {
+            rows.forEach(row => {
                 const partition = getBmpRoutePartitionById(row.partition_id);
                 const deleted = this.getPartitionStatements(partition).deleteRoute.all({
                     scopePk: row.scope_pk,
@@ -3866,6 +4029,7 @@ class BmpPersistenceStore {
             if (deletedRows.length > 0) {
                 this.collectGarbage(gcLimit);
             }
+            this.db.prepare('DELETE FROM temp.bmp_detailed_purge_candidates').run();
             return { hasMore, rows: deletedRows };
         });
         const result = purge();
@@ -4637,6 +4801,7 @@ class BmpPersistenceStore {
         this.db = null;
         this.statements = null;
         this.partitionStatements = null;
+        this.orderedRouteIndexes.clear();
         this.sqlTrace = null;
     }
 }

@@ -17,6 +17,7 @@ permissions:
 env:
     CSC_IDENTITY_AUTO_DISCOVERY: 'false'
     NODE_VERSION: '16.20.2'
+    RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
 
 jobs:
     build-windows:
@@ -36,6 +37,10 @@ jobs:
 
             - name: Verify Node.js version
               run: node -e "if (process.version !== 'v' + process.env.NODE_VERSION) { throw new Error('Expected Node.js v' + process.env.NODE_VERSION + ', got ' + process.version); }"
+
+            - name: Validate release notes
+              shell: bash
+              run: node scripts/generate-release-notes.js --tag "$RELEASE_TAG" --output release-notes.md
 
             - name: Setup Python for native modules
               uses: actions/setup-python@v5
@@ -123,6 +128,9 @@ jobs:
               run: |
                   test "$(uname -m)" = "${{ matrix.machine }}"
                   node -e "if (process.version !== 'v' + process.env.NODE_VERSION || process.arch !== '${{ matrix.arch }}') { throw new Error('Expected ${{ matrix.arch }} Node.js v' + process.env.NODE_VERSION + ', got ' + process.arch + ' ' + process.version); }"
+
+            - name: Validate release notes
+              run: node scripts/generate-release-notes.js --tag "$RELEASE_TAG" --output release-notes.md
 
             - name: Setup Python for native modules
               uses: actions/setup-python@v5
@@ -260,6 +268,14 @@ jobs:
               with:
                   ref: ${{ github.event.inputs.tag || github.ref }}
 
+            - name: Setup Node.js
+              uses: actions/setup-node@v4
+              with:
+                  node-version: ${{ env.NODE_VERSION }}
+
+            - name: Generate release notes
+              run: node scripts/generate-release-notes.js --tag "$RELEASE_TAG" --output release-notes.md
+
             - name: Download artifacts
               uses: actions/download-artifact@v4
               with:
@@ -293,12 +309,13 @@ jobs:
                       echo "Release $RELEASE_TAG is already public; refusing to mutate it"
                       exit 1
                     fi
+                    gh release edit "$RELEASE_TAG" --notes-file release-notes.md
                   else
                     gh release create "$RELEASE_TAG" \
                       --verify-tag \
                       --draft \
                       --title "NetNexus $RELEASE_TAG" \
-                      --notes "自动发布 $RELEASE_TAG" \
+                      --notes-file release-notes.md \
                       --target "$GITHUB_SHA"
                   fi
 
@@ -306,4 +323,6 @@ jobs:
                   diff -u \
                     <(find release-assets -maxdepth 1 -type f -printf '%f\n' | sort) \
                     <(gh release view "$RELEASE_TAG" --json assets --jq '.assets[].name' | sort)
+                  gh release view "$RELEASE_TAG" --json body --jq '.body' > published-release-notes.md
+                  node scripts/generate-release-notes.js --tag "$RELEASE_TAG" --verify published-release-notes.md
                   gh release edit "$RELEASE_TAG" --draft=false

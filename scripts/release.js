@@ -1,7 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const os = require('os');
+const { execFileSync, spawnSync } = require('child_process');
 const https = require('https');
+const yaml = require('js-yaml');
+const { loadReleaseNotes, verifyReleaseNotes } = require('./generate-release-notes');
+
+const projectRoot = path.resolve(__dirname, '..');
 
 // Parse command line arguments
 const args = process.argv.slice(2);
@@ -38,39 +43,34 @@ Examples:
     process.exit(0);
 }
 
-if (giteeOnly) {
-    console.log('\n📦 NetNexus Release Script - Gitee Only Mode');
-} else {
-    console.log('\n📦 NetNexus Release Script - Full Release Mode');
-}
-
 // Load .env file (从项目根目录加载)
-const envPath = path.resolve(__dirname, '../.env');
-
-if (fs.existsSync(envPath)) {
-    const envConfig = fs.readFileSync(envPath, 'utf-8');
-    envConfig.split(/\r?\n/).forEach(line => {
-        if (line.trim().startsWith('#') || !line.trim()) {
-            return;
-        }
-
-        const parts = line.match(/^([^=]+)=(.*)$/);
-        if (parts) {
-            const key = parts[1].trim();
-            const value = parts[2].trim();
-            if (!process.env[key]) {
-                process.env[key] = value;
-                const logValue =
-                    key.toLowerCase().includes('token') || key.toLowerCase().includes('secret') ? '******' : value;
-                console.log(`Set ${key}=${logValue}`);
+function loadEnvironment() {
+    const envPath = path.join(projectRoot, '.env');
+    if (!fs.existsSync(envPath)) return;
+    fs.readFileSync(envPath, 'utf-8')
+        .split(/\r?\n/)
+        .forEach(line => {
+            if (line.trim().startsWith('#') || !line.trim()) {
+                return;
             }
-        }
-    });
+
+            const parts = line.match(/^([^=]+)=(.*)$/);
+            if (parts) {
+                const key = parts[1].trim();
+                const value = parts[2].trim();
+                if (!process.env[key]) {
+                    process.env[key] = value;
+                    const logValue =
+                        key.toLowerCase().includes('token') || key.toLowerCase().includes('secret') ? '******' : value;
+                    console.log(`Set ${key}=${logValue}`);
+                }
+            }
+        });
 }
 
 // Function to create Gitee release
-async function createGiteeRelease() {
-    const giteeToken = process.env.GITEE_TOKEN;
+async function createGiteeRelease(release, dependencies = {}) {
+    const giteeToken = (dependencies.env || process.env).GITEE_TOKEN;
 
     if (!giteeToken) {
         console.log('\n⚠️  GITEE_TOKEN not found, skipping Gitee release');
@@ -78,15 +78,9 @@ async function createGiteeRelease() {
         return;
     }
 
-    // Get current git tag
-    let currentTag;
-    try {
-        currentTag = execSync('git describe --tags --abbrev=0', { encoding: 'utf-8' }).trim();
-    } catch (error) {
-        console.log('\n⚠️  No git tag found, skipping Gitee release');
-        return;
-    }
-
+    verifyReleaseSource(release, dependencies.projectRoot || projectRoot);
+    const currentTag = release.tag;
+    const httpsApi = dependencies.https || https;
     console.log(`\n📦 Creating Gitee release for tag: ${currentTag}`);
 
     // Step 1: Create release
@@ -95,7 +89,7 @@ async function createGiteeRelease() {
             access_token: giteeToken,
             tag_name: currentTag,
             name: `NetNexus ${currentTag}`,
-            body: `自动发布 ${currentTag}\n\n通过自动构建和发布。`,
+            body: release.markdown,
             prerelease: false,
             target_commitish: 'master'
         });
@@ -110,7 +104,7 @@ async function createGiteeRelease() {
             }
         };
 
-        const req = https.request(options, res => {
+        const req = httpsApi.request(options, res => {
             let body = '';
             res.on('data', chunk => (body += chunk));
             res.on('end', () => {
@@ -140,7 +134,7 @@ async function createGiteeRelease() {
     }
 
     // Step 2: Upload files
-    const distPath = path.join(__dirname, '../release');
+    const distPath = path.join(dependencies.projectRoot || projectRoot, 'release');
     if (!fs.existsSync(distPath)) {
         console.log('⚠️  release directory not found, skipping file upload');
         return;
@@ -148,7 +142,7 @@ async function createGiteeRelease() {
 
     const files = fs
         .readdirSync(distPath)
-        .filter(file => file.endsWith('.exe') || file.endsWith('.msi') || file.endsWith('.deb'));
+        .filter(file => isCurrentInstallationAsset(file, release.version, dependencies.target));
 
     if (files.length === 0) {
         console.log('⚠️  No installation files found in release directory');
@@ -181,7 +175,7 @@ async function createGiteeRelease() {
             form.append('access_token', giteeToken);
             form.append('file', fileContent, file);
 
-            const req = https.request(
+            const req = httpsApi.request(
                 {
                     hostname: 'gitee.com',
                     path: `/api/v5/repos/muping18/NetNexus/releases/${releaseId}/attach_files`,
@@ -228,7 +222,151 @@ function normalizeArchitecture(value) {
     return architecture;
 }
 
+function isCurrentInstallationAsset(file, version, target) {
+    const escapedVersion = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const match = file.match(
+        new RegExp(`^NetNexus(?:-Setup)?-${escapedVersion}-(win|linux)-(x64|arm64)\\.(?:exe|msi|deb)$`)
+    );
+    return Boolean(match && (!target || (match[1] === target.platform && match[2] === target.arch)));
+}
+
+function githubRepository(root = projectRoot) {
+    const packageJson = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
+    const publish = packageJson.build.publish;
+    const github = (Array.isArray(publish) ? publish : [publish]).find(config => config?.provider === 'github');
+    if (!github?.owner || !github?.repo) {
+        throw new Error('GitHub publishing requires build.publish owner and repo');
+    }
+    return `${github.owner}/${github.repo}`;
+}
+
+function verifyReleaseSource(release, root) {
+    const canonical = loadReleaseNotes({ projectRoot: root, tag: release.tag });
+    if (canonical.version !== release.version) {
+        throw new Error(`Release version ${release.version} does not match package version ${canonical.version}`);
+    }
+    verifyReleaseNotes(canonical.markdown, release.markdown);
+}
+
+function verifyGithubPrerequisites(dependencies = {}) {
+    const run = dependencies.execFileSync || execFileSync;
+    const options = {
+        cwd: dependencies.projectRoot || projectRoot,
+        env: dependencies.env || process.env,
+        stdio: 'pipe'
+    };
+    try {
+        run('gh', ['--version'], options);
+        run('gh', ['auth', 'status'], options);
+    } catch (_error) {
+        throw new Error(
+            'GitHub CLI is unavailable or GH_TOKEN authentication failed; install gh and configure GH_TOKEN'
+        );
+    }
+}
+
+function rebuildRenderer(dependencies = {}) {
+    const candidates = [
+        process.env.npm_execpath,
+        path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+        path.join(path.dirname(process.execPath), '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js')
+    ];
+    const npmCli = dependencies.npmCli || candidates.find(candidate => candidate && fs.existsSync(candidate));
+    if (!npmCli) throw new Error('Cannot find npm CLI; run this script through npm run release');
+    const run = dependencies.execFileSync || execFileSync;
+    run(process.execPath, [npmCli, 'run', 'build'], {
+        cwd: dependencies.projectRoot || projectRoot,
+        env: dependencies.env || process.env,
+        stdio: 'inherit'
+    });
+}
+
+function publishGitHubRelease(release, dependencies = {}) {
+    const root = dependencies.projectRoot || projectRoot;
+    verifyReleaseSource(release, root);
+    const env = dependencies.env || process.env;
+    const run = dependencies.execFileSync || execFileSync;
+    const probe = dependencies.spawnSync || spawnSync;
+    const repo = githubRepository(root);
+    const target = dependencies.target || { platform: 'win', arch: 'x64' };
+    const distPath = path.join(root, 'release');
+    const installationFiles = fs
+        .readdirSync(distPath)
+        .filter(file => isCurrentInstallationAsset(file, release.version, target));
+    if (installationFiles.length === 0) {
+        throw new Error(`No installation files found for version ${release.version}`);
+    }
+    const files = fs.readdirSync(distPath).filter(file => {
+        if (installationFiles.includes(file)) return true;
+        if (file.endsWith('.blockmap')) return installationFiles.includes(file.slice(0, -'.blockmap'.length));
+        return file === 'latest.yml' && installationFiles.some(name => name.endsWith('.exe'));
+    });
+    if (files.includes('latest.yml')) {
+        const manifest = yaml.load(fs.readFileSync(path.join(distPath, 'latest.yml'), 'utf8'));
+        if (manifest?.version !== release.version) {
+            throw new Error(`latest.yml does not match release version ${release.version}`);
+        }
+        const currentInstaller = `NetNexus-Setup-${release.version}-win-${target.arch}.exe`;
+        if (manifest.path !== currentInstaller || !manifest.files?.some(file => file.url === currentInstaller)) {
+            throw new Error('latest.yml does not reference the current Windows installer');
+        }
+    }
+    const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-release-notes-'));
+    const notesFile = path.join(temporaryDirectory, 'release-notes.md');
+    const commandOptions = { cwd: root, env, encoding: 'utf8', stdio: 'pipe' };
+    const tag = release.tag;
+    try {
+        fs.writeFileSync(notesFile, release.markdown, 'utf8');
+        const existing = probe('gh', ['release', 'view', tag, '--repo', repo, '--json', 'isDraft'], commandOptions);
+        if (existing.error) throw existing.error;
+        if (existing.status === 0) {
+            if (!JSON.parse(existing.stdout).isDraft) {
+                throw new Error(`Release ${tag} is already public; refusing to mutate it`);
+            }
+            run('gh', ['release', 'edit', tag, '--repo', repo, '--notes-file', notesFile], commandOptions);
+        } else {
+            run(
+                'gh',
+                [
+                    'release',
+                    'create',
+                    tag,
+                    '--repo',
+                    repo,
+                    '--verify-tag',
+                    '--draft',
+                    '--title',
+                    `NetNexus ${tag}`,
+                    '--notes-file',
+                    notesFile
+                ],
+                commandOptions
+            );
+        }
+        run(
+            'gh',
+            ['release', 'upload', tag, '--repo', repo, ...files.map(file => path.join(distPath, file)), '--clobber'],
+            commandOptions
+        );
+        const uploaded = JSON.parse(
+            run('gh', ['release', 'view', tag, '--repo', repo, '--json', 'isDraft,body,assets'], commandOptions)
+        );
+        if (uploaded.isDraft !== true) {
+            throw new Error(`Release ${tag} is no longer a draft; refusing to publish`);
+        }
+        const uploadedFiles = uploaded.assets.map(asset => asset.name).sort();
+        if (JSON.stringify(files.sort()) !== JSON.stringify(uploadedFiles)) {
+            throw new Error(`Release ${tag} uploaded assets differ from the current version build`);
+        }
+        verifyReleaseNotes(release.markdown, uploaded.body);
+        run('gh', ['release', 'edit', tag, '--repo', repo, '--draft=false'], commandOptions);
+    } finally {
+        fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+    }
+}
+
 function validateBuildTarget() {
+    assertManagedBuildArgs(args);
     if (isMac) {
         throw new Error(MAC_RELEASE_DISABLED_MESSAGE);
     }
@@ -263,13 +401,28 @@ function validateBuildTarget() {
 }
 
 // Build command based on platform and architecture
-function getBuildCommand() {
-    const customArgs = ['--gitee-only', '--help', '-h', '--win', '--mac', '--linux', '--x64', '--arm64', '--universal'];
-    const extraArgs = args.filter(arg => !customArgs.includes(arg)).join(' ');
+function assertManagedBuildArgs(releaseArgs) {
+    if (
+        releaseArgs.some(
+            arg => arg === '--publish' || arg === '-p' || arg.startsWith('--publish=') || arg.startsWith('-p=')
+        )
+    ) {
+        throw new Error('Publication flags are managed by this release script; omit --publish and -p');
+    }
+}
 
-    if (isLinux) {
-        const targetArch = isArm64 ? 'arm64' : isX64 ? 'x64' : normalizeArchitecture(process.arch);
-        return ['npm', 'run', `dist:linux:${targetArch}`, '--', '--publish', 'never'].join(' ');
+function getBuildCommand(releaseArgs = args) {
+    assertManagedBuildArgs(releaseArgs);
+    const customArgs = ['--gitee-only', '--help', '-h', '--win', '--mac', '--linux', '--x64', '--arm64', '--universal'];
+    const extraArgs = releaseArgs.filter(arg => !customArgs.includes(arg));
+
+    if (releaseArgs.includes('--linux')) {
+        const targetArch = releaseArgs.includes('--arm64')
+            ? 'arm64'
+            : releaseArgs.includes('--x64')
+              ? 'x64'
+              : normalizeArchitecture(process.arch);
+        return { command: 'npm', args: ['run', `dist:linux:${targetArch}`, '--', '--publish', 'never'] };
     }
 
     let platform = '--win';
@@ -280,26 +433,45 @@ function getBuildCommand() {
         arch = '--x64';
     }
 
-    return ['electron-builder', platform, arch, '--publish always', extraArgs].filter(Boolean).join(' ').trim();
+    return {
+        command: process.execPath,
+        args: [require.resolve('electron-builder/cli.js'), platform, arch, ...extraArgs, '--publish', 'never']
+    };
 }
 
 // Run electron-builder
 async function build() {
     try {
         validateBuildTarget();
+        let release = loadReleaseNotes();
+        const target = {
+            platform: isLinux ? 'linux' : 'win',
+            arch: isLinux ? (isArm64 ? 'arm64' : isX64 ? 'x64' : normalizeArchitecture(process.arch)) : 'x64'
+        };
+        const publishGithub = !giteeOnly && Boolean(process.env.GH_TOKEN);
+        if (publishGithub || process.env.GITEE_TOKEN) {
+            const tag = execFileSync('git', ['describe', '--tags', '--exact-match', 'HEAD'], {
+                cwd: projectRoot,
+                encoding: 'utf8'
+            }).trim();
+            release = loadReleaseNotes({ tag });
+        }
+        if (publishGithub) verifyGithubPrerequisites();
 
         if (giteeOnly) {
             // Gitee only mode: 只发布到 Gitee，不编译
             console.log('\n⏭️  Skipping build (Gitee only mode)');
-            await createGiteeRelease();
+            await createGiteeRelease(release);
         } else {
             // 默认模式：编译并发布到 GitHub 和 Gitee
             console.log('\n🔨 Starting electron-builder...');
 
+            if (!isLinux) rebuildRenderer();
             const command = getBuildCommand();
-            console.log(`   Command: ${command}`);
+            console.log(`   Command: ${command.command} ${command.args.join(' ')}`);
 
-            execSync(command, {
+            execFileSync(command.command, command.args, {
+                cwd: projectRoot,
                 stdio: 'inherit',
                 env: {
                     ...process.env,
@@ -310,19 +482,15 @@ async function build() {
 
             console.log('\n✅ Build completed successfully');
 
-            // GitHub release (handled by electron-builder if GH_TOKEN is set)
-            if (process.env.GH_TOKEN) {
-                if (isLinux) {
-                    console.log('ℹ️  Linux .deb 已在本地生成；请使用 release workflow 发布到 GitHub');
-                } else {
-                    console.log('✅ GitHub release created by electron-builder');
-                }
+            if (publishGithub) {
+                publishGitHubRelease(release, { target });
+                console.log('✅ GitHub release notes and assets verified and published');
             } else {
                 console.log('⚠️  GH_TOKEN not found, GitHub release skipped');
             }
 
             // Gitee release
-            await createGiteeRelease();
+            await createGiteeRelease(release, { target });
         }
 
         console.log('\n🎉 Release process completed!\n');
@@ -332,4 +500,17 @@ async function build() {
     }
 }
 
-build();
+if (require.main === module) {
+    console.log(`\n📦 NetNexus Release Script - ${giteeOnly ? 'Gitee Only' : 'Full Release'} Mode`);
+    loadEnvironment();
+    build();
+}
+
+module.exports = {
+    createGiteeRelease,
+    getBuildCommand,
+    isCurrentInstallationAsset,
+    publishGitHubRelease,
+    rebuildRenderer,
+    verifyGithubPrerequisites
+};

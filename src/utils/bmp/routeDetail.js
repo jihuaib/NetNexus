@@ -551,9 +551,13 @@ const addItem = (group, label, value, kind = 'text') => {
     });
 };
 const friendlyLabel = key => BUSINESS_LABELS[key] || key.replace(/([a-z])([A-Z])/gu, '$1 $2').replace(/_/gu, ' ');
+const isBinaryValue = value =>
+    value &&
+    typeof value === 'object' &&
+    (ArrayBuffer.isView(value) || (value.type === 'Buffer' && Array.isArray(value.data)));
 
 function appendBusinessFields(group, value, excluded = new Set(), parent = '', ancestors = new Set()) {
-    if (!value || typeof value !== 'object' || ancestors.has(value)) return;
+    if (!value || typeof value !== 'object' || isBinaryValue(value) || ancestors.has(value)) return;
     ancestors.add(value);
     for (const [key, entry] of Object.entries(value)) {
         if (
@@ -733,7 +737,7 @@ function extendedCommunityCards(attribute, key) {
         soo: ['路由来源站点（SOO）', '标识路由源站点，帮助避免 VPN 站点之间的路由环路。'],
         encapsulation: ['封装方式', '对端为这条路由通告的隧道封装。'],
         validation: ['路由起源验证', '设备附带的起源验证结果。'],
-        other: ['扩展 Community', '设备携带的扩展策略标记；未识别的编码可展开查看。']
+        other: ['扩展 Community', '设备携带的扩展策略标记。']
     };
     entries.forEach((entry, index) => {
         const formatted = formatExtendedCommunity(entry);
@@ -761,7 +765,6 @@ function labelText(value) {
 
 function prefixSidItems(group, prefixSid) {
     if (!prefixSid || typeof prefixSid !== 'object') {
-        addItem(group, '分段路由信息', prefixSid);
         return;
     }
     addItem(group, '标签索引', prefixSid.labelIndex?.labelIndex);
@@ -779,16 +782,30 @@ function prefixSidItems(group, prefixSid) {
             ] || 'SRv6 服务';
         (service.sidInfos || []).forEach((sidInfo, sidIndex) => {
             const label = `${serviceLabel}${index || sidIndex ? ` ${index + 1}.${sidIndex + 1}` : ''}`;
-            addItem(
-                group,
-                label,
-                `${sidInfo.sid || sidInfo.sidHex || '未知 SID'}${sidInfo.endpointBehaviorName ? ` · ${sidInfo.endpointBehaviorName}` : ''}`,
-                'code'
-            );
+            if (
+                typeof sidInfo.sid === 'string' &&
+                ipaddr.isValid(sidInfo.sid) &&
+                ipaddr.parse(sidInfo.sid).kind() === 'ipv6'
+            ) {
+                addItem(
+                    group,
+                    label,
+                    `${sidInfo.sid}${sidInfo.endpointBehaviorName ? ` · ${sidInfo.endpointBehaviorName}` : ''}`,
+                    'code'
+                );
+            } else {
+                addItem(group, `${label} · 端点行为`, sidInfo.endpointBehaviorName);
+            }
             appendBusinessFields(group, sidInfo.sidStructure, new Set(), 'SID 结构');
         });
     });
-    if (!group.items.length) addItem(group, '分段路由信息', prefixSid.formatted);
+    if (!group.items.length && Array.isArray(prefixSid.tlvs)) {
+        addItem(
+            group,
+            'TLV 类型',
+            prefixSid.tlvs.map(tlv => tlv.typeName || `类型 ${tlv.type}`)
+        );
+    }
 }
 
 function readableAttributeCards(attribute, index, route) {
@@ -892,8 +909,8 @@ function readableAttributeCards(attribute, index, route) {
             const mp = attribute.mpReach || attribute.mpUnreach || {};
             group.description =
                 type === 14
-                    ? '该地址族的下一跳信息。当前这条路由的可达信息在 NLRI 页展示，展开的原始编码只包含属性头。'
-                    : '该地址族携带路由撤销信息。当前这条路由的可达信息在 NLRI 页展示，展开的原始编码只包含属性头。';
+                    ? '该地址族的下一跳信息。当前这条路由的可达信息在 NLRI 分组展示。'
+                    : '该地址族携带路由撤销信息。当前这条路由的可达信息在 NLRI 分组展示。';
             addItem(group, '地址族', readableFamily(mp.afi, mp.safi));
             addItem(group, '下一跳', formatReadableNextHop(mp.nextHop), 'code');
             break;
@@ -918,7 +935,6 @@ function readableAttributeCards(attribute, index, route) {
             group.description = '该路由支持的隧道封装类型。';
             (attribute.tunnelEncapsulation?.tlvs || []).forEach(tunnel => {
                 addItem(group, '封装', tunnel.tunnelTypeName || `隧道 ${tunnel.tunnelType}`);
-                if (tunnel.valueHex) group.description = '该路由支持的隧道封装类型；附加参数可展开原始编码查看。';
             });
             break;
         case 32:
@@ -936,9 +952,7 @@ function readableAttributeCards(attribute, index, route) {
             prefixSidItems(group, attribute.prefixSid);
             break;
         default:
-            group.description = READABLE_ATTRIBUTE_NAMES[type]
-                ? '该属性暂未解码，原始编码已完整保留。'
-                : '尚未识别的路径属性，原始编码已完整保留。';
+            group.description = READABLE_ATTRIBUTE_NAMES[type] ? '该属性暂未解码。' : '尚未识别的路径属性。';
     }
     if (
         READABLE_ATTRIBUTE_NAMES[type] &&
@@ -946,7 +960,7 @@ function readableAttributeCards(attribute, index, route) {
         !group.tags.length &&
         !group.description.includes('暂未解码')
     )
-        group.description += ' 当前没有可读的解析结果，可展开原始编码查看。';
+        group.description += ' 当前没有可读的解析结果。';
     return [group];
 }
 
@@ -994,20 +1008,85 @@ function readableFamily(afi, safi, fallback = '') {
     return fallback || '未识别的地址族';
 }
 
+function readableLsDescriptorValue(descriptor) {
+    if (!descriptor || descriptor.valid === false || !hasReadableValue(descriptor.value)) return '';
+    const type = Number(descriptor.type);
+    const value = String(descriptor.value);
+    const length = descriptor.length === undefined ? null : Number(descriptor.length);
+    const hasLength = minimum => length === null || length >= minimum;
+    const isIp = family =>
+        value.includes(family === 'ipv4' ? '.' : ':') && ipaddr.isValid(value) && ipaddr.parse(value).kind() === family;
+    switch (type) {
+        case 512:
+        case 513:
+            return hasLength(4) && /^\d+$/u.test(value) ? value : '';
+        case 514:
+        case 259:
+        case 260:
+            return hasLength(4) && isIp('ipv4') ? value : '';
+        case 261:
+        case 262:
+            return hasLength(16) && isIp('ipv6') ? value : '';
+        case 515:
+            if ((length === null || length === 4) && isIp('ipv4')) return value;
+            // IS-IS system IDs and pseudonode IDs are meaningful IGP identifiers, not opaque TLV payloads.
+            return [12, 14, 16].includes(value.length) &&
+                /^[\da-f]+$/iu.test(value) &&
+                (length === null || length * 2 === value.length)
+                ? value
+                : '';
+        case 258:
+            return hasLength(8) && /^\d+->\d+$/u.test(value) ? value : '';
+        case 263:
+            return hasLength(2) && /^\d+$/u.test(value) ? value : '';
+        case 264:
+            return hasLength(1) && /^\d+$/u.test(value) ? value : '';
+        case 265: {
+            const match = /^(.*)\/(\d+)$/u.exec(value);
+            if (!match || !ipaddr.isValid(match[1])) return '';
+            const bits = ipaddr.parse(match[1]).kind() === 'ipv6' ? 128 : 32;
+            return Number(match[2]) <= bits ? value : '';
+        }
+        default:
+            return '';
+    }
+}
+
 function lsDescriptorItems(group, descriptors, parent = '') {
     (descriptors || []).forEach(descriptor => {
+        if (!descriptor || typeof descriptor !== 'object') return;
         const label = LS_DESCRIPTOR_LABELS[descriptor.type] || descriptor.typeName || '扩展拓扑信息';
         const title = parent ? `${parent} · ${label}` : label;
         if (descriptor.children?.length) lsDescriptorItems(group, descriptor.children, title);
-        else addItem(group, title, descriptor.value, Number(descriptor.type) === 515 ? 'code' : 'text');
+        else {
+            const parsed = readableLsDescriptorValue(descriptor);
+            addItem(
+                group,
+                title,
+                parsed || `类型 ${descriptor.type ?? '未知'}：尚未解析`,
+                Number(descriptor.type) === 515 ? 'code' : 'text'
+            );
+        }
     });
 }
 
 function flowCondition(component) {
-    if (component.prefix !== undefined)
+    if (!component || typeof component !== 'object') return '';
+    if (
+        [1, 2].includes(Number(component.type)) &&
+        typeof component.prefix === 'string' &&
+        ipaddr.isValid(component.prefix) &&
+        Number.isInteger(component.length)
+    )
         return `${component.prefix}/${component.length}${component.offset ? `（从第 ${component.offset} 位匹配）` : ''}`;
-    if (!component.operations?.length) return component.formatted || '尚未解析的匹配条件';
+    if (!FLOW_COMPONENT_LABELS[component.type] || !Array.isArray(component.operations)) return '';
     return component.operations
+        .filter(
+            operation =>
+                operation &&
+                ['number', 'string', 'bigint'].includes(typeof operation.value) &&
+                /^\d+$/u.test(String(operation.value))
+        )
         .map(operation => {
             const op = String(operation.operatorName || '=')
                 .replace(/not match/gu, '不全部匹配')
@@ -1059,7 +1138,11 @@ export function formatReadableRouteIdentity(value) {
             title: `${afi === 2 ? 'IPv6' : 'IPv4'} FlowSpec 路由`,
             summary: components
                 .slice(0, 3)
-                .map(component => `${FLOW_COMPONENT_LABELS[component.type] || '匹配条件'} ${flowCondition(component)}`)
+                .map(component => {
+                    const condition = flowCondition(component);
+                    return condition ? `${FLOW_COMPONENT_LABELS[component.type] || '匹配条件'} ${condition}` : '';
+                })
+                .filter(Boolean)
                 .join(' · ')
         };
     }
@@ -1068,9 +1151,12 @@ export function formatReadableRouteIdentity(value) {
         const nodeId = type =>
             descriptors
                 .find(descriptor => Number(descriptor.type) === type)
-                ?.children?.find(descriptor => Number(descriptor.type) === 515)?.value;
-        const endpoints = [nodeId(256), nodeId(257)].filter(hasReadableValue).join(' → ');
-        const reachability = descriptors.find(descriptor => Number(descriptor.type) === 265)?.value;
+                ?.children?.find(descriptor => Number(descriptor.type) === 515);
+        const endpoints = [nodeId(256), nodeId(257)]
+            .map(readableLsDescriptorValue)
+            .filter(hasReadableValue)
+            .join(' → ');
+        const reachability = readableLsDescriptorValue(descriptors.find(descriptor => Number(descriptor.type) === 265));
         const objectName = { 1: '节点', 2: '链路', 3: 'IPv4 前缀', 4: 'IPv6 前缀' }[nlri.routeType];
         return {
             title: objectName ? `BGP-LS ${objectName}路由` : 'BGP-LS 路由',
@@ -1111,12 +1197,18 @@ function readableNlriCards(route) {
     } else if ([133, 134].includes(safi)) {
         group.title = 'FlowSpec 流量匹配';
         group.description = '以下条件共同描述要匹配的流量；处置动作由相关 Community 和路由策略决定。';
-        (nlri.components || []).forEach(component =>
-            addItem(group, FLOW_COMPONENT_LABELS[component.type] || '扩展匹配条件', flowCondition(component), 'code')
-        );
+        (nlri.components || []).forEach(component => {
+            if (!component || typeof component !== 'object') return;
+            addItem(
+                group,
+                FLOW_COMPONENT_LABELS[component.type] || '扩展匹配条件',
+                flowCondition(component) || `类型 ${component.type ?? '未知'}：尚未解析`,
+                'code'
+            );
+        });
     } else if (safi === 5) {
         group.title = '组播 VPN 路由';
-        group.description = '组播路由的类型已识别；尚未细分解析的路由内容可展开原始编码查看。';
+        group.description = '展示已经识别的组播路由类型和解析字段。';
         addItem(
             group,
             '路由用途',
@@ -1163,39 +1255,69 @@ function readableNlriCards(route) {
 }
 
 function readableTlvCards(route) {
-    return (Array.isArray(route.routeTlvs) ? route.routeTlvs : []).map((tlv, index) => {
-        const group = card(`route-tlv-${index}`, tlv.name || '未识别的路由附加信息');
-        const decoded = tlv.decoded || {};
-        if (tlv.rawValueHex !== undefined || tlv.valueHex !== undefined) group.raw = tlv.rawValueHex ?? tlv.valueHex;
-        addItem(group, '内容', tlv.value ?? tlv.valueText);
-        addItem(group, '设备上报序号', decoded.sequenceNumber);
-        addItem(group, '设备标记的状态', decoded.statusNames);
-        addItem(group, '设备标记的原因', decoded.reasonName);
-        if (decoded.seconds !== undefined)
-            addItem(
+    return (Array.isArray(route.routeTlvs) ? route.routeTlvs : [])
+        .filter(tlv => tlv && typeof tlv === 'object' && !Array.isArray(tlv))
+        .map((tlv, index) => {
+            const group = card(`route-tlv-${index}`, tlv.name || `未识别的路由附加信息（类型 ${tlv.type ?? '未知'}）`);
+            const decoded = tlv.decoded || {};
+            if (tlv.rawValueHex !== undefined || tlv.valueHex !== undefined)
+                group.raw = tlv.rawValueHex ?? tlv.valueHex;
+            const content = tlv.valueText ?? tlv.value;
+            if (['string', 'number', 'boolean'].includes(typeof content)) addItem(group, '内容', content);
+            addItem(group, '设备上报序号', decoded.sequenceNumber);
+            addItem(group, '扩展 Flags', decoded.flags);
+            addItem(group, '路径状态值', decoded.status);
+            addItem(group, '设备标记的状态', decoded.statusNames);
+            addItem(group, '设备标记的原因', decoded.reasonName);
+            addItem(group, '解析提示', collectRouteDiagnostics(decoded));
+            if (decoded.seconds !== undefined)
+                addItem(
+                    group,
+                    '设备时间',
+                    formatRouteDetailTimestamp(
+                        Number(decoded.seconds) * 1000 + Number(decoded.microseconds || 0) / 1000
+                    )
+                );
+            addItem(group, '关联路由序号', decoded.indexes);
+            addItem(group, '适用路由序号', tlv.appliedNlriIndex);
+            appendBusinessFields(
                 group,
-                '设备时间',
-                formatRouteDetailTimestamp(Number(decoded.seconds) * 1000 + Number(decoded.microseconds || 0) / 1000)
+                decoded,
+                new Set([
+                    'sequenceNumber',
+                    'flags',
+                    'status',
+                    'statusNames',
+                    'reason',
+                    'reasonName',
+                    'seconds',
+                    'microseconds',
+                    'indexes'
+                ])
             );
-        addItem(group, '关联路由序号', decoded.indexes);
-        addItem(group, '适用路由序号', tlv.appliedNlriIndex);
-        appendBusinessFields(
-            group,
-            decoded,
-            new Set([
-                'sequenceNumber',
-                'status',
-                'statusNames',
-                'reason',
-                'reasonName',
-                'seconds',
-                'microseconds',
-                'indexes'
-            ])
-        );
-        if (!group.items.length) group.description = '尚未解码的路由附加信息，原始编码已保留。';
-        return group;
-    });
+            if (!group.items.length) group.description = '尚未解码的路由附加信息。';
+            return group;
+        });
+}
+
+function collectRouteDiagnostics(value) {
+    const messages = new Set();
+    const visited = new Set();
+    const visit = entry => {
+        if (!entry || typeof entry !== 'object' || isBinaryValue(entry) || visited.has(entry)) return;
+        visited.add(entry);
+        for (const [key, child] of Object.entries(entry)) {
+            if (['error', 'errors', 'warnings'].includes(key)) {
+                for (const message of Array.isArray(child) ? child : [child]) {
+                    if (typeof message === 'string' && message) messages.add(message);
+                }
+            } else if (!/^(?:raw|.*Hex$)/u.test(key)) {
+                visit(child);
+            }
+        }
+    };
+    visit(value);
+    return Array.from(messages);
 }
 
 function readableOverviewGroups(route, value) {
@@ -1219,16 +1341,7 @@ function readableOverviewGroups(route, value) {
             Number(route.parseStatus) & 2 ? '存在解析异常' : Number(route.parseStatus) & 1 ? '存在解析提示' : '正常'
         );
     addItem(state, '待刷新原因', route.staleReason || route.scopeStaleReason);
-    const problems = [
-        ...(route.nlriDetail?.errors || []),
-        ...(route.nlriDetail?.warnings || []),
-        ...(route.errors || []),
-        ...(route.warnings || []),
-        ...(Array.isArray(route.pathAttributes) ? route.pathAttributes : [])
-            .filter(attribute => attribute && typeof attribute === 'object')
-            .flatMap(attribute => [...(attribute.errors || []), ...(attribute.warnings || [])])
-    ];
-    addItem(state, '解析提示', Array.from(new Set(problems)));
+    addItem(state, '解析提示', collectRouteDiagnostics(route));
     if (state.items.length) groups.push(state);
     const time = card('route-times', '观测时间');
     ['firstSeenAt', 'lastSeenAt', 'sourceTimestampMs', 'refreshStartedAt', 'staleAt'].forEach(field => {

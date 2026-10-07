@@ -1,648 +1,648 @@
 {
-  "date": "2026-10-05",
-  "runtime": {
-    "platform": "darwin",
-    "arch": "arm64",
-    "cpu": "Apple M4 Pro",
-    "versions": {
-      "node": "16.17.1",
-      "v8": "10.8.168.25-electron.0",
-      "uv": "1.43.0",
-      "zlib": "1.2.12.1-motley",
-      "brotli": "1.0.9",
-      "ares": "1.18.1",
-      "modules": "110",
-      "nghttp2": "1.47.0",
-      "napi": "8",
-      "llhttp": "6.0.9",
-      "openssl": "1.1.1",
-      "cldr": "41.0",
-      "icu": "71.1",
-      "tz": "2022e",
-      "unicode": "14.0",
-      "electron": "22.3.27"
-    }
-  },
-  "scope": "All test/ci/bmp_*.js scripts, serial Electron execution; utility process fixtures launched as Electron apps",
-  "ci": {
-    "startedAt": "2026-10-05T04:23:13.072Z",
-    "finishedAt": "2026-10-05T04:24:07.958Z",
-    "durationMs": 54886,
-    "total": 88,
-    "passed": 88,
-    "failed": [],
-    "results": [
-      {
-        "script": "bmp_client_database_isolation.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 556
-      },
-      {
-        "script": "bmp_client_delete_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 112
-      },
-      {
-        "script": "bmp_client_persistence_pool.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 56
-      },
-      {
-        "script": "bmp_client_persistence_store_edges.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 5600
-      },
-      {
-        "script": "bmp_committed_route_refresh.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 104
-      },
-      {
-        "script": "bmp_committed_route_refresh_sqlite.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 3972
-      },
-      {
-        "script": "bmp_cross_client_sweep_isolation.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 116
-      },
-      {
-        "script": "bmp_database_delete_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 150
-      },
-      {
-        "script": "bmp_database_version_check.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 412
-      },
-      {
-        "script": "bmp_database_version_startup.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 57
-      },
-      {
-        "script": "bmp_destructive_ipc_authorization.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 74
-      },
-      {
-        "script": "bmp_epoch_aging.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 111
-      },
-      {
-        "script": "bmp_http_route_key_limits.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 83
-      },
-      {
-        "script": "bmp_incremental_events.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 84
-      },
-      {
-        "script": "bmp_ingest_attribute_reuse.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 93
-      },
-      {
-        "script": "bmp_ingest_compact_reuse.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 116
-      },
-      {
-        "script": "bmp_ingest_delete_fence.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 77
-      },
-      {
-        "script": "bmp_ingest_dto_handoff.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 79
-      },
-      {
-        "script": "bmp_ingest_pool_failure.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 260
-      },
-      {
-        "script": "bmp_ingest_resource_limits.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 498
-      },
-      {
-        "script": "bmp_ingest_threads.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 683
-      },
-      {
-        "script": "bmp_interactive_read_no_fence.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 158
-      },
-      {
-        "script": "bmp_log_level_propagation.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 242
-      },
-      {
-        "script": "bmp_manual_stale_purge.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 98
-      },
-      {
-        "script": "bmp_manual_stale_purge_sqlite.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1187
-      },
-      {
-        "script": "bmp_mock_loc_rib_lifecycle.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 156
-      },
-      {
-        "script": "bmp_mock_non_ip_lifecycle.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 125
-      },
-      {
-        "script": "bmp_monitor_ui_lifecycle.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 141
-      },
-      {
-        "script": "bmp_non_ip_bulk_refresh.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1011
-      },
-      {
-        "script": "bmp_packet_parser.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 74
-      },
-      {
-        "script": "bmp_persistence_bulk_refresh.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 5239
-      },
-      {
-        "script": "bmp_persistence_client.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 824
-      },
-      {
-        "script": "bmp_persistence_current_refs.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 3027
-      },
-      {
-        "script": "bmp_persistence_descriptor_reuse.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 181
-      },
-      {
-        "script": "bmp_persistence_existing_objects.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 2076
-      },
-      {
-        "script": "bmp_persistence_mutation.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 67
-      },
-      {
-        "script": "bmp_persistence_node_fork.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 688
-      },
-      {
-        "script": "bmp_persistence_open_owned_status.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 913
-      },
-      {
-        "script": "bmp_persistence_partitions.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 109
-      },
-      {
-        "script": "bmp_persistence_refresh.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 422
-      },
-      {
-        "script": "bmp_persistence_stale_purge.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 430
-      },
-      {
-        "script": "bmp_persistence_storage_regressions.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1211
-      },
-      {
-        "script": "bmp_persistence_store.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 736
-      },
-      {
-        "script": "bmp_persistence_sweep_scheduler.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 258
-      },
-      {
-        "script": "bmp_persistence_topology.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 183
-      },
-      {
-        "script": "bmp_persistence_withdraw_identity.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 128
-      },
-      {
-        "script": "bmp_persistence_worker_e2e.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 593
-      },
-      {
-        "script": "bmp_persistent_route_key.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 64
-      },
-      {
-        "script": "bmp_prefix_normalization_fast.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 92
-      },
-      {
-        "script": "bmp_protocol_correctness.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 163
-      },
-      {
-        "script": "bmp_protocol_review_regressions.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 121
-      },
-      {
-        "script": "bmp_rd_identity.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 72
-      },
-      {
-        "script": "bmp_reconnect_no_eor_timeout.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 2958
-      },
-      {
-        "script": "bmp_reconnect_scope_timeout.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 142
-      },
-      {
-        "script": "bmp_repeated_ingest_baseline.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 588
-      },
-      {
-        "script": "bmp_repeated_ingest_tcp.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1144
-      },
-      {
-        "script": "bmp_restart_page_restore.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1001
-      },
-      {
-        "script": "bmp_route_aging_integration.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 204
-      },
-      {
-        "script": "bmp_route_analysis_identity.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 72
-      },
-      {
-        "script": "bmp_route_analysis_regressions.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 72
-      },
-      {
-        "script": "bmp_route_assurance.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 106
-      },
-      {
-        "script": "bmp_route_assurance_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 73
-      },
-      {
-        "script": "bmp_route_assurance_async_query.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 71
-      },
-      {
-        "script": "bmp_route_assurance_incremental.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 74
-      },
-      {
-        "script": "bmp_route_assurance_performance.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 9956,
-        "stdout": "BMP Route Assurance 1,000,000-path benchmark passed: initial=4783.1ms, cached-page=0.1ms, cached-category-page=0.1ms, retained-heap=234.9MiB, peak-rss=571.2MiB\n"
-      },
-      {
-        "script": "bmp_route_assurance_persisted.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 71
-      },
-      {
-        "script": "bmp_route_assurance_persisted_delta.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 64
-      },
-      {
-        "script": "bmp_route_assurance_races.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 178
-      },
-      {
-        "script": "bmp_route_assurance_service.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 64
-      },
-      {
-        "script": "bmp_route_assurance_stream.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 332
-      },
-      {
-        "script": "bmp_route_assurance_update_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 71
-      },
-      {
-        "script": "bmp_route_assurance_worker_cache.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 164
-      },
-      {
-        "script": "bmp_route_detail_identity.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 479
-      },
-      {
-        "script": "bmp_route_detail_ui.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 143
-      },
-      {
-        "script": "bmp_route_lens.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 79
-      },
-      {
-        "script": "bmp_route_lens_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 73
-      },
-      {
-        "script": "bmp_runtime_failure.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 170
-      },
-      {
-        "script": "bmp_session_lifecycle.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 88
-      },
-      {
-        "script": "bmp_source_scoped_fence.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 61
-      },
-      {
-        "script": "bmp_sql_trace.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 103
-      },
-      {
-        "script": "bmp_stale_purge_app_ui.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 143
-      },
-      {
-        "script": "bmp_statistics_persistence.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 138
-      },
-      {
-        "script": "bmp_statistics_worker.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 78
-      },
-      {
-        "script": "bmp_tcp_ao_app.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 76
-      },
-      {
-        "script": "bmp_tcp_auth_forward.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 177
-      },
-      {
-        "script": "bmp_thread_count_config.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 125
-      },
-      {
-        "script": "bmp_timestamp.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 56
-      },
-      {
-        "script": "bmp_v4_parser.js",
-        "passed": true,
-        "exitCode": 0,
-        "elapsedMs": 1392
-      }
-    ]
-  },
-  "build": {
-    "command": "npm run build",
-    "passed": true
-  },
-  "changedCodeFingerprints": {
-    "electron/utils/bmpPacketParser.js": "46a12e5a396cb17e890edf3e416f8fcdb16b8419507a540b3640cbf8283afa40",
-    "electron/utils/bmpRouteAssurance.js": "82c3c1564cc1e2b940068c48fda8147494e3e458259500de37cbb89d51d4087e",
-    "electron/utils/bmpRouteAttributeCompare.js": "76711d18ecde6232682ae54017d274db0f86fcd9005d1422f25f7683c3f40c7f",
-    "electron/utils/bmpRouteLens.js": "107de5279f72473996bcd79982c115caa2d62e9780a560db1e0b650abaeb39c8",
-    "electron/worker/bmp/bmpAsPath.js": "d4f25f9c65c2658ad98950b9a0bc2cf6eaaa2ead18d38902481ccd77451f1629",
-    "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
-    "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
-    "electron/worker/bmp/bmpRouteAttrStore.js": "9172d7e9e4aabb97c1a34b72de7995fb359ce175f21324939cb9c62dc262352d",
-    "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
-    "electron/worker/bmp/bmpWorker.js": "4ed6d75d49dc2dd921659e21a5433705e471246183e8de25dc83ee39012b8879",
-    "src/view/bmp/BgpRouteAssurance.vue": "ea03c6e6112b042a7a9d0d1e845dc0b7e0ff794951a68dc4c3e7b356866b1b5d",
-    "src/view/bmp/BgpRouteLens.vue": "174d9915979abf643d44c0f6624c348a127c5275629fff58566f7120fa528f34",
-    "test/ci/bmp_manual_stale_purge_sqlite.js": "40fad35a8a6c2886029ffbc6aa7de63e59775e89d7f2a4448800708c70bd149d",
-    "test/ci/bmp_monitor_ui_lifecycle.js": "2b660ebd60b711333117254c3e588c966746b42904e65a53952200d0da6414ea",
-    "test/ci/bmp_persistence_bulk_refresh.js": "09cdf747d15560b5bb854c0bbeefe4da98d7cd75d6dfba35768f77b95503e3f8",
-    "test/ci/bmp_persistence_storage_regressions.js": "5833737ea69b330a74cbd9a3f6d96ebdf710d858180ee91e63116193ef27a57f",
-    "test/ci/bmp_protocol_review_regressions.js": "b18df9f5a56a9e16a8fcec34a42f1224df87a9f2c7a3512837ba69bb8a90d73b",
-    "test/ci/bmp_route_analysis_regressions.js": "933326fbaedb73da5ea755aa656d30bc9bdfde8b413b6e23e91409aaf1d5bba7",
-    "test/ci/bmp_route_assurance_stream.js": "b4d4f971eddc0da6fea5c2375654a64e61845f9c6b5a1317001aaacbf3c2351a",
-    "test/ci/bmp_runtime_failure.js": "fe2c623bd7f0988d9465a2ad0a2487df601a56ced0ae5f0be877582e136b2b7a",
-    "test/ci/bmp_v4_parser.js": "4564def689b8b84c64c12496211bdd71e3cd077670845d5a42aba0b1335ba7fc"
-  },
-  "baselinePreserved": true,
-  "comparison": "Same hardware, runtime, fixture hashes, settings and unchanged benchmark entry point; before is original HEAD in an isolated directory, after is the reviewed working tree",
-  "analysisPerformance": {
-    "command": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron test/ci/bmp_route_assurance_performance.js",
-    "passed": true,
-    "routeCount": 1000000,
-    "initialMs": 5292.4,
-    "cachedPageMs": 0.2,
-    "categoryMs": 0.1,
-    "retainedHeapMiB": 400.7,
-    "peakRssMiB": 775.6,
-    "budgets": {
-      "initialMs": 15000,
-      "cachedPageMs": 100,
-      "retainedHeapMiB": 512,
-      "peakRssMiB": 1536
+    "date": "2026-10-05",
+    "runtime": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
     },
-    "stdout": "BMP Route Assurance 1,000,000-path benchmark passed: initial=5292.4ms, cached-page=0.2ms, cached-category-page=0.1ms, retained-heap=400.7MiB, peak-rss=775.6MiB\n",
-    "note": "Focused run after final witness-sampling correction, followed by all 88 BMP CI scripts; CI run timing is also preserved in ci.results"
-  },
-  "browserE2e": {
-    "command": "E2E_TARGET=browser E2E_SKIP_PACK=1 ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron node_modules/@playwright/test/cli.js test test/e2e/bmp.spec.js test/e2e/bmp-incremental-page.spec.js --workers=1 --timeout=120000 --reporter=list",
-    "passed": true,
-    "total": 6,
-    "durationSeconds": 22.4,
-    "coverage": [
-      "Session/Loc-RIB incremental UI and client isolation",
-      "Assurance toggle, funnel, category/VRF filters, drilldown into Lens",
-      "Lens IP/CIDR/NLRI queries, details and live refresh",
-      "Disconnected history restore",
-      "TCP MD5 configuration"
-    ],
-    "limitations": "Browser mock integration; no live router or packaged release run"
-  },
-  "lint": {
-    "passed": true,
-    "files": 22,
-    "errors": 0,
-    "preExistingWarnings": 1,
-    "note": "Existing unused variable locRibLabeledRoutePeer in bmp_v4_parser.js; outdated Browserslist metadata warning"
-  },
-  "baseCommit": "615e6a695473245c754f5791e0841049a2216cfa",
-  "performanceSourceScopeNote": "Individual reports retain measured-source hashes. The final correction only changes analysis witness sampling, which is disabled in the ingest benchmark and absent from the SQLite GC path. All measured ingest/Store/script hashes remain unchanged; the analysis performance budget was rerun on final code.",
-  "diffCheck": {
-    "passed": true
-  },
-  "format": {
-    "passed": true,
-    "files": 22
-  },
-  "documentationChecks": {
-    "reportLinksValid": true,
-    "historicalSectionUnchanged": true,
-    "reportJsonValid": true
-  }
+    "scope": "All test/ci/bmp_*.js scripts, serial Electron execution; utility process fixtures launched as Electron apps",
+    "ci": {
+        "startedAt": "2026-10-05T04:23:13.072Z",
+        "finishedAt": "2026-10-05T04:24:07.958Z",
+        "durationMs": 54886,
+        "total": 88,
+        "passed": 88,
+        "failed": [],
+        "results": [
+            {
+                "script": "bmp_client_database_isolation.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 556
+            },
+            {
+                "script": "bmp_client_delete_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 112
+            },
+            {
+                "script": "bmp_client_persistence_pool.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 56
+            },
+            {
+                "script": "bmp_client_persistence_store_edges.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 5600
+            },
+            {
+                "script": "bmp_committed_route_refresh.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 104
+            },
+            {
+                "script": "bmp_committed_route_refresh_sqlite.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 3972
+            },
+            {
+                "script": "bmp_cross_client_sweep_isolation.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 116
+            },
+            {
+                "script": "bmp_database_delete_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 150
+            },
+            {
+                "script": "bmp_database_version_check.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 412
+            },
+            {
+                "script": "bmp_database_version_startup.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 57
+            },
+            {
+                "script": "bmp_destructive_ipc_authorization.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 74
+            },
+            {
+                "script": "bmp_epoch_aging.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 111
+            },
+            {
+                "script": "bmp_http_route_key_limits.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 83
+            },
+            {
+                "script": "bmp_incremental_events.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 84
+            },
+            {
+                "script": "bmp_ingest_attribute_reuse.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 93
+            },
+            {
+                "script": "bmp_ingest_compact_reuse.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 116
+            },
+            {
+                "script": "bmp_ingest_delete_fence.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 77
+            },
+            {
+                "script": "bmp_ingest_dto_handoff.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 79
+            },
+            {
+                "script": "bmp_ingest_pool_failure.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 260
+            },
+            {
+                "script": "bmp_ingest_resource_limits.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 498
+            },
+            {
+                "script": "bmp_ingest_threads.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 683
+            },
+            {
+                "script": "bmp_interactive_read_no_fence.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 158
+            },
+            {
+                "script": "bmp_log_level_propagation.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 242
+            },
+            {
+                "script": "bmp_manual_stale_purge.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 98
+            },
+            {
+                "script": "bmp_manual_stale_purge_sqlite.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1187
+            },
+            {
+                "script": "bmp_mock_loc_rib_lifecycle.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 156
+            },
+            {
+                "script": "bmp_mock_non_ip_lifecycle.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 125
+            },
+            {
+                "script": "bmp_monitor_ui_lifecycle.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 141
+            },
+            {
+                "script": "bmp_non_ip_bulk_refresh.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1011
+            },
+            {
+                "script": "bmp_packet_parser.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 74
+            },
+            {
+                "script": "bmp_persistence_bulk_refresh.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 5239
+            },
+            {
+                "script": "bmp_persistence_client.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 824
+            },
+            {
+                "script": "bmp_persistence_current_refs.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 3027
+            },
+            {
+                "script": "bmp_persistence_descriptor_reuse.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 181
+            },
+            {
+                "script": "bmp_persistence_existing_objects.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 2076
+            },
+            {
+                "script": "bmp_persistence_mutation.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 67
+            },
+            {
+                "script": "bmp_persistence_node_fork.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 688
+            },
+            {
+                "script": "bmp_persistence_open_owned_status.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 913
+            },
+            {
+                "script": "bmp_persistence_partitions.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 109
+            },
+            {
+                "script": "bmp_persistence_refresh.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 422
+            },
+            {
+                "script": "bmp_persistence_stale_purge.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 430
+            },
+            {
+                "script": "bmp_persistence_storage_regressions.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1211
+            },
+            {
+                "script": "bmp_persistence_store.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 736
+            },
+            {
+                "script": "bmp_persistence_sweep_scheduler.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 258
+            },
+            {
+                "script": "bmp_persistence_topology.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 183
+            },
+            {
+                "script": "bmp_persistence_withdraw_identity.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 128
+            },
+            {
+                "script": "bmp_persistence_worker_e2e.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 593
+            },
+            {
+                "script": "bmp_persistent_route_key.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 64
+            },
+            {
+                "script": "bmp_prefix_normalization_fast.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 92
+            },
+            {
+                "script": "bmp_protocol_correctness.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 163
+            },
+            {
+                "script": "bmp_protocol_review_regressions.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 121
+            },
+            {
+                "script": "bmp_rd_identity.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 72
+            },
+            {
+                "script": "bmp_reconnect_no_eor_timeout.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 2958
+            },
+            {
+                "script": "bmp_reconnect_scope_timeout.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 142
+            },
+            {
+                "script": "bmp_repeated_ingest_baseline.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 588
+            },
+            {
+                "script": "bmp_repeated_ingest_tcp.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1144
+            },
+            {
+                "script": "bmp_restart_page_restore.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1001
+            },
+            {
+                "script": "bmp_route_aging_integration.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 204
+            },
+            {
+                "script": "bmp_route_analysis_identity.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 72
+            },
+            {
+                "script": "bmp_route_analysis_regressions.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 72
+            },
+            {
+                "script": "bmp_route_assurance.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 106
+            },
+            {
+                "script": "bmp_route_assurance_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 73
+            },
+            {
+                "script": "bmp_route_assurance_async_query.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 71
+            },
+            {
+                "script": "bmp_route_assurance_incremental.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 74
+            },
+            {
+                "script": "bmp_route_assurance_performance.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 9956,
+                "stdout": "BMP Route Assurance 1,000,000-path benchmark passed: initial=4783.1ms, cached-page=0.1ms, cached-category-page=0.1ms, retained-heap=234.9MiB, peak-rss=571.2MiB\n"
+            },
+            {
+                "script": "bmp_route_assurance_persisted.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 71
+            },
+            {
+                "script": "bmp_route_assurance_persisted_delta.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 64
+            },
+            {
+                "script": "bmp_route_assurance_races.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 178
+            },
+            {
+                "script": "bmp_route_assurance_service.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 64
+            },
+            {
+                "script": "bmp_route_assurance_stream.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 332
+            },
+            {
+                "script": "bmp_route_assurance_update_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 71
+            },
+            {
+                "script": "bmp_route_assurance_worker_cache.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 164
+            },
+            {
+                "script": "bmp_route_detail_identity.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 479
+            },
+            {
+                "script": "bmp_route_detail_ui.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 143
+            },
+            {
+                "script": "bmp_route_lens.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 79
+            },
+            {
+                "script": "bmp_route_lens_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 73
+            },
+            {
+                "script": "bmp_runtime_failure.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 170
+            },
+            {
+                "script": "bmp_session_lifecycle.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 88
+            },
+            {
+                "script": "bmp_source_scoped_fence.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 61
+            },
+            {
+                "script": "bmp_sql_trace.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 103
+            },
+            {
+                "script": "bmp_stale_purge_app_ui.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 143
+            },
+            {
+                "script": "bmp_statistics_persistence.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 138
+            },
+            {
+                "script": "bmp_statistics_worker.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 78
+            },
+            {
+                "script": "bmp_tcp_ao_app.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 76
+            },
+            {
+                "script": "bmp_tcp_auth_forward.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 177
+            },
+            {
+                "script": "bmp_thread_count_config.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 125
+            },
+            {
+                "script": "bmp_timestamp.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 56
+            },
+            {
+                "script": "bmp_v4_parser.js",
+                "passed": true,
+                "exitCode": 0,
+                "elapsedMs": 1392
+            }
+        ]
+    },
+    "build": {
+        "command": "npm run build",
+        "passed": true
+    },
+    "changedCodeFingerprints": {
+        "electron/utils/bmpPacketParser.js": "46a12e5a396cb17e890edf3e416f8fcdb16b8419507a540b3640cbf8283afa40",
+        "electron/utils/bmpRouteAssurance.js": "82c3c1564cc1e2b940068c48fda8147494e3e458259500de37cbb89d51d4087e",
+        "electron/utils/bmpRouteAttributeCompare.js": "76711d18ecde6232682ae54017d274db0f86fcd9005d1422f25f7683c3f40c7f",
+        "electron/utils/bmpRouteLens.js": "107de5279f72473996bcd79982c115caa2d62e9780a560db1e0b650abaeb39c8",
+        "electron/worker/bmp/bmpAsPath.js": "d4f25f9c65c2658ad98950b9a0bc2cf6eaaa2ead18d38902481ccd77451f1629",
+        "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
+        "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
+        "electron/worker/bmp/bmpRouteAttrStore.js": "9172d7e9e4aabb97c1a34b72de7995fb359ce175f21324939cb9c62dc262352d",
+        "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
+        "electron/worker/bmp/bmpWorker.js": "4ed6d75d49dc2dd921659e21a5433705e471246183e8de25dc83ee39012b8879",
+        "src/view/bmp/BgpRouteAssurance.vue": "ea03c6e6112b042a7a9d0d1e845dc0b7e0ff794951a68dc4c3e7b356866b1b5d",
+        "src/view/bmp/BgpRouteLens.vue": "174d9915979abf643d44c0f6624c348a127c5275629fff58566f7120fa528f34",
+        "test/ci/bmp_manual_stale_purge_sqlite.js": "40fad35a8a6c2886029ffbc6aa7de63e59775e89d7f2a4448800708c70bd149d",
+        "test/ci/bmp_monitor_ui_lifecycle.js": "2b660ebd60b711333117254c3e588c966746b42904e65a53952200d0da6414ea",
+        "test/ci/bmp_persistence_bulk_refresh.js": "09cdf747d15560b5bb854c0bbeefe4da98d7cd75d6dfba35768f77b95503e3f8",
+        "test/ci/bmp_persistence_storage_regressions.js": "5833737ea69b330a74cbd9a3f6d96ebdf710d858180ee91e63116193ef27a57f",
+        "test/ci/bmp_protocol_review_regressions.js": "b18df9f5a56a9e16a8fcec34a42f1224df87a9f2c7a3512837ba69bb8a90d73b",
+        "test/ci/bmp_route_analysis_regressions.js": "933326fbaedb73da5ea755aa656d30bc9bdfde8b413b6e23e91409aaf1d5bba7",
+        "test/ci/bmp_route_assurance_stream.js": "b4d4f971eddc0da6fea5c2375654a64e61845f9c6b5a1317001aaacbf3c2351a",
+        "test/ci/bmp_runtime_failure.js": "fe2c623bd7f0988d9465a2ad0a2487df601a56ced0ae5f0be877582e136b2b7a",
+        "test/ci/bmp_v4_parser.js": "4564def689b8b84c64c12496211bdd71e3cd077670845d5a42aba0b1335ba7fc"
+    },
+    "baselinePreserved": true,
+    "comparison": "Same hardware, runtime, fixture hashes, settings and unchanged benchmark entry point; before is original HEAD in an isolated directory, after is the reviewed working tree",
+    "analysisPerformance": {
+        "command": "ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron test/ci/bmp_route_assurance_performance.js",
+        "passed": true,
+        "routeCount": 1000000,
+        "initialMs": 5292.4,
+        "cachedPageMs": 0.2,
+        "categoryMs": 0.1,
+        "retainedHeapMiB": 400.7,
+        "peakRssMiB": 775.6,
+        "budgets": {
+            "initialMs": 15000,
+            "cachedPageMs": 100,
+            "retainedHeapMiB": 512,
+            "peakRssMiB": 1536
+        },
+        "stdout": "BMP Route Assurance 1,000,000-path benchmark passed: initial=5292.4ms, cached-page=0.2ms, cached-category-page=0.1ms, retained-heap=400.7MiB, peak-rss=775.6MiB\n",
+        "note": "Focused run after final witness-sampling correction, followed by all 88 BMP CI scripts; CI run timing is also preserved in ci.results"
+    },
+    "browserE2e": {
+        "command": "E2E_TARGET=browser E2E_SKIP_PACK=1 ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron node_modules/@playwright/test/cli.js test test/e2e/bmp.spec.js test/e2e/bmp-incremental-page.spec.js --workers=1 --timeout=120000 --reporter=list",
+        "passed": true,
+        "total": 6,
+        "durationSeconds": 22.4,
+        "coverage": [
+            "Session/Loc-RIB incremental UI and client isolation",
+            "Assurance toggle, funnel, category/VRF filters, drilldown into Lens",
+            "Lens IP/CIDR/NLRI queries, details and live refresh",
+            "Disconnected history restore",
+            "TCP MD5 configuration"
+        ],
+        "limitations": "Browser mock integration; no live router or packaged release run"
+    },
+    "lint": {
+        "passed": true,
+        "files": 22,
+        "errors": 0,
+        "preExistingWarnings": 1,
+        "note": "Existing unused variable locRibLabeledRoutePeer in bmp_v4_parser.js; outdated Browserslist metadata warning"
+    },
+    "baseCommit": "615e6a695473245c754f5791e0841049a2216cfa",
+    "performanceSourceScopeNote": "Individual reports retain measured-source hashes. The final correction only changes analysis witness sampling, which is disabled in the ingest benchmark and absent from the SQLite GC path. All measured ingest/Store/script hashes remain unchanged; the analysis performance budget was rerun on final code.",
+    "diffCheck": {
+        "passed": true
+    },
+    "format": {
+        "passed": true,
+        "files": 22
+    },
+    "documentationChecks": {
+        "reportLinksValid": true,
+        "historicalSectionUnchanged": true,
+        "reportJsonValid": true
+    }
 }

@@ -1,617 +1,593 @@
 {
-  "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
-  "routeCount": 1000000,
-  "rounds": 3,
-  "packetRoutes": 50,
-  "attributeGroups": 100,
-  "analysisEnabled": false,
-  "settings": {
-    "threadCount": 1,
-    "persistenceBatchSize": 5000,
-    "persistenceFlushMs": 20,
-    "persistenceReadFenceTimeoutMs": 30000,
-    "persistenceSweepIntervalMs": 3600000,
-    "logLevel": "off"
-  },
-  "fixtures": {
-    "peer": {
-      "bytes": 6380000,
-      "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
-    },
-    "loc-rib": {
-      "bytes": 6620000,
-      "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
-    }
-  },
-  "system": {
-    "platform": "darwin",
-    "arch": "arm64",
-    "cpu": "Apple M4 Pro",
-    "versions": {
-      "node": "16.17.1",
-      "v8": "10.8.168.25-electron.0",
-      "uv": "1.43.0",
-      "zlib": "1.2.12.1-motley",
-      "brotli": "1.0.9",
-      "ares": "1.18.1",
-      "modules": "110",
-      "nghttp2": "1.47.0",
-      "napi": "8",
-      "llhttp": "6.0.9",
-      "openssl": "1.1.1",
-      "cldr": "41.0",
-      "icu": "71.1",
-      "tz": "2022e",
-      "unicode": "14.0",
-      "electron": "22.3.27"
-    }
-  },
-  "baselineLabel": "bmp-review-before-20261005",
-  "optimizedLabel": "bmp-review-after-20261005",
-  "baselineFingerprints": {
-    "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
-    "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
-    "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
-    "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
-    "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
-  },
-  "optimizedFingerprints": {
-    "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
-    "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
-    "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
-    "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
-    "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
-  },
-  "rows": [
-    {
-      "kind": "peer",
-      "phase": "first",
-      "baselineMedianMs": 22663.775,
-      "optimizedMedianMs": 22604.033,
-      "durationReductionPercent": 0.26,
-      "throughputIncreasePercent": 0.26,
-      "baselineRoutesPerSecond": 44123,
-      "optimizedRoutesPerSecond": 44240,
-      "baselineRangeMs": [
-        22343.696,
-        22725.81
-      ],
-      "optimizedRangeMs": [
-        21821.463,
-        22706.421
-      ]
-    },
-    {
-      "kind": "peer",
-      "phase": "repeat",
-      "baselineMedianMs": 9779.913,
-      "optimizedMedianMs": 9671.867,
-      "durationReductionPercent": 1.1,
-      "throughputIncreasePercent": 1.12,
-      "baselineRoutesPerSecond": 102250,
-      "optimizedRoutesPerSecond": 103393,
-      "baselineRangeMs": [
-        9636.486,
-        9970.065
-      ],
-      "optimizedRangeMs": [
-        9660.882,
-        9828.537
-      ]
-    },
-    {
-      "kind": "loc-rib",
-      "phase": "first",
-      "baselineMedianMs": 24479.772,
-      "optimizedMedianMs": 23660.635,
-      "durationReductionPercent": 3.35,
-      "throughputIncreasePercent": 3.46,
-      "baselineRoutesPerSecond": 40850,
-      "optimizedRoutesPerSecond": 42264,
-      "baselineRangeMs": [
-        24356.342,
-        24570.233
-      ],
-      "optimizedRangeMs": [
-        23620.114,
-        23708.322
-      ]
-    },
-    {
-      "kind": "loc-rib",
-      "phase": "repeat",
-      "baselineMedianMs": 11904.294,
-      "optimizedMedianMs": 11615.164,
-      "durationReductionPercent": 2.43,
-      "throughputIncreasePercent": 2.49,
-      "baselineRoutesPerSecond": 84003,
-      "optimizedRoutesPerSecond": 86094,
-      "baselineRangeMs": [
-        11838.463,
-        11994.546
-      ],
-      "optimizedRangeMs": [
-        11549.199,
-        11902.237
-      ]
-    }
-  ],
-  "baseline": {
-    "label": "bmp-review-before-20261005",
+    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
     "routeCount": 1000000,
     "rounds": 3,
     "packetRoutes": 50,
     "attributeGroups": 100,
-    "settings": {
-      "threadCount": 1,
-      "persistenceBatchSize": 5000,
-      "persistenceFlushMs": 20,
-      "persistenceReadFenceTimeoutMs": 30000,
-      "persistenceSweepIntervalMs": 3600000,
-      "logLevel": "off"
-    },
     "analysisEnabled": false,
-    "startedAt": "2026-10-05T03:51:48.101Z",
-    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
-    "system": {
-      "platform": "darwin",
-      "arch": "arm64",
-      "cpu": "Apple M4 Pro",
-      "versions": {
-        "node": "16.17.1",
-        "v8": "10.8.168.25-electron.0",
-        "uv": "1.43.0",
-        "zlib": "1.2.12.1-motley",
-        "brotli": "1.0.9",
-        "ares": "1.18.1",
-        "modules": "110",
-        "nghttp2": "1.47.0",
-        "napi": "8",
-        "llhttp": "6.0.9",
-        "openssl": "1.1.1",
-        "cldr": "41.0",
-        "icu": "71.1",
-        "tz": "2022e",
-        "unicode": "14.0",
-        "electron": "22.3.27"
-      }
-    },
-    "fingerprints": {
-      "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
-      "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
-      "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
-      "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
-      "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+    "settings": {
+        "threadCount": 1,
+        "persistenceBatchSize": 5000,
+        "persistenceFlushMs": 20,
+        "persistenceReadFenceTimeoutMs": 30000,
+        "persistenceSweepIntervalMs": 3600000,
+        "logLevel": "off"
     },
     "fixtures": {
-      "peer": {
-        "bytes": 6380000,
-        "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
-      },
-      "loc-rib": {
-        "bytes": 6620000,
-        "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
-      }
+        "peer": {
+            "bytes": 6380000,
+            "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+        },
+        "loc-rib": {
+            "bytes": 6620000,
+            "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+        }
     },
-    "results": [
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 0,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 22725.81,
-        "routesPerSecond": 44003,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:51:48.333Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 0,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9970.065,
-        "routesPerSecond": 100300,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:52:11.196Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 0,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 24570.233,
-        "routesPerSecond": 40700,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:52:21.901Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 0,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11904.294,
-        "routesPerSecond": 84003,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:52:46.692Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 1,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 24356.342,
-        "routesPerSecond": 41057,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:52:59.147Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 1,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11838.463,
-        "routesPerSecond": 84470,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:53:23.720Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 1,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 22663.775,
-        "routesPerSecond": 44123,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:53:36.121Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 1,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9779.913,
-        "routesPerSecond": 102250,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:53:58.923Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 2,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 22343.696,
-        "routesPerSecond": 44755,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:54:09.364Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 2,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9636.486,
-        "routesPerSecond": 103772,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:54:31.845Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 2,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 24479.772,
-        "routesPerSecond": 40850,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:54:42.156Z"
-      },
-      {
-        "label": "bmp-review-before-20261005",
-        "round": 2,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11994.546,
-        "routesPerSecond": 83371,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:55:06.850Z"
-      }
-    ],
-    "summary": [
-      {
-        "kind": "peer",
-        "phase": "first",
-        "medianMs": 22663.775,
-        "routesPerSecond": 44123,
-        "minMs": 22343.696,
-        "maxMs": 22725.81
-      },
-      {
-        "kind": "peer",
-        "phase": "repeat",
-        "medianMs": 9779.913,
-        "routesPerSecond": 102250,
-        "minMs": 9636.486,
-        "maxMs": 9970.065
-      },
-      {
-        "kind": "loc-rib",
-        "phase": "first",
-        "medianMs": 24479.772,
-        "routesPerSecond": 40850,
-        "minMs": 24356.342,
-        "maxMs": 24570.233
-      },
-      {
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "medianMs": 11904.294,
-        "routesPerSecond": 84003,
-        "minMs": 11838.463,
-        "maxMs": 11994.546
-      }
-    ],
-    "finishedAt": "2026-10-05T03:55:19.213Z"
-  },
-  "optimized": {
-    "label": "bmp-review-after-20261005",
-    "routeCount": 1000000,
-    "rounds": 3,
-    "packetRoutes": 50,
-    "attributeGroups": 100,
-    "settings": {
-      "threadCount": 1,
-      "persistenceBatchSize": 5000,
-      "persistenceFlushMs": 20,
-      "persistenceReadFenceTimeoutMs": 30000,
-      "persistenceSweepIntervalMs": 3600000,
-      "logLevel": "off"
-    },
-    "analysisEnabled": false,
-    "startedAt": "2026-10-05T03:57:36.809Z",
-    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
     "system": {
-      "platform": "darwin",
-      "arch": "arm64",
-      "cpu": "Apple M4 Pro",
-      "versions": {
-        "node": "16.17.1",
-        "v8": "10.8.168.25-electron.0",
-        "uv": "1.43.0",
-        "zlib": "1.2.12.1-motley",
-        "brotli": "1.0.9",
-        "ares": "1.18.1",
-        "modules": "110",
-        "nghttp2": "1.47.0",
-        "napi": "8",
-        "llhttp": "6.0.9",
-        "openssl": "1.1.1",
-        "cldr": "41.0",
-        "icu": "71.1",
-        "tz": "2022e",
-        "unicode": "14.0",
-        "electron": "22.3.27"
-      }
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
     },
-    "fingerprints": {
-      "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
-      "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
-      "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
-      "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
-      "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+    "baselineLabel": "bmp-review-before-20261005",
+    "optimizedLabel": "bmp-review-after-20261005",
+    "baselineFingerprints": {
+        "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
+        "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
     },
-    "fixtures": {
-      "peer": {
-        "bytes": 6380000,
-        "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
-      },
-      "loc-rib": {
-        "bytes": 6620000,
-        "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
-      }
+    "optimizedFingerprints": {
+        "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
+        "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
     },
-    "results": [
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 0,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 21821.463,
-        "routesPerSecond": 45826,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:57:37.019Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 0,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9671.867,
-        "routesPerSecond": 103393,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:57:58.974Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 0,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 23620.114,
-        "routesPerSecond": 42337,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:58:09.292Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 0,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11549.199,
-        "routesPerSecond": 86586,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:58:33.121Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 1,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 23708.322,
-        "routesPerSecond": 42179,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:58:45.204Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 1,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11902.237,
-        "routesPerSecond": 84018,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T03:59:09.121Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 1,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 22706.421,
-        "routesPerSecond": 44040,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:59:21.564Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 1,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9828.537,
-        "routesPerSecond": 101745,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:59:44.406Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 2,
-        "kind": "peer",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 22604.033,
-        "routesPerSecond": 44240,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T03:59:54.958Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 2,
-        "kind": "peer",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 9660.882,
-        "routesPerSecond": 103510,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6380000,
-        "sampleLastSeenAt": "2026-10-05T04:00:17.697Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 2,
-        "kind": "loc-rib",
-        "phase": "first",
-        "routes": 1000000,
-        "milliseconds": 23660.635,
-        "routesPerSecond": 42264,
-        "persistedTotal": 1000001,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T04:00:28.016Z"
-      },
-      {
-        "label": "bmp-review-after-20261005",
-        "round": 2,
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "routes": 1000000,
-        "milliseconds": 11615.164,
-        "routesPerSecond": 86094,
-        "persistedTotal": 1000002,
-        "fixtureBytes": 6620000,
-        "sampleLastSeenAt": "2026-10-05T04:00:51.885Z"
-      }
+    "rows": [
+        {
+            "kind": "peer",
+            "phase": "first",
+            "baselineMedianMs": 22663.775,
+            "optimizedMedianMs": 22604.033,
+            "durationReductionPercent": 0.26,
+            "throughputIncreasePercent": 0.26,
+            "baselineRoutesPerSecond": 44123,
+            "optimizedRoutesPerSecond": 44240,
+            "baselineRangeMs": [22343.696, 22725.81],
+            "optimizedRangeMs": [21821.463, 22706.421]
+        },
+        {
+            "kind": "peer",
+            "phase": "repeat",
+            "baselineMedianMs": 9779.913,
+            "optimizedMedianMs": 9671.867,
+            "durationReductionPercent": 1.1,
+            "throughputIncreasePercent": 1.12,
+            "baselineRoutesPerSecond": 102250,
+            "optimizedRoutesPerSecond": 103393,
+            "baselineRangeMs": [9636.486, 9970.065],
+            "optimizedRangeMs": [9660.882, 9828.537]
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "first",
+            "baselineMedianMs": 24479.772,
+            "optimizedMedianMs": 23660.635,
+            "durationReductionPercent": 3.35,
+            "throughputIncreasePercent": 3.46,
+            "baselineRoutesPerSecond": 40850,
+            "optimizedRoutesPerSecond": 42264,
+            "baselineRangeMs": [24356.342, 24570.233],
+            "optimizedRangeMs": [23620.114, 23708.322]
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "baselineMedianMs": 11904.294,
+            "optimizedMedianMs": 11615.164,
+            "durationReductionPercent": 2.43,
+            "throughputIncreasePercent": 2.49,
+            "baselineRoutesPerSecond": 84003,
+            "optimizedRoutesPerSecond": 86094,
+            "baselineRangeMs": [11838.463, 11994.546],
+            "optimizedRangeMs": [11549.199, 11902.237]
+        }
     ],
-    "summary": [
-      {
-        "kind": "peer",
-        "phase": "first",
-        "medianMs": 22604.033,
-        "routesPerSecond": 44240,
-        "minMs": 21821.463,
-        "maxMs": 22706.421
-      },
-      {
-        "kind": "peer",
-        "phase": "repeat",
-        "medianMs": 9671.867,
-        "routesPerSecond": 103393,
-        "minMs": 9660.882,
-        "maxMs": 9828.537
-      },
-      {
-        "kind": "loc-rib",
-        "phase": "first",
-        "medianMs": 23660.635,
-        "routesPerSecond": 42264,
-        "minMs": 23620.114,
-        "maxMs": 23708.322
-      },
-      {
-        "kind": "loc-rib",
-        "phase": "repeat",
-        "medianMs": 11615.164,
-        "routesPerSecond": 86094,
-        "minMs": 11549.199,
-        "maxMs": 11902.237
-      }
-    ],
-    "finishedAt": "2026-10-05T04:01:03.830Z"
-  }
+    "baseline": {
+        "label": "bmp-review-before-20261005",
+        "routeCount": 1000000,
+        "rounds": 3,
+        "packetRoutes": 50,
+        "attributeGroups": 100,
+        "settings": {
+            "threadCount": 1,
+            "persistenceBatchSize": 5000,
+            "persistenceFlushMs": 20,
+            "persistenceReadFenceTimeoutMs": 30000,
+            "persistenceSweepIntervalMs": 3600000,
+            "logLevel": "off"
+        },
+        "analysisEnabled": false,
+        "startedAt": "2026-10-05T03:51:48.101Z",
+        "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
+        "system": {
+            "platform": "darwin",
+            "arch": "arm64",
+            "cpu": "Apple M4 Pro",
+            "versions": {
+                "node": "16.17.1",
+                "v8": "10.8.168.25-electron.0",
+                "uv": "1.43.0",
+                "zlib": "1.2.12.1-motley",
+                "brotli": "1.0.9",
+                "ares": "1.18.1",
+                "modules": "110",
+                "nghttp2": "1.47.0",
+                "napi": "8",
+                "llhttp": "6.0.9",
+                "openssl": "1.1.1",
+                "cldr": "41.0",
+                "icu": "71.1",
+                "tz": "2022e",
+                "unicode": "14.0",
+                "electron": "22.3.27"
+            }
+        },
+        "fingerprints": {
+            "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
+            "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
+            "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+            "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
+            "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+        },
+        "fixtures": {
+            "peer": {
+                "bytes": 6380000,
+                "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+            },
+            "loc-rib": {
+                "bytes": 6620000,
+                "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+            }
+        },
+        "results": [
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 0,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 22725.81,
+                "routesPerSecond": 44003,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:51:48.333Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 0,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9970.065,
+                "routesPerSecond": 100300,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:52:11.196Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 0,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 24570.233,
+                "routesPerSecond": 40700,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:52:21.901Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 0,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11904.294,
+                "routesPerSecond": 84003,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:52:46.692Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 1,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 24356.342,
+                "routesPerSecond": 41057,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:52:59.147Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 1,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11838.463,
+                "routesPerSecond": 84470,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:53:23.720Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 1,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 22663.775,
+                "routesPerSecond": 44123,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:53:36.121Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 1,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9779.913,
+                "routesPerSecond": 102250,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:53:58.923Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 2,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 22343.696,
+                "routesPerSecond": 44755,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:54:09.364Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 2,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9636.486,
+                "routesPerSecond": 103772,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:54:31.845Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 2,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 24479.772,
+                "routesPerSecond": 40850,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:54:42.156Z"
+            },
+            {
+                "label": "bmp-review-before-20261005",
+                "round": 2,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11994.546,
+                "routesPerSecond": 83371,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:55:06.850Z"
+            }
+        ],
+        "summary": [
+            {
+                "kind": "peer",
+                "phase": "first",
+                "medianMs": 22663.775,
+                "routesPerSecond": 44123,
+                "minMs": 22343.696,
+                "maxMs": 22725.81
+            },
+            {
+                "kind": "peer",
+                "phase": "repeat",
+                "medianMs": 9779.913,
+                "routesPerSecond": 102250,
+                "minMs": 9636.486,
+                "maxMs": 9970.065
+            },
+            {
+                "kind": "loc-rib",
+                "phase": "first",
+                "medianMs": 24479.772,
+                "routesPerSecond": 40850,
+                "minMs": 24356.342,
+                "maxMs": 24570.233
+            },
+            {
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "medianMs": 11904.294,
+                "routesPerSecond": 84003,
+                "minMs": 11838.463,
+                "maxMs": 11994.546
+            }
+        ],
+        "finishedAt": "2026-10-05T03:55:19.213Z"
+    },
+    "optimized": {
+        "label": "bmp-review-after-20261005",
+        "routeCount": 1000000,
+        "rounds": 3,
+        "packetRoutes": 50,
+        "attributeGroups": 100,
+        "settings": {
+            "threadCount": 1,
+            "persistenceBatchSize": 5000,
+            "persistenceFlushMs": 20,
+            "persistenceReadFenceTimeoutMs": 30000,
+            "persistenceSweepIntervalMs": 3600000,
+            "logLevel": "off"
+        },
+        "analysisEnabled": false,
+        "startedAt": "2026-10-05T03:57:36.809Z",
+        "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
+        "system": {
+            "platform": "darwin",
+            "arch": "arm64",
+            "cpu": "Apple M4 Pro",
+            "versions": {
+                "node": "16.17.1",
+                "v8": "10.8.168.25-electron.0",
+                "uv": "1.43.0",
+                "zlib": "1.2.12.1-motley",
+                "brotli": "1.0.9",
+                "ares": "1.18.1",
+                "modules": "110",
+                "nghttp2": "1.47.0",
+                "napi": "8",
+                "llhttp": "6.0.9",
+                "openssl": "1.1.1",
+                "cldr": "41.0",
+                "icu": "71.1",
+                "tz": "2022e",
+                "unicode": "14.0",
+                "electron": "22.3.27"
+            }
+        },
+        "fingerprints": {
+            "electron/worker/bmp/bmpSession.js": "075bdfddc444535abaf995a7ce61361c00bd8a813d6863b65780ee626e7cc25c",
+            "electron/worker/bmp/bmpBgpRoute.js": "9b76fcbdc890c2ede2efa4a3b95e52deac7a7537e19b1a773710b55e82b3fb6f",
+            "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+            "electron/worker/bmp/bmpPersistenceStore.js": "2ae8929ab8309f7ec883fe337f99497f02294633974fe719478c8d1d3e38a6f9",
+            "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+        },
+        "fixtures": {
+            "peer": {
+                "bytes": 6380000,
+                "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+            },
+            "loc-rib": {
+                "bytes": 6620000,
+                "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+            }
+        },
+        "results": [
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 0,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 21821.463,
+                "routesPerSecond": 45826,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:57:37.019Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 0,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9671.867,
+                "routesPerSecond": 103393,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:57:58.974Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 0,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 23620.114,
+                "routesPerSecond": 42337,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:58:09.292Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 0,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11549.199,
+                "routesPerSecond": 86586,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:58:33.121Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 1,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 23708.322,
+                "routesPerSecond": 42179,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:58:45.204Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 1,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11902.237,
+                "routesPerSecond": 84018,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T03:59:09.121Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 1,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 22706.421,
+                "routesPerSecond": 44040,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:59:21.564Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 1,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9828.537,
+                "routesPerSecond": 101745,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:59:44.406Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 2,
+                "kind": "peer",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 22604.033,
+                "routesPerSecond": 44240,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T03:59:54.958Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 2,
+                "kind": "peer",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 9660.882,
+                "routesPerSecond": 103510,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6380000,
+                "sampleLastSeenAt": "2026-10-05T04:00:17.697Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 2,
+                "kind": "loc-rib",
+                "phase": "first",
+                "routes": 1000000,
+                "milliseconds": 23660.635,
+                "routesPerSecond": 42264,
+                "persistedTotal": 1000001,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T04:00:28.016Z"
+            },
+            {
+                "label": "bmp-review-after-20261005",
+                "round": 2,
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "routes": 1000000,
+                "milliseconds": 11615.164,
+                "routesPerSecond": 86094,
+                "persistedTotal": 1000002,
+                "fixtureBytes": 6620000,
+                "sampleLastSeenAt": "2026-10-05T04:00:51.885Z"
+            }
+        ],
+        "summary": [
+            {
+                "kind": "peer",
+                "phase": "first",
+                "medianMs": 22604.033,
+                "routesPerSecond": 44240,
+                "minMs": 21821.463,
+                "maxMs": 22706.421
+            },
+            {
+                "kind": "peer",
+                "phase": "repeat",
+                "medianMs": 9671.867,
+                "routesPerSecond": 103393,
+                "minMs": 9660.882,
+                "maxMs": 9828.537
+            },
+            {
+                "kind": "loc-rib",
+                "phase": "first",
+                "medianMs": 23660.635,
+                "routesPerSecond": 42264,
+                "minMs": 23620.114,
+                "maxMs": 23708.322
+            },
+            {
+                "kind": "loc-rib",
+                "phase": "repeat",
+                "medianMs": 11615.164,
+                "routesPerSecond": 86094,
+                "minMs": 11549.199,
+                "maxMs": 11902.237
+            }
+        ],
+        "finishedAt": "2026-10-05T04:01:03.830Z"
+    }
 }

@@ -134,16 +134,18 @@ Session RIB 路由详情：
 
 ![BMP Session 路由详情](images/bmp/bmp-session-route-detail.png)
 
-Session、Loc-RIB 和路由追踪共用路由详情弹窗，沿用 Session 详情的固定高度、页签和分组展示：
+Session、Loc-RIB 和路由追踪共用固定高度的路由详情弹窗，保留以下四个页签：
 
-- **路由概览**：路由身份、地址族、来源、RIB 阶段、状态、Path Marking 和生命周期。
-- **BGP 属性**：用可读卡片展示路径属性，包括路由来源、AS 路径、选路参数、Community、聚合与隧道信息。标准 Community 显示约定名称，扩展 Community 显示 Route Target、Site of Origin 等含义；未知属性保留类型和可展开的原始值。
+- **路由概览**：顶部保留地址族、路由身份和四个摘要卡片，分别展示路由状态、解析状态、路径状态信息和路由属性数量；下方以表格展示路由来源、RIB 阶段和观测生命周期，并保留 Path Marking 提示。
+- **BGP 属性**：以表格展示路径属性的解析值，包括路由来源、下一跳、本地优先级、MED、AS 路径、Community、聚合与隧道信息。标准 Community 显示约定名称，扩展 Community 显示 Route Target、Site of Origin 等含义。
 - **NLRI / TLV**：按地址族展示前缀、RD、MPLS 标签、EVPN 的 MAC/VNI、FlowSpec 匹配规则、BGP-LS 描述符和 Route Monitoring TLV。
 - **原始数据**：完整详情 JSON，进入该页签时才加载，保留原始字段和值。
 
+概览不再重复展示下一跳、本地优先级、MED 和 AS 路径，可在“BGP 属性”页签查看。来源与观测信息、BGP 属性和 NLRI / TLV 的解析明细使用表格，保留解析错误和告警；没有解码结果的原始字节不作为字段值展示。字段内不提供原始编码展开，完整 JSON 仍可在“原始数据”页签查看。
+
 ![BMP 路由完整属性](images/bmp/bmp-route-detail-attributes.png)
 
-后续上报会保存原先未进入详情的路径属性；历史记录中未保存的属性需要设备重新上报后才能补齐。MP_REACH/MP_UNREACH 的属性头在 BGP 属性中展示，当前路由的 NLRI 单独展示，不混入同一 UPDATE 内其他路由。
+后续上报会保存原先未进入详情的路径属性；历史记录中未保存的属性需要设备重新上报后才能补齐。MP_REACH/MP_UNREACH 的已解析属性字段在 BGP 属性分组中展示，当前路由的 NLRI 单独展示，不混入同一 UPDATE 内其他路由。
 
 路由列表包含地址组、`pathId`、`rd`、前缀、掩码、下一跳、AS Path、路由状态等字段。IPv4/IPv6 单播没有携带 RD 时，页面和存储按 `0:0` 处理，避免路由 key 歧义。
 
@@ -241,7 +243,7 @@ Session 和 Loc-RIB 的详情入口都来自 current route。路由成功 withdr
 
 图中的连线表示页面尝试把同一查询目标在相邻阶段进行关联。不同阶段属于不同 Scope，数据库没有一个“设备内部策略流水号”可以天然串起五段，因此连线和属性配对属于观测关联，不是原始策略执行日志。
 
-点击任一路由卡片可打开完整路由详情：
+点击任一路由卡片可打开同一份路由详情弹窗：
 
 ![BMP 路由追踪的路由详情](images/bmp/bmp-route-lens-route-detail.png)
 

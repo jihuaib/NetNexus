@@ -1,0 +1,279 @@
+{
+    "artifactFormatting": "Archived JSON copies use the repository Prettier configuration. Only whitespace and hash-tracking metadata changed; all measurement values are preserved. Artifact sha256 hashes refer to formatted repository copies, while originalSha256 hashes refer to unchanged original measurement files.",
+    "sourceCommit": "5d273d2a15d119d7782d4bf7e13d86a65431a94e",
+    "changeIntroducedBy": "4c0866aa05507f3dbbcd85850be6eeb9a10fba45",
+    "conclusion": "统计刷新使详细清理 SELECT 的连接顺序和排序计划回退。关闭新增统计刷新恢复有序访问；仅完整 ANALYZE 或强制原索引均不能消除临时排序。",
+    "historicalObservation": {
+        "note": "Oct5 与 Oct7 为跨日正式报告，不是本次同场 A/B。历史精确源码快照未能从可达 Git 历史还原。",
+        "before": [
+            {
+                "kind": "peer",
+                "routes": 1000000,
+                "sparse": false,
+                "rounds": 3,
+                "beforeMs": 45433.81650006771,
+                "afterMs": 6375.678125023842,
+                "reductionPercent": 85.96710860727639
+            },
+            {
+                "kind": "loc-rib",
+                "routes": 1000000,
+                "sparse": false,
+                "rounds": 3,
+                "beforeMs": 45661.56475007534,
+                "afterMs": 6411.073083996773,
+                "reductionPercent": 85.95958522427509
+            }
+        ],
+        "after": [
+            {
+                "kind": "peer",
+                "routes": 1000000,
+                "sparse": false,
+                "rounds": 3,
+                "beforeMs": 52029.61379098892,
+                "afterMs": 6320.839958012104,
+                "reductionPercent": 87.85145708864205
+            },
+            {
+                "kind": "loc-rib",
+                "routes": 1000000,
+                "sparse": false,
+                "rounds": 3,
+                "beforeMs": 52296.43029099703,
+                "afterMs": 6408.06329202652,
+                "reductionPercent": 87.7466525795936
+            }
+        ]
+    },
+    "causalExperiment": {
+        "scope": "Peer IPv4 unicast，1000000条全部stale，共享1套小payload/attributes，普通IPv4 nextHop",
+        "rounds": 2,
+        "order": "第1轮current→no-optimize，第2轮no-optimize→current，所有负载串行运行",
+        "control": "同一当前Store实现，仅覆写optimizeQueryStatistics为空函数；nextHop格式化和其他代码保持开启",
+        "groups": {
+            "current": {
+                "sampleCount": 2,
+                "detailedMeanMs": 50493.759207993746,
+                "detailedSamplesMs": [50400.7897079885, 50586.72870799899],
+                "selectMeanMs": 19936.137123465538,
+                "mapMeanMs": 18592.991940438747,
+                "gcMeanMs": 3024.463191524148,
+                "otherMeanMs": 8940.166952565312,
+                "compactMeanMs": 6344.889937996864,
+                "compactSamplesMs": [6377.476209014654, 6312.3036669790745]
+            },
+            "no-optimize": {
+                "sampleCount": 2,
+                "detailedMeanMs": 45328.500749990344,
+                "detailedSamplesMs": [45408.275083988905, 45248.72641599178],
+                "selectMeanMs": 14593.830664470792,
+                "mapMeanMs": 18698.966958135366,
+                "gcMeanMs": 3054.770500525832,
+                "otherMeanMs": 8980.932626858354,
+                "compactMeanMs": 6423.309937506914,
+                "compactSamplesMs": [6447.620750010014, 6398.999125003815]
+            }
+        },
+        "detailedRegressionPercent": 11.395167218285952,
+        "additionalTotalMs": 5165.258458003402,
+        "additionalSelectMs": 5342.306458994746,
+        "queryPlans": {
+            "current": [
+                {
+                    "id": 14,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN s"
+                },
+                {
+                    "id": 18,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN src"
+                },
+                {
+                    "id": 25,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN conn"
+                },
+                {
+                    "id": 27,
+                    "parent": 0,
+                    "notused": 117,
+                    "detail": "SEARCH current USING INDEX idx_bmp_current_routes_peer_ipv4_unicast_scope_epoch (scope_pk=? AND connection_pk=?)"
+                },
+                {
+                    "id": 49,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH identity USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 52,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN payload"
+                },
+                {
+                    "id": 57,
+                    "parent": 0,
+                    "notused": 10,
+                    "detail": "SCAN last_conn USING COVERING INDEX sqlite_autoindex_bmp_connections_1 LEFT-JOIN"
+                },
+                {
+                    "id": 64,
+                    "parent": 0,
+                    "notused": 16,
+                    "detail": "SCAN route_attr LEFT-JOIN"
+                },
+                {
+                    "id": 164,
+                    "parent": 0,
+                    "notused": 0,
+                    "detail": "USE TEMP B-TREE FOR ORDER BY"
+                }
+            ],
+            "noOptimize": [
+                {
+                    "id": 15,
+                    "parent": 0,
+                    "notused": 46,
+                    "detail": "SEARCH s USING INDEX sqlite_autoindex_bmp_rib_scopes_1 (scope_id=?)"
+                },
+                {
+                    "id": 22,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH src USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 27,
+                    "parent": 0,
+                    "notused": 61,
+                    "detail": "SEARCH current USING INDEX sqlite_autoindex_bmp_current_routes_peer_ipv4_unicast_1 (scope_pk=?)"
+                },
+                {
+                    "id": 48,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH identity USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 51,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH payload USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 54,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH conn USING INTEGER PRIMARY KEY (rowid=?)"
+                },
+                {
+                    "id": 57,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH last_conn USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+                },
+                {
+                    "id": 62,
+                    "parent": 0,
+                    "notused": 45,
+                    "detail": "SEARCH route_attr USING INTEGER PRIMARY KEY (rowid=?) LEFT-JOIN"
+                }
+            ]
+        }
+    },
+    "additionalExperiments": {
+        "ab200k": "三个Store变体，3轮详细/批量，共18个样本；old-store仅取a2d832a的Store源码，依赖仍使用当前版本，不能称为历史完整版本",
+        "fullAnalyze": {
+            "samples": 1,
+            "milliseconds": 50322.04062500596,
+            "selectMs": 20476.627957820892,
+            "result": "分析完整百万行后scope统计从690修正为1000000，但仍选择scope_epoch和临时排序；近似统计误差不足以单独解释回退"
+        },
+        "forceExistingOrderedIndex": {
+            "samples": 1,
+            "milliseconds": 49723.45174998045,
+            "selectMs": 19952.7022510767,
+            "result": "查询现有unique(scope_pk,route_pk)索引元数据并仅用于详细purge；仍由payload/connection等外层循环驱动，保留TEMP B-TREE。单独固定索引不足以恢复"
+        },
+        "locRib": "百万条只做实际详细SELECT的EXPLAIN，current出现scope_epoch+TEMP B-TREE，no-optimize使用有序unique索引且没有临时排序。候选SELECT和删除未执行，确认百万条仍完整保留。"
+    },
+    "timing": {
+        "routeLimit": 20000,
+        "gcLimit": 50000,
+        "storeOpenAndInitialGc": "outside timed region",
+        "measured": "包含所有批次删除、同步完整GC、JS详情映射/deltas，以及与正式full-GC适配器相同的末批孤儿/候选校验",
+        "profiling": "SELECT.all/整批mapRouteRow/collectGarbage聚合计时；无每条路由日志或计时",
+        "residual": "otherMs含逐条删除、候选登记、事务提交、deltas、末批校验及首次EXPLAIN准备，不能单独当作纯删除耗时"
+    },
+    "checks": [
+        "每个性能样本删除数量完全相符",
+        "每个性能样本剩余stale=0",
+        "GC候选=0及三类对象孤儿=0",
+        "foreign_key_check为空",
+        "原始最新worktree保持clean，生产代码未改动"
+    ],
+    "productImpact": {
+        "manual": "bmpWorker.purgeStaleScope显式includeDetails:false，使用未出现本次回退的批量路径",
+        "detailed": "Notification peer purge等需要逐条删除事件的路径调用详细purge",
+        "limit": "这是全stale合成数据库诊断；真实多scope、多连接、稀疏stale和属性分布下的幅度需另测。Loc-RIB本轮因果探针只有执行计划，非新增百万清理计时。"
+    },
+    "recommendedFollowup": "保留统计与Route Assurance收益；在同一事务内先按全部过滤条件确定routeLimit+1个有序候选键，再读取详情/删除/生成deltas，并覆盖稀疏stale、多scope/连接、过滤及hasMore语义。尚未实施或验证泛用修复。",
+    "sourceFiles": [
+        {
+            "file": "/tmp/netnexus-bmp-perf-20261007.TtWKD4/latest/electron/worker/bmp/bmpPersistenceStore.js",
+            "sha256": "003b08762a99bb39490272a2c3227df1af29eccbd0b2309ae8ec011055b9f845"
+        },
+        {
+            "file": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/store-a2d832a.js",
+            "sha256": "3a72e4dd5544d682837d8ab7d9ba0577ad8bb062efbc25b49500033647f9a52e"
+        },
+        {
+            "file": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/runner.js",
+            "sha256": "e624d4138a4ad75e23e5403bec467d55b8a9456dc12e012ed62b898c1ee42dd3",
+            "note": "最终临时runner版本；执行过程中仅增加输出同步刷新与后续两个treatment分支，现有treatment测量逻辑相同"
+        }
+    ],
+    "artifacts": [
+        {
+            "name": "ab200k",
+            "file": "cleanup_ab200k.json",
+            "sha256": "dce5785cbf76ff9d209169c4d18c8e23ecddd5b672c157470c38adc7fc572e03",
+            "originalSha256": "e56097a186224a92a8a2db85b51cd96d202ebd7d15403814defd64940707f6ea",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-HgeK5F/results.json"
+        },
+        {
+            "name": "ab1mPeer",
+            "file": "cleanup_ab1mPeer.json",
+            "sha256": "b58c7e1adb85702c06a3b37ee9c953541be9724f239bf48bacc25e6022409f83",
+            "originalSha256": "03271d31d4f1fc76b3a885d5f246f50a94a04c3566214ac4e2ec2136cefb1b75",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-5ZVXLq/results.json"
+        },
+        {
+            "name": "fullAnalyze1mPeer",
+            "file": "cleanup_fullAnalyze1mPeer.json",
+            "sha256": "98ad89496352c37fa682356d56c499f5109a79dffbfc1120d8a289409e29cde9",
+            "originalSha256": "3f5de990a1548ce2fd79be0827b0ed99a15df7d09e54d5f56af52992b33980d2",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-dqmjTI/results.json"
+        },
+        {
+            "name": "orderedIndex1mPeer",
+            "file": "cleanup_orderedIndex1mPeer.json",
+            "sha256": "67d4f390f4cd0de2d043d9068828a675c37ef2d9d3d9c1ae73de0a39431311e2",
+            "originalSha256": "3944526e62beab76ecb43ef8b285dd4ab19d4bea511e2b3e5d7cccbb12c04343",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/run-NoYLBJ/results.json"
+        },
+        {
+            "name": "locRibPlan1m",
+            "file": "cleanup_locRibPlan1m.json",
+            "sha256": "959a4f437942ce82b495ede784bc31bb32d48c7a0dbfb38435ef88121b4d5bb6",
+            "originalSha256": "7f5973dc0bd2cabd0c22fc0b2f235ba58d8c70cc4196869ae1c4649147871a96",
+            "original": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/loc-plan-y2riiw/results.json"
+        }
+    ]
+}

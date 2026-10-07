@@ -1,0 +1,64 @@
+{
+    "directory": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/epoch-probe-s4syoh",
+    "seed": "/var/folders/dv/85y7f3n14_qfm_570y6csylm0000gn/T/netnexus-bmp-stale-purge-benchmark-ZgTiSF/peer-seed.sqlite3",
+    "epochSeed": "/private/tmp/netnexus-bmp-perf-20261007.TtWKD4/cleanup-diagnosis/epoch-probe-s4syoh/epoch-seed.sqlite3",
+    "query": {
+        "scopeId": "327a457f058c5b0f5dd26b93070c64a56dd912ffa6e4d2fb38abeff5ee95bc1d",
+        "sourceId": "bd5e38b57c4afc518d9dd00b5be81f72a22ab506b36479de1e89bb4c23dd3010",
+        "afi": 1,
+        "safi": 1,
+        "ribEpochBefore": 1,
+        "routeLimit": 20000,
+        "gcLimit": 50000
+    },
+    "scopeRoutes": 1000000,
+    "matchingRoutes": 1,
+    "runtime": {
+        "node": "16.17.1",
+        "v8": "10.8.168.25-electron.0",
+        "uv": "1.43.0",
+        "zlib": "1.2.12.1-motley",
+        "brotli": "1.0.9",
+        "ares": "1.18.1",
+        "modules": "110",
+        "nghttp2": "1.47.0",
+        "napi": "8",
+        "llhttp": "6.0.9",
+        "openssl": "1.1.1",
+        "cldr": "41.0",
+        "icu": "71.1",
+        "tz": "2022e",
+        "unicode": "14.0",
+        "electron": "22.3.27"
+    },
+    "results": [
+        {
+            "variant": "current",
+            "round": 0,
+            "milliseconds": 1.4727090001106262,
+            "purged": 1,
+            "hasMore": false
+        },
+        {
+            "variant": "fixed",
+            "round": 0,
+            "milliseconds": 1.8002909719944,
+            "purged": 1,
+            "hasMore": false
+        },
+        {
+            "variant": "fixed",
+            "round": 1,
+            "milliseconds": 1.0145829916000366,
+            "purged": 1,
+            "hasMore": false
+        },
+        {
+            "variant": "current",
+            "round": 1,
+            "milliseconds": 0.7671670019626617,
+            "purged": 1,
+            "hasMore": false
+        }
+    ]
+}

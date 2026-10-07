@@ -1,239 +1,239 @@
 {
-  "label": "bmp-review-before-20261005",
-  "routeCount": 1000000,
-  "rounds": 3,
-  "packetRoutes": 50,
-  "attributeGroups": 100,
-  "settings": {
-    "threadCount": 1,
-    "persistenceBatchSize": 5000,
-    "persistenceFlushMs": 20,
-    "persistenceReadFenceTimeoutMs": 30000,
-    "persistenceSweepIntervalMs": 3600000,
-    "logLevel": "off"
-  },
-  "analysisEnabled": false,
-  "startedAt": "2026-10-05T03:51:48.101Z",
-  "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
-  "system": {
-    "platform": "darwin",
-    "arch": "arm64",
-    "cpu": "Apple M4 Pro",
-    "versions": {
-      "node": "16.17.1",
-      "v8": "10.8.168.25-electron.0",
-      "uv": "1.43.0",
-      "zlib": "1.2.12.1-motley",
-      "brotli": "1.0.9",
-      "ares": "1.18.1",
-      "modules": "110",
-      "nghttp2": "1.47.0",
-      "napi": "8",
-      "llhttp": "6.0.9",
-      "openssl": "1.1.1",
-      "cldr": "41.0",
-      "icu": "71.1",
-      "tz": "2022e",
-      "unicode": "14.0",
-      "electron": "22.3.27"
-    }
-  },
-  "fingerprints": {
-    "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
-    "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
-    "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
-    "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
-    "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
-  },
-  "fixtures": {
-    "peer": {
-      "bytes": 6380000,
-      "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+    "label": "bmp-review-before-20261005",
+    "routeCount": 1000000,
+    "rounds": 3,
+    "packetRoutes": 50,
+    "attributeGroups": 100,
+    "settings": {
+        "threadCount": 1,
+        "persistenceBatchSize": 5000,
+        "persistenceFlushMs": 20,
+        "persistenceReadFenceTimeoutMs": 30000,
+        "persistenceSweepIntervalMs": 3600000,
+        "logLevel": "off"
     },
-    "loc-rib": {
-      "bytes": 6620000,
-      "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
-    }
-  },
-  "results": [
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 0,
-      "kind": "peer",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 22725.81,
-      "routesPerSecond": 44003,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:51:48.333Z"
+    "analysisEnabled": false,
+    "startedAt": "2026-10-05T03:51:48.101Z",
+    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
+    "system": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
     },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 0,
-      "kind": "peer",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 9970.065,
-      "routesPerSecond": 100300,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:52:11.196Z"
+    "fingerprints": {
+        "electron/worker/bmp/bmpSession.js": "c06af1e60338f6e9b8b9e975717f7962a24d9aef8ec37ade1e302b17ae04d01f",
+        "electron/worker/bmp/bmpBgpRoute.js": "e219057eb6238e5c2d73566711b8edc7d7f383f6cf1d61746302469597fb1f0c",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "76286b0ab8671d0088e146c29766062af28594b6b05b9ad85aff1dcfdc8e9e1c",
+        "electron/worker/bmp/bmpPersistenceStore.js": "4227c5b4d1547e9bbe0773c5b2a3f47000176727033a07dee748588ee04879a4",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
     },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 0,
-      "kind": "loc-rib",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 24570.233,
-      "routesPerSecond": 40700,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:52:21.901Z"
+    "fixtures": {
+        "peer": {
+            "bytes": 6380000,
+            "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+        },
+        "loc-rib": {
+            "bytes": 6620000,
+            "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+        }
     },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 0,
-      "kind": "loc-rib",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 11904.294,
-      "routesPerSecond": 84003,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:52:46.692Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 1,
-      "kind": "loc-rib",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 24356.342,
-      "routesPerSecond": 41057,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:52:59.147Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 1,
-      "kind": "loc-rib",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 11838.463,
-      "routesPerSecond": 84470,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:53:23.720Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 1,
-      "kind": "peer",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 22663.775,
-      "routesPerSecond": 44123,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:53:36.121Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 1,
-      "kind": "peer",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 9779.913,
-      "routesPerSecond": 102250,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:53:58.923Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 2,
-      "kind": "peer",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 22343.696,
-      "routesPerSecond": 44755,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:54:09.364Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 2,
-      "kind": "peer",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 9636.486,
-      "routesPerSecond": 103772,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6380000,
-      "sampleLastSeenAt": "2026-10-05T03:54:31.845Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 2,
-      "kind": "loc-rib",
-      "phase": "first",
-      "routes": 1000000,
-      "milliseconds": 24479.772,
-      "routesPerSecond": 40850,
-      "persistedTotal": 1000001,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:54:42.156Z"
-    },
-    {
-      "label": "bmp-review-before-20261005",
-      "round": 2,
-      "kind": "loc-rib",
-      "phase": "repeat",
-      "routes": 1000000,
-      "milliseconds": 11994.546,
-      "routesPerSecond": 83371,
-      "persistedTotal": 1000002,
-      "fixtureBytes": 6620000,
-      "sampleLastSeenAt": "2026-10-05T03:55:06.850Z"
-    }
-  ],
-  "summary": [
-    {
-      "kind": "peer",
-      "phase": "first",
-      "medianMs": 22663.775,
-      "routesPerSecond": 44123,
-      "minMs": 22343.696,
-      "maxMs": 22725.81
-    },
-    {
-      "kind": "peer",
-      "phase": "repeat",
-      "medianMs": 9779.913,
-      "routesPerSecond": 102250,
-      "minMs": 9636.486,
-      "maxMs": 9970.065
-    },
-    {
-      "kind": "loc-rib",
-      "phase": "first",
-      "medianMs": 24479.772,
-      "routesPerSecond": 40850,
-      "minMs": 24356.342,
-      "maxMs": 24570.233
-    },
-    {
-      "kind": "loc-rib",
-      "phase": "repeat",
-      "medianMs": 11904.294,
-      "routesPerSecond": 84003,
-      "minMs": 11838.463,
-      "maxMs": 11994.546
-    }
-  ],
-  "finishedAt": "2026-10-05T03:55:19.213Z"
+    "results": [
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 0,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 22725.81,
+            "routesPerSecond": 44003,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:51:48.333Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 0,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9970.065,
+            "routesPerSecond": 100300,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:52:11.196Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 24570.233,
+            "routesPerSecond": 40700,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:52:21.901Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11904.294,
+            "routesPerSecond": 84003,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:52:46.692Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 24356.342,
+            "routesPerSecond": 41057,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:52:59.147Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11838.463,
+            "routesPerSecond": 84470,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:53:23.720Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 1,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 22663.775,
+            "routesPerSecond": 44123,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:53:36.121Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 1,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9779.913,
+            "routesPerSecond": 102250,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:53:58.923Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 2,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 22343.696,
+            "routesPerSecond": 44755,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:54:09.364Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 2,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9636.486,
+            "routesPerSecond": 103772,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-05T03:54:31.845Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 24479.772,
+            "routesPerSecond": 40850,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:54:42.156Z"
+        },
+        {
+            "label": "bmp-review-before-20261005",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 11994.546,
+            "routesPerSecond": 83371,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-05T03:55:06.850Z"
+        }
+    ],
+    "summary": [
+        {
+            "kind": "peer",
+            "phase": "first",
+            "medianMs": 22663.775,
+            "routesPerSecond": 44123,
+            "minMs": 22343.696,
+            "maxMs": 22725.81
+        },
+        {
+            "kind": "peer",
+            "phase": "repeat",
+            "medianMs": 9779.913,
+            "routesPerSecond": 102250,
+            "minMs": 9636.486,
+            "maxMs": 9970.065
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "first",
+            "medianMs": 24479.772,
+            "routesPerSecond": 40850,
+            "minMs": 24356.342,
+            "maxMs": 24570.233
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "medianMs": 11904.294,
+            "routesPerSecond": 84003,
+            "minMs": 11838.463,
+            "maxMs": 11994.546
+        }
+    ],
+    "finishedAt": "2026-10-05T03:55:19.213Z"
 }

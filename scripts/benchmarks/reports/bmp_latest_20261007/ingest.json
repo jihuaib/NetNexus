@@ -1,0 +1,240 @@
+{
+    "label": "latest_20261007_5d273d2",
+    "routeCount": 1000000,
+    "rounds": 3,
+    "packetRoutes": 50,
+    "attributeGroups": 100,
+    "settings": {
+        "threadCount": 1,
+        "persistenceBatchSize": 5000,
+        "persistenceFlushMs": 20,
+        "persistenceReadFenceTimeoutMs": 30000,
+        "persistenceSweepIntervalMs": 3600000,
+        "logLevel": "off"
+    },
+    "analysisEnabled": false,
+    "startedAt": "2026-10-07T10:28:37.113Z",
+    "directory": "/var/folders/dv/85y7f3n14_qfm_570y6csylm0000gn/T/netnexus-bmp-repeat-latest_20261007_5d273d2-QUgJDm",
+    "method": "loopback TCP until distinct final marker committed; one independent fresh database/process per kind/round",
+    "system": {
+        "platform": "darwin",
+        "arch": "arm64",
+        "cpu": "Apple M4 Pro",
+        "versions": {
+            "node": "16.17.1",
+            "v8": "10.8.168.25-electron.0",
+            "uv": "1.43.0",
+            "zlib": "1.2.12.1-motley",
+            "brotli": "1.0.9",
+            "ares": "1.18.1",
+            "modules": "110",
+            "nghttp2": "1.47.0",
+            "napi": "8",
+            "llhttp": "6.0.9",
+            "openssl": "1.1.1",
+            "cldr": "41.0",
+            "icu": "71.1",
+            "tz": "2022e",
+            "unicode": "14.0",
+            "electron": "22.3.27"
+        }
+    },
+    "fingerprints": {
+        "electron/worker/bmp/bmpSession.js": "c3fb6bf3f1b61e3cca1b048f8461ed741e9dd05b8ca829ac6a4de4d2c6756dc5",
+        "electron/worker/bmp/bmpBgpRoute.js": "d623f1f5835f9f96dc29e1f3c194a72242db37292919c17ad64b1c3bcf2a5f80",
+        "electron/worker/bmp/bmpPersistenceMutation.js": "bbbe875bfb8618627b12fc6b2a51af1661749dcb9559066d15d36563befdd043",
+        "electron/worker/bmp/bmpPersistenceStore.js": "003b08762a99bb39490272a2c3227df1af29eccbd0b2309ae8ec011055b9f845",
+        "scripts/benchmarks/bmp_repeated_ingest_benchmark.js": "25c0e28d748a50e54023781ad9181615d2355dba2d7c88b71bb49d4d3c0004e6"
+    },
+    "fixtures": {
+        "peer": {
+            "bytes": 6380000,
+            "sha256": "88fc63276f4fb06d506d65f31e1f0f725d954361c102013ebff5ead52c6ac339"
+        },
+        "loc-rib": {
+            "bytes": 6620000,
+            "sha256": "995cc3ea40d012ab87a1eceb0ab65205a0cde4cf4d3ebf82d45fba6a511001a0"
+        }
+    },
+    "results": [
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 0,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 21851.591,
+            "routesPerSecond": 45763,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:28:37.320Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 0,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 9834.09,
+            "routesPerSecond": 101687,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:28:59.353Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23442.681,
+            "routesPerSecond": 42657,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:29:09.891Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 0,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 12000.218,
+            "routesPerSecond": 83332,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:29:33.548Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23890.399,
+            "routesPerSecond": 41858,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:29:46.079Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 1,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 12024.166,
+            "routesPerSecond": 83166,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:30:10.188Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 1,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23000.806,
+            "routesPerSecond": 43477,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:30:22.764Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 1,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 10107.685,
+            "routesPerSecond": 98935,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:30:45.951Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 2,
+            "kind": "peer",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 23082.771,
+            "routesPerSecond": 43322,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:30:56.774Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 2,
+            "kind": "peer",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 10119.153,
+            "routesPerSecond": 98822,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6380000,
+            "sampleLastSeenAt": "2026-10-07T10:31:20.045Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "first",
+            "routes": 1000000,
+            "milliseconds": 24391.902,
+            "routesPerSecond": 40997,
+            "persistedTotal": 1000001,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:31:30.906Z"
+        },
+        {
+            "label": "latest_20261007_5d273d2",
+            "round": 2,
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "routes": 1000000,
+            "milliseconds": 12300.556,
+            "routesPerSecond": 81297,
+            "persistedTotal": 1000002,
+            "fixtureBytes": 6620000,
+            "sampleLastSeenAt": "2026-10-07T10:31:55.517Z"
+        }
+    ],
+    "summary": [
+        {
+            "kind": "peer",
+            "phase": "first",
+            "medianMs": 23000.806,
+            "routesPerSecond": 43477,
+            "minMs": 21851.591,
+            "maxMs": 23082.771
+        },
+        {
+            "kind": "peer",
+            "phase": "repeat",
+            "medianMs": 10107.685,
+            "routesPerSecond": 98935,
+            "minMs": 9834.09,
+            "maxMs": 10119.153
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "first",
+            "medianMs": 23890.399,
+            "routesPerSecond": 41858,
+            "minMs": 23442.681,
+            "maxMs": 24391.902
+        },
+        {
+            "kind": "loc-rib",
+            "phase": "repeat",
+            "medianMs": 12024.166,
+            "routesPerSecond": 83166,
+            "minMs": 12000.218,
+            "maxMs": 12300.556
+        }
+    ],
+    "finishedAt": "2026-10-07T10:32:08.158Z"
+}

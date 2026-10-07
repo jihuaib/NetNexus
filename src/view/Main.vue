@@ -89,7 +89,9 @@
         </div>
 
         <!-- 设置弹窗 -->
-        <SettingsDialog ref="settingsDialog" />
+        <SettingsDialog ref="settingsDialog" @open-changelog="openChangelog" />
+
+        <ChangelogDialog ref="changelogDialog" />
 
         <!-- 更新通知 -->
         <UpdateNotification />
@@ -111,6 +113,7 @@
     import { moduleNavigationIcons } from '../const/navigationIcons';
 
     import SettingsDialog from '../components/SettingsDialog.vue';
+    import ChangelogDialog from '../components/ChangelogDialog.vue';
     import UpdateNotification from '../components/UpdateNotification.vue';
     import modalResizeHandler from '../utils/modalResizeHandler';
     import { notify } from '../utils/notify';
@@ -123,7 +126,28 @@
     const isCollapsed = ref(false);
     const openKeys = ref([]);
     const settingsDialog = ref(null);
+    const changelogDialog = ref(null);
     const processResourceOpening = ref(false);
+    let unmounted = false;
+
+    const openChangelog = version => changelogDialog.value?.openDialog(version);
+
+    const showChangelogOnFirstLaunch = async () => {
+        if (!window.commonApi?.getChangelogState || !window.commonApi?.markChangelogSeen) return;
+
+        try {
+            const result = await window.commonApi.getChangelogState();
+            if (result?.status !== 'success') throw new Error(result?.msg || '读取更新日志状态失败');
+            if (unmounted || !result.data?.shouldShow || !result.data?.version) return;
+
+            await openChangelog(result.data.version);
+            if (unmounted) return;
+            const saved = await window.commonApi.markChangelogSeen(result.data.version);
+            if (saved?.status !== 'success') throw new Error(saved?.msg || '保存更新日志状态失败');
+        } catch (error) {
+            console.warn('初始化更新日志失败:', error);
+        }
+    };
 
     const current = ref(['工具集合']);
     const items = ref([
@@ -321,10 +345,12 @@
 
         // 注册到 modalResizeHandler 的回调
         modalResizeHandler.onZoomChange(handleSidebarResize);
+        showChangelogOnFirstLaunch();
     });
 
     // 组件卸载时移除监听器
     onUnmounted(() => {
+        unmounted = true;
         modalResizeHandler.offZoomChange(handleSidebarResize);
     });
 
