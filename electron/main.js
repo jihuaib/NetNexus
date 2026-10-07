@@ -366,11 +366,21 @@ function checkBmpDatabaseVersionsAtStartup() {
     });
 }
 
+function checkBgpDatabaseVersionAtStartup() {
+    const { resetDatabaseIfVersionChanged } = require('./worker/bgp/bgpDatabaseVersionCheck');
+    const BgpRouteSqliteStore = require('./worker/bgp/bgpRouteSqliteStore');
+    return resetDatabaseIfVersionChanged(
+        path.join(app.getPath('userData'), 'bgp', 'bgp.sqlite3'),
+        BgpRouteSqliteStore.SCHEMA_VERSION
+    );
+}
+
 async function startApplication() {
     initializeMonitorWindowManager();
 
     if (isPackagedE2e) {
         checkBmpDatabaseVersionsAtStartup();
+        checkBgpDatabaseVersionAtStartup();
         createWindow();
         await mainWindow.startupLoadPromise;
         return;
@@ -385,10 +395,11 @@ async function startApplication() {
     const SystemApp = require('./app/systemApp');
     updateSplashProgress(18, '核心组件加载完成');
 
-    // Check every BMP database before registering IPC or loading a renderer.
+    // Check local BGP and every BMP database before registering IPC or loading a renderer.
     // This reads schema metadata only; route ingest never runs this scan.
-    updateSplashProgress(19, '正在检查 BMP 数据库版本...');
+    updateSplashProgress(19, '正在检查 BGP/BMP 数据库版本...');
     checkBmpDatabaseVersionsAtStartup();
+    checkBgpDatabaseVersionAtStartup();
 
     updateSplashProgress(20, '正在初始化系统托盘...');
     createTray();

@@ -574,6 +574,7 @@ class BmpClientPersistenceStore {
             }
             const store = this.getStore(selector.sourceId);
             if (store) {
+                store.refreshQueryStatistics();
                 // Preserve the route page and counter summary's single-client
                 // transaction rather than taking two independent snapshots.
                 return store.db.transaction(() => ({

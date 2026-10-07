@@ -172,12 +172,11 @@ try {
     assert.equal(withdrawn.routes[0].vni2, 20001);
     store.close();
 
-    // Recreate the actual previous schema by removing the new additive column.
+    // Recreate the previous schema to verify that version changes reset data.
     const migrationPath = path.join(directory, 'migration.sqlite');
     store = new BgpRouteSqliteStore({ dbPath: migrationPath }).open();
     const oldRoute = { ip: '203.0.113.0', mask: 24, rd: '65000:1', pathId: 0 };
     store.upsertRoutes('migration|1|1', [oldRoute]);
-    const oldRows = Array.from(store.iterateRoutes('migration|1|1'));
     store.close();
     let raw = new Database(migrationPath);
     const tables = raw
@@ -187,11 +186,11 @@ try {
     raw.pragma('user_version = 6');
     raw.close();
     store = new BgpRouteSqliteStore({ dbPath: migrationPath }).open();
-    assert.equal(store.getStatus().schemaVersion, 7);
+    assert.equal(store.getStatus().schemaVersion, BgpRouteSqliteStore.SCHEMA_VERSION);
     assert.deepEqual(
         Array.from(store.iterateRoutes('migration|1|1')),
-        oldRows,
-        'v6 migration must retain existing data'
+        [],
+        'a v6 database must be reset instead of migrated'
     );
     store.close();
     raw = new Database(migrationPath);
@@ -199,7 +198,7 @@ try {
         assert.ok(raw.pragma(`table_info(${name})`).some(column => column.name === 'nlri_json'));
     raw.close();
 
-    // A failure on the last ALTER rolls back every preceding schema alteration.
+    // Even an incomplete older schema is reset without attempting ALTERs.
     const brokenPath = path.join(directory, 'broken-migration.sqlite');
     store = new BgpRouteSqliteStore({ dbPath: brokenPath }).open();
     store.close();
@@ -207,12 +206,15 @@ try {
     for (const { name } of tables.slice(0, -1)) raw.exec(`ALTER TABLE ${name} DROP COLUMN nlri_json`);
     raw.pragma('user_version = 6');
     raw.close();
-    assert.throws(() => new BgpRouteSqliteStore({ dbPath: brokenPath }).open(), /duplicate column/);
+    store = new BgpRouteSqliteStore({ dbPath: brokenPath }).open();
+    assert.equal(store.getStatus().schemaVersion, BgpRouteSqliteStore.SCHEMA_VERSION);
+    store.close();
     raw = new Database(brokenPath);
-    assert.equal(raw.pragma('user_version', { simple: true }), 6);
-    assert.ok(!raw.pragma(`table_info(${tables[0].name})`).some(column => column.name === 'nlri_json'));
+    assert.equal(raw.pragma('user_version', { simple: true }), BgpRouteSqliteStore.SCHEMA_VERSION);
+    for (const { name } of tables)
+        assert.ok(raw.pragma(`table_info(${name})`).some(column => column.name === 'nlri_json'));
     raw.close();
-    console.log('BGP VPN/EVPN route persistence and migration tests passed');
+    console.log('BGP VPN/EVPN route persistence and schema reset tests passed');
 } finally {
     if (store) store.close();
     fs.rmSync(directory, { recursive: true, force: true });

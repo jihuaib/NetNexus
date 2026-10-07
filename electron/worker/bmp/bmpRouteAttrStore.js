@@ -1,3 +1,5 @@
+const { canonicalizePathAttributes } = require('./bmpRoutePathAttributes');
+
 const DEFAULT_BMP_ROUTE_ATTR = Object.freeze({
     origin: null,
     asPath: null,
@@ -41,6 +43,9 @@ function canonicalizeBmpRouteAttr(attr = {}) {
     if (attr.as4Path !== undefined) {
         normalized.wireAsPath = normalizeOptionalValue(attr.wireAsPath);
         normalized.as4Path = normalizeOptionalValue(attr.as4Path);
+    }
+    if (attr.pathAttributes !== undefined) {
+        normalized.pathAttributes = canonicalizePathAttributes(attr.pathAttributes);
     }
     return normalized;
 }

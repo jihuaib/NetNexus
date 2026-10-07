@@ -230,10 +230,9 @@ try {
     const oldDb = new Database(legacyPath);
     oldDb.pragma('user_version = 5');
     oldDb.close();
-    assert.throws(
-        () => new BgpRouteSqliteStore({ dbPath: legacyPath }).open(),
-        /schema 5 is incompatible with schema 7/
-    );
+    writer = new BgpRouteSqliteStore({ dbPath: legacyPath }).open();
+    assert.equal(writer.getStatus().schemaVersion, BgpRouteSqliteStore.SCHEMA_VERSION);
+    assert.deepEqual(writer.listRouteGroups(), [], 'an older schema must restart with empty route groups');
 } finally {
     writer?.close();
     reader?.close();

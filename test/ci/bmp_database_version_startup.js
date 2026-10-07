@@ -14,8 +14,9 @@ assert.ok(hookStart >= 0 && startupStart > hookStart && startupEnd > startupStar
 const hooks = source.slice(hookStart, startupStart);
 const startup = source.slice(startupStart, startupEnd);
 
-async function checkStartup(isPackagedE2e, failure = null) {
+async function checkStartup(isPackagedE2e, failingDatabase = null) {
     const events = [];
+    const failure = failingDatabase ? new Error(`${failingDatabase} database version check failed`) : null;
     const context = {
         isPackagedE2e,
         app: {
@@ -36,12 +37,23 @@ async function checkStartup(isPackagedE2e, failure = null) {
                     prepareBmpDatabaseVersions(dbPath, options) {
                         assert.equal(dbPath, path.join(userDataPath, 'bmp', 'bmp.sqlite3'));
                         assert.deepEqual({ ...options }, { expectedVersion: 123 });
-                        events.push('schema-check');
-                        if (failure) throw failure;
+                        events.push('bmp-schema-check');
+                        if (failingDatabase === 'bmp') throw failure;
                     }
                 };
             }
             if (name === './worker/bmp/bmpPersistenceStore') return { SCHEMA_VERSION: 123 };
+            if (name === './worker/bgp/bgpDatabaseVersionCheck') {
+                return {
+                    resetDatabaseIfVersionChanged(dbPath, expectedVersion) {
+                        assert.equal(dbPath, path.join(userDataPath, 'bgp', 'bgp.sqlite3'));
+                        assert.equal(expectedVersion, 456);
+                        events.push('bgp-schema-check');
+                        if (failingDatabase === 'bgp') throw failure;
+                    }
+                };
+            }
+            if (name === './worker/bgp/bgpRouteSqliteStore') return { SCHEMA_VERSION: 456 };
             if (name === './app/systemApp') {
                 return class {
                     constructor() {
@@ -90,22 +102,26 @@ async function checkStartup(isPackagedE2e, failure = null) {
         assert.ok(!events.includes('register-ipc'));
     } else {
         await context.runStartup();
-        assert.ok(events.indexOf('schema-check') < events.indexOf('create-window'));
-        if (!isPackagedE2e) {
-            assert.ok(events.indexOf('splash-frame') < events.indexOf('schema-check'));
-            assert.ok(events.indexOf('schema-check') < events.indexOf('register-ipc'));
-            assert.ok(events.indexOf('schema-check') < events.indexOf('load-settings'));
+        for (const check of ['bmp-schema-check', 'bgp-schema-check']) {
+            assert.ok(events.indexOf(check) < events.indexOf('create-window'));
+            if (!isPackagedE2e) {
+                assert.ok(events.indexOf('splash-frame') < events.indexOf(check));
+                assert.ok(events.indexOf(check) < events.indexOf('register-ipc'));
+                assert.ok(events.indexOf(check) < events.indexOf('load-settings'));
+            }
         }
     }
-    assert.equal(events.filter(event => event === 'schema-check').length, 1);
+    assert.equal(events.filter(event => event === 'bmp-schema-check').length, 1);
+    assert.equal(events.filter(event => event === 'bgp-schema-check').length, failingDatabase === 'bmp' ? 0 : 1);
 }
 
 (async () => {
     for (const e2e of [false, true]) {
         await checkStartup(e2e);
-        await checkStartup(e2e, new Error('database version check failed'));
+        await checkStartup(e2e, 'bmp');
+        await checkStartup(e2e, 'bgp');
     }
-    console.log('BMP schema versions are checked before windows and database IPC, including packaged E2E');
+    console.log('BGP/BMP schema versions are checked before windows and database IPC, including packaged E2E');
 })().catch(error => {
     console.error(error);
     process.exitCode = 1;

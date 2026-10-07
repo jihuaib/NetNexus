@@ -27,6 +27,7 @@ const ROUTE_UPSERT_EVENTS = new Set(['upsert', 'announce', 'replace', 'refresh']
 // Rows per multi-row INSERT in prefillRouteObjectCaches (14 columns x 250 =
 // 3,500 bound parameters, well under SQLite's default limit).
 const BULK_ROWS = 250;
+const STATISTICS_ATTRIBUTE_INTERVAL = 256;
 const MAX_PAGE_SIZE = 5000;
 
 function asJson(value) {
@@ -45,6 +46,22 @@ function parseJson(value, fallback = null) {
     } catch (_error) {
         return fallback;
     }
+}
+
+function formatStoredRouteAttributes(attributes) {
+    if (typeof attributes?.nextHop !== 'string' || !/ffff/i.test(attributes.nextHop)) return attributes;
+    const nextHop = attributes.nextHop.replace(/[^\s,]+/g, value => {
+        try {
+            const address = ipaddr.parse(value);
+            if (address.kind() === 'ipv6' && address.isIPv4MappedAddress()) {
+                return `::ffff:${address.toIPv4Address().toString()}`;
+            }
+        } catch (_error) {
+            // Preserve unrecognized next-hop text from stored route attributes.
+        }
+        return value;
+    });
+    return nextHop === attributes.nextHop ? attributes : { ...attributes, nextHop };
 }
 
 function storedNlriDetail(row, payload = null) {
@@ -92,7 +109,7 @@ function routeDisplayPrefixPredicate(display, identityPredicate, pathPredicate) 
 function buildStoredRouteProjection(row, options = {}) {
     const payload = parseJson(options.routeJson ?? row.route_json, {});
     const nlriDetail = storedNlriDetail(row, payload);
-    const attributes = parseJson(options.attrJson ?? row.attr_json, {});
+    const attributes = formatStoredRouteAttributes(parseJson(options.attrJson ?? row.attr_json, {}));
     const routeTlvs = Array.isArray(payload.routeTlvs) ? payload.routeTlvs : [];
     const evpn = Number(row.afi) === 25 && Number(row.safi) === 70;
     return {
@@ -481,6 +498,9 @@ class BmpPersistenceStore {
         this.statements = null;
         this.partitionStatements = null;
         this.bulkStatements = new Map();
+        this.insertedAttributesSinceOptimize = 0;
+        this.queryStatisticsFingerprint = null;
+        this.queryStatisticsDataVersion = null;
     }
 
     open() {
@@ -536,12 +556,19 @@ class BmpPersistenceStore {
                     CREATE TEMP TABLE bmp_gc_work (kind INTEGER, pk INTEGER, PRIMARY KEY(kind, pk)) WITHOUT ROWID;
                 `);
                 this.recoverInterruptedConnections();
+                this.optimizeQueryStatistics();
                 this.prepareStatements();
             } else {
                 // Readers scan large ranges (route pages, the Route Assurance
                 // stream); mapping the file avoids a copy per page read.
                 this.db.pragma('mmap_size = 268435456');
-                this.validateReadableSchema();
+                // Load the schema/statistics and their fingerprint from one
+                // snapshot, even if the writer is analyzing during open.
+                this.db.transaction(() => {
+                    this.validateReadableSchema();
+                    this.queryStatisticsFingerprint = this.readQueryStatisticsFingerprint();
+                    this.queryStatisticsDataVersion = this.db.pragma('data_version', { simple: true });
+                })();
             }
             this.db.function('bmp_normalize_rd', { deterministic: true }, value => normalizeRouteDistinguisher(value));
         } catch (error) {
@@ -554,6 +581,42 @@ class BmpPersistenceStore {
         }
 
         return this;
+    }
+
+    optimizeQueryStatistics() {
+        // Attribute ingest uses complete unique keys, so ordinary optimize can
+        // skip this table forever even after its row count grows substantially.
+        // Check all tables, with SQLite's bounded analysis work enabled.
+        this.db.pragma('optimize = 0x10012');
+        this.insertedAttributesSinceOptimize = 0;
+    }
+
+    readQueryStatisticsFingerprint() {
+        const exists = this.db.prepare("SELECT 1 FROM sqlite_schema WHERE name = 'sqlite_stat1'").get();
+        return exists
+            ? JSON.stringify(this.db.prepare('SELECT tbl, idx, stat FROM sqlite_stat1 ORDER BY tbl, idx').all())
+            : null;
+    }
+
+    refreshQueryStatistics() {
+        if (!this.db) {
+            this.open();
+            return false;
+        }
+        if (!this.readOnly || this.db.inTransaction) return false;
+        const changed = this.db.transaction(() => {
+            const dataVersion = this.db.pragma('data_version', { simple: true });
+            if (dataVersion === this.queryStatisticsDataVersion) return false;
+            const fingerprint = this.readQueryStatisticsFingerprint();
+            this.queryStatisticsDataVersion = dataVersion;
+            return fingerprint !== this.queryStatisticsFingerprint;
+        })();
+        if (!changed) return false;
+        // Another connection's ANALYZE does not refresh this connection's
+        // planner cache. Reopen only this client's reader, outside any snapshot.
+        this.close();
+        this.open();
+        return true;
     }
 
     setLogLevel(level) {
@@ -2252,7 +2315,10 @@ class BmpPersistenceStore {
             missing.forEach(([attrId, { attrJson, eventAtMs }]) => params.push(attrId, attrJson, eventAtMs, eventAtMs));
             this.getBulkStatement('insertAttributesReturning', missing.length)
                 .all(...params)
-                .forEach(row => batchCache.attributes.set(row.attr_id, Number(row.attr_pk)));
+                .forEach(row => {
+                    batchCache.attributes.set(row.attr_id, Number(row.attr_pk));
+                    batchCache.insertedAttributes += 1;
+                });
         });
     }
 
@@ -2470,6 +2536,7 @@ class BmpPersistenceStore {
             throw new Error('BMP persistence batchId is required');
         }
 
+        let insertedAttributes = 0;
         const transaction = this.db.transaction(() => {
             const batchResult = this.statements.insertBatch.run({
                 batchId,
@@ -2494,6 +2561,7 @@ class BmpPersistenceStore {
                 scopeContexts: new Map(),
                 validatedScopes: new Set(),
                 attributes: new Map(),
+                insertedAttributes: 0,
                 routeIdentities: new Map(),
                 routePayloads: new Map(),
                 routePayloadHashes: new Map()
@@ -2512,6 +2580,7 @@ class BmpPersistenceStore {
             });
             this.flushDeferredMetadataRefresh(batchCache);
             this.commitConnectionSequences(batchCache);
+            insertedAttributes = batchCache.insertedAttributes;
             const result = this.buildApplyBatchResult(false, applied, deltas, includeDeltas);
             if (includeDeltas && batchCache.requiresProjectionRebuild) {
                 result.requiresProjectionRebuild = true;
@@ -2519,7 +2588,12 @@ class BmpPersistenceStore {
             return result;
         });
 
-        return transaction();
+        const result = transaction();
+        this.insertedAttributesSinceOptimize += insertedAttributes;
+        if (this.insertedAttributesSinceOptimize >= STATISTICS_ATTRIBUTE_INTERVAL) {
+            this.optimizeQueryStatistics();
+        }
+        return result;
     }
 
     buildRouteStateSql() {
@@ -2653,6 +2727,7 @@ class BmpPersistenceStore {
         if (!this.db) {
             this.open();
         }
+        this.refreshQueryStatistics();
 
         const page = positiveInteger(query.page, 1);
         const pageSize = positiveInteger(query.pageSize, DEFAULT_PAGE_SIZE, MAX_PAGE_SIZE);
@@ -3006,6 +3081,7 @@ class BmpPersistenceStore {
         if (!this.db) {
             this.open();
         }
+        this.refreshQueryStatistics();
         if (typeof emit !== 'function') {
             throw new Error('BMP route assurance stream requires an emit callback');
         }
@@ -3174,7 +3250,7 @@ class BmpPersistenceStore {
             }
             let attributes = attrCache.get(attrPk);
             if (attributes === undefined) {
-                attributes = parseJson(attrJson, {});
+                attributes = formatStoredRouteAttributes(parseJson(attrJson, {}));
                 attrCache.set(attrPk, attributes);
             }
             return attributes;
@@ -3297,6 +3373,7 @@ class BmpPersistenceStore {
         if (!this.db) {
             this.open();
         }
+        this.refreshQueryStatistics();
         const routeQuery = query.routeQuery || {};
         const summaryQuery = query.summaryQuery || {};
         return this.db.transaction(() => ({
@@ -4505,9 +4582,7 @@ class BmpPersistenceStore {
                     ? { attributes: 0, payloads: 0, identities: 0 }
                     : this.collectGarbage(auxiliaryLimit);
             if (mode !== 'lifecycle') {
-                // Cheap incremental statistics refresh so the planner sees the
-                // real table shapes after large ingests; no-op when nothing changed.
-                this.db.pragma('optimize');
+                this.optimizeQueryStatistics();
             }
             const attributes = garbage.attributes;
             const payloads = garbage.payloads;

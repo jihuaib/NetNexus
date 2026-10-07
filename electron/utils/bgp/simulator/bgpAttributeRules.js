@@ -565,6 +565,7 @@ function getGeneratedAttributeValues(context, routeIndex) {
         else attr[rule.type] = Array.isArray(value) ? [...value] : value;
         if ((ATTRIBUTE_BY_TYPE.get(rule.type).section || 'attributes') === 'attributes') {
             const entry = { type: rule.type, value: Array.isArray(value) ? [...value] : value };
+            if (rule.type === 'asPath' && rule.prependLocalAs === false) entry.prependLocalAs = false;
             if (rule.type === 'srv6') {
                 entry.srv6EndpointBehavior = rule.endpointBehavior;
                 entry.srv6SidStructure = { ...rule.srv6SidStructure };

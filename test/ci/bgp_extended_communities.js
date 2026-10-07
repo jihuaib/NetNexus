@@ -21,6 +21,7 @@ const BgpPeer = require('../../electron/worker/bgp/bgpPeer');
 const BgpRouteSqliteStore = require('../../electron/worker/bgp/bgpRouteSqliteStore');
 const BgpConst = require('../../electron/const/bgpConst');
 const { parseBgpPacket } = require('../../electron/utils/bgp/bgpPacketParser');
+const { extCommunitiesBufferToString } = require('../../electron/utils/bgp/bgpEncoding');
 const registry = require('../../shared/bgpAttributes.json');
 const type = BgpConst.BGP_PATH_ATTR.EXTENDED_COMMUNITIES;
 const hex = value => Buffer.from(encodeExtendedCommunities(value)).toString('hex');
@@ -59,6 +60,18 @@ assert.equal(
 );
 assert.equal(hex('rt:0:4294967295'), '00020000ffffffff');
 assert.equal(hex('soo:4294967295:65535'), '0203ffffffffffff');
+// Verify the actual wire widths: AS2 communities have a four-byte local
+// administrator; AS4 and IPv4 communities have a two-byte local administrator.
+for (const [wire, expected] of [
+    ['0003fde8000001f4', 'SOO 65000:500'],
+    ['0003fde8ffffffff', 'SOO 65000:4294967295'],
+    ['02020001117001f4', 'RT 70000:500'],
+    ['0202ffffffffffff', 'RT 4294967295:65535'],
+    ['0102c000020101f4', 'RT 192.0.2.1:500'],
+    ['02030001117001f4', 'SOO 70000:500']
+]) {
+    assert.equal(extCommunitiesBufferToString(Buffer.from(wire, 'hex')), expected);
+}
 assert.deepEqual(normalizeExtendedCommunities('rt:1:2 rt:1:2 hex:0002000100000002'), [
     'rt:1:2',
     'rt:1:2',

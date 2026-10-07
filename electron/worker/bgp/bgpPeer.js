@@ -273,13 +273,11 @@ class BgpPeer {
     }
 
     buildAsPathAttribute(routeAttr) {
+        const prependLocalAs =
+            this.session.peerType === BgpConst.BGP_PEER_TYPE.PEER_TYPE_EBGP && routeAttr.prependLocalAs !== false;
         if (routeAttr.asPath) {
             const use4ByteAsn = CommonUtils.BIT_TEST(this.session.localCapFlags, BgpConst.BGP_CAP_FLAGS.FOUR_OCTET_AS);
-            const outboundAsPath =
-                routeAttr.attributePolicy !== 'configured' &&
-                this.session.peerType === BgpConst.BGP_PEER_TYPE.PEER_TYPE_EBGP
-                    ? `${this.session.localAs} ${routeAttr.asPath}`
-                    : routeAttr.asPath;
+            const outboundAsPath = prependLocalAs ? `${this.session.localAs} ${routeAttr.asPath}` : routeAttr.asPath;
             const asPathBytes = parseRouteAsPath(outboundAsPath, use4ByteAsn);
             if (asPathBytes) {
                 return this.buildPathAttribute(
@@ -290,10 +288,7 @@ class BgpPeer {
             }
         }
 
-        if (
-            routeAttr.attributePolicy !== 'configured' &&
-            this.session.peerType === BgpConst.BGP_PEER_TYPE.PEER_TYPE_EBGP
-        ) {
+        if (prependLocalAs) {
             return this.buildPathAttribute(BgpConst.BGP_PATH_ATTR.AS_PATH, BgpConst.BGP_PATH_ATTR_FLAGS.TRANSITIVE, [
                 0x02,
                 0x01,
@@ -423,7 +418,11 @@ class BgpPeer {
             case 'origin':
                 return this.buildPathAttribute(types.ORIGIN, flags.TRANSITIVE, [entry.value]);
             case 'asPath':
-                return this.buildAsPathAttribute({ ...configured, asPath: entry.value });
+                return this.buildAsPathAttribute({
+                    ...configured,
+                    asPath: entry.value,
+                    prependLocalAs: entry.prependLocalAs
+                });
             case 'nextHop':
                 return this.buildPathAttribute(
                     types.NEXT_HOP,

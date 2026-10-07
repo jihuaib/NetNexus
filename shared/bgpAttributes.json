@@ -212,12 +212,13 @@
             "type": "asPath",
             "valueType": "asPath",
             "label": "AS Path",
-            "description": "按配置直接编码 AS Path；支持固定、递增、随机或值列表，可重复添加或移除。",
+            "description": "发送给 eBGP 邻居时默认在 AS Path 前追加本地 AS，可关闭此节点开关；iBGP 保持配置的路径。支持固定、递增、随机或值列表，可重复添加或移除。",
             "defaultNode": true,
             "modes": ["fixed", "increment", "random", "list"],
             "default": {
                 "mode": "fixed",
                 "value": "",
+                "prependLocalAs": true,
                 "start": 65001,
                 "step": 1,
                 "min": 64512,
@@ -237,7 +238,7 @@
                         "key": "value",
                         "label": "属性值",
                         "type": "input",
-                        "help": "ASN 用空格分隔；留空发送空 AS Path。"
+                        "help": "ASN 用空格分隔，默认 eBGP 自动追加本地 AS，无需手动填写；可关闭此节点开关，关闭后按配置发送，留空即为空 AS Path。"
                     }
                 ],
                 "increment": [
@@ -281,6 +282,14 @@
                         "type": "textarea",
                         "array": true,
                         "help": "每行一条 AS 路径，ASN 用空格分隔。"
+                    }
+                ],
+                "common": [
+                    {
+                        "key": "prependLocalAs",
+                        "label": "eBGP 追加本地 AS",
+                        "type": "switch",
+                        "help": "默认启用，在本节点的 AS Path 前追加本地 AS；关闭此节点开关后按本节点配置发送。仅对 eBGP 生效。"
                     }
                 ]
             },

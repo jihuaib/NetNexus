@@ -1,7 +1,7 @@
 const BgpConst = require('../../../const/bgpConst');
 const { ipv4BufferToString, ipv6BufferToString } = require('../../ipUtils');
 const { rdBufferToString } = require('../bgpEncoding');
-const { parseMplsLabelStack } = require('./common');
+const { parseMplsLabelStack, formatIpv6OrMappedIpv4 } = require('./common');
 
 function parseVpnNextHop(buffer, position, nextHopLength) {
     if (nextHopLength === 0) {
@@ -16,29 +16,14 @@ function parseVpnNextHop(buffer, position, nextHopLength) {
     }
 
     if (nextHopLength === BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) {
-        return ipv6BufferToString(
-            buffer.subarray(
-                position + BgpConst.BGP_RD_LEN,
-                position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN
-            ),
-            BgpConst.IPV6_HOST_LEN
-        );
+        return formatIpv6OrMappedIpv4(buffer, position + BgpConst.BGP_RD_LEN);
     }
 
     if (nextHopLength === (BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN) * 2) {
-        const globalNextHop = ipv6BufferToString(
-            buffer.subarray(
-                position + BgpConst.BGP_RD_LEN,
-                position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN
-            ),
-            BgpConst.IPV6_HOST_LEN
-        );
+        const globalNextHop = formatIpv6OrMappedIpv4(buffer, position + BgpConst.BGP_RD_LEN);
         const linkLocalNextHopPosition =
             position + BgpConst.BGP_RD_LEN + BgpConst.IPV6_HOST_BYTE_LEN + BgpConst.BGP_RD_LEN;
-        const linkLocalNextHop = ipv6BufferToString(
-            buffer.subarray(linkLocalNextHopPosition, linkLocalNextHopPosition + BgpConst.IPV6_HOST_BYTE_LEN),
-            BgpConst.IPV6_HOST_LEN
-        );
+        const linkLocalNextHop = formatIpv6OrMappedIpv4(buffer, linkLocalNextHopPosition);
         return `${globalNextHop}, ${linkLocalNextHop}`;
     }
 

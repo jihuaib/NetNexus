@@ -72,7 +72,7 @@ function extCommunitiesBufferToString(buffer) {
                 assigned = buffer.readUInt32BE(4);
             } else {
                 admin = buffer.readUInt32BE(2);
-                assigned = buffer.readUInt32BE(6);
+                assigned = buffer.readUInt16BE(6);
             }
             return `RT ${admin}:${assigned}`;
 
@@ -82,7 +82,7 @@ function extCommunitiesBufferToString(buffer) {
                 assigned = buffer.readUInt16BE(6);
             } else if (ipFormat === BgpConst.EXT_COMMUNITY_TYPE.AS2) {
                 admin = buffer.readUInt16BE(2);
-                assigned = buffer.readUInt16BE(4);
+                assigned = buffer.readUInt32BE(4);
             } else {
                 admin = buffer.readUInt32BE(2);
                 assigned = buffer.readUInt16BE(6);

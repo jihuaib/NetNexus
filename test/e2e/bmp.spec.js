@@ -49,6 +49,14 @@ async function expectStatisticsValue(panel, typeName, value) {
     await expect(typeCell.locator('..')).toContainText(String(value));
 }
 
+async function expectNlriDetailValues(modal, values) {
+    await modal.getByRole('tab', { name: 'NLRI / TLV', exact: true }).click();
+    const cards = modal.getByTestId('bmp-route-detail-nlri');
+    await expect(cards).toBeVisible();
+    await expect(cards.getByTestId('bmp-route-detail-nlri-card').first()).toBeVisible();
+    for (const value of values) await expect(cards).toContainText(value);
+}
+
 function formatRouteStep(route, index) {
     return [
         `${index}. ${route.prefix}`,
@@ -311,6 +319,7 @@ test.describe('BMP pages', () => {
     });
 
     test('starts BMP server, ingests mock client data, and renders BMP tabs', async ({ page }) => {
+        test.setTimeout(60000);
         let bmpPort;
         let liveClient;
         let liveIpv4Session;
@@ -483,7 +492,8 @@ test.describe('BMP pages', () => {
                 .filter({ hasText: '10.10.0.0' })
                 .getByTestId('bmp-session-route-detail')
                 .click();
-            const routeDetailDrawer = page.getByRole('dialog', { name: /路由detail: 10\.10\.0\.0/ });
+            const routeDetailDrawer = page.getByRole('dialog', { name: /路由详情 · 10\.10\.0\.0/ });
+            await routeDetailDrawer.getByRole('tab', { name: '原始数据', exact: true }).click();
             await expect(routeDetailDrawer).toContainText('persistentRouteId', { timeout: 10000 });
             await routeDetailDrawer.getByRole('button', { name: '关闭' }).click();
             await expect(routeDetailDrawer).not.toBeVisible();
@@ -876,9 +886,12 @@ test.describe('BMP pages', () => {
             await expect(evpnCard).toContainText('NLRI 精确匹配');
             await evpnCard.click();
 
-            const evpnDrawer = page.getByRole('dialog', { name: `${evpnIdentity} · Pre Adj-RIB-In` });
+            const evpnDrawer = page.getByTestId('bmp-route-detail-modal');
             await expect(evpnDrawer).toBeVisible();
+            await expect(evpnDrawer.locator('.nn-modal-title')).toContainText('EVPN MAC/IP 路由');
             await expect(evpnDrawer).toContainText('L2VPN EVPN');
+            await expectNlriDetailValues(evpnDrawer, ['MAC/IP Advertisement', 'VNI 10000']);
+            await evpnDrawer.getByRole('tab', { name: '原始数据', exact: true }).click();
             await expect(evpnDrawer).toContainText('MAC/IP Advertisement');
             await expect(evpnDrawer).toContainText('VNI 10000');
             await expect(evpnDrawer).toContainText('"matchType": "text-exact"');
@@ -900,9 +913,12 @@ test.describe('BMP pages', () => {
             await expect(bgpLsCard).not.toContainText('/520');
             await bgpLsCard.click();
 
-            const bgpLsDrawer = page.getByRole('dialog', { name: `${bgpLsIdentity} · Pre Adj-RIB-In` });
+            const bgpLsDrawer = page.getByTestId('bmp-route-detail-modal');
             await expect(bgpLsDrawer).toBeVisible();
+            await expect(bgpLsDrawer.locator('.nn-modal-title')).toContainText('BGP-LS 链路路由');
             await expect(bgpLsDrawer).toContainText('Link-State');
+            await expectNlriDetailValues(bgpLsDrawer, ['OSPFv2', '本地节点', '远端节点', '65009']);
+            await bgpLsDrawer.getByRole('tab', { name: '原始数据', exact: true }).click();
             await expect(bgpLsDrawer).toContainText('OSPFv2');
             await expect(bgpLsDrawer).toContainText('Local Node Descriptors');
             await expect(bgpLsDrawer).toContainText('65009');
@@ -1011,7 +1027,8 @@ test.describe('BMP pages', () => {
                 .filter({ hasText: '10.30.0.0' })
                 .getByTestId('bmp-loc-rib-route-detail')
                 .click();
-            const routeDetailDrawer = page.getByRole('dialog', { name: /路由detail: 10\.30\.0\.0/ });
+            const routeDetailDrawer = page.getByRole('dialog', { name: /路由详情 · 10\.30\.0\.0/ });
+            await routeDetailDrawer.getByRole('tab', { name: '原始数据', exact: true }).click();
             await expect(routeDetailDrawer).toContainText('persistentRouteId', { timeout: 10000 });
             await routeDetailDrawer.getByRole('button', { name: '关闭' }).click();
 

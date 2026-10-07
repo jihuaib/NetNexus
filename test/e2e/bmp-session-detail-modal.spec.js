@@ -332,10 +332,12 @@ test('shows categorized BGP Session details in a modal and keeps raw JSON under 
     await expect(routeDetailButton).toBeVisible();
     await routeDetailButton.click();
 
-    const routeDrawer = page.getByRole('dialog', { name: '路由detail: 203.0.113.0' });
-    await expect(routeDrawer).toBeVisible();
-    await expect(routeDrawer).toHaveClass(/(^|\s)nn-drawer-content(\s|$)/u);
-    await expect(routeDrawer).toContainText('session-route-drawer-still-works');
+    const routeModal = page.getByTestId('bmp-route-detail-modal');
+    await expect(routeModal).toBeVisible();
+    await expect(routeModal).toHaveClass(/(^|\s)nn-modal(\s|$)/u);
+    await expect(routeModal.getByTestId('bmp-route-detail-raw-json')).toHaveCount(0);
+    await routeModal.getByRole('tab', { name: '原始数据', exact: true }).click();
+    await expect(routeModal.getByTestId('bmp-route-detail-raw-json')).toContainText('session-route-drawer-still-works');
 });
 
 test('reloads the latest Session topology every time details are opened', async ({ page }) => {

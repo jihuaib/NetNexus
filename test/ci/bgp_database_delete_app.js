@@ -96,7 +96,7 @@ async function main() {
             legacy.pragma('user_version = 3');
             legacy.close();
             assert.throws(
-                () => new BgpRouteSqliteStore(dbPath).open(),
+                () => new BgpRouteSqliteStore({ dbPath, readOnly: true }).open(),
                 new RegExp(`schema 3.*schema ${BgpRouteSqliteStore.SCHEMA_VERSION}`)
             );
             const beforeDelete = fs.readFileSync(dbPath);
@@ -192,14 +192,14 @@ async function main() {
             for (const file of files) assert.equal(fs.existsSync(file.filePath), false);
         }
         {
-            const { app, dbPath } = fixture('start-schema-failure');
+            const { app, dbPath } = fixture('start-unreadable-database');
             writeArtifacts(dbPath);
             const termination = deferred();
             const worker = {
                 addEventListener() {},
                 removeEventListener() {},
                 async sendRequest() {
-                    throw new Error(`schema 3 is incompatible with schema ${BgpRouteSqliteStore.SCHEMA_VERSION}`);
+                    throw new Error('BGP database version check failed: cannot read SQLite user_version');
                 },
                 terminate: () => termination.promise
             };
@@ -215,7 +215,7 @@ async function main() {
             assert.equal(
                 (await app.handleDeleteRouteDatabase()).status,
                 'success',
-                'a schema error followed by confirmed process exit must permit deletion'
+                'an unreadable database error followed by confirmed process exit must permit deletion'
             );
         }
         {
@@ -297,20 +297,25 @@ async function main() {
         {
             const { app, dbPath } = fixture('unsafe-files');
             fs.mkdirSync(path.dirname(dbPath));
-            const target = path.join(temporaryRoot, 'symlink-target');
+            const targetDirectory = path.join(temporaryRoot, 'symlink-target');
+            fs.mkdirSync(targetDirectory);
+            const target = path.join(targetDirectory, 'sentinel');
             fs.writeFileSync(target, 'do-not-delete');
-            fs.symlinkSync(target, dbPath);
+            const linkTarget = process.platform === 'win32' ? targetDirectory : target;
+            const linkType = process.platform === 'win32' ? 'junction' : 'file';
+            fs.symlinkSync(linkTarget, dbPath, linkType);
             assert.equal((await app.handleGetRouteDatabaseInfo()).status, 'error');
             assert.equal((await app.handleDeleteRouteDatabase()).status, 'error');
             assert.equal(fs.readFileSync(target, 'utf8'), 'do-not-delete');
             assert.equal(fs.lstatSync(dbPath).isSymbolicLink(), true);
-            fs.unlinkSync(dbPath);
+            if (process.platform === 'win32') fs.rmdirSync(dbPath);
+            else fs.unlinkSync(dbPath);
             fs.writeFileSync(dbPath, 'database');
             fs.mkdirSync(`${dbPath}-wal`);
             assert.equal((await app.handleDeleteRouteDatabase()).status, 'error');
             assert.equal(fs.readFileSync(dbPath, 'utf8'), 'database');
             fs.rmdirSync(`${dbPath}-wal`);
-            fs.symlinkSync(target, `${dbPath}-wal`);
+            fs.symlinkSync(linkTarget, `${dbPath}-wal`, linkType);
             assert.equal((await app.handleDeleteRouteDatabase()).status, 'error');
             assert.equal(fs.readFileSync(target, 'utf8'), 'do-not-delete');
             assert.equal(fs.readFileSync(dbPath, 'utf8'), 'database');
@@ -320,7 +325,7 @@ async function main() {
             const outside = path.join(temporaryRoot, 'outside-bgp');
             fs.mkdirSync(outside);
             fs.writeFileSync(path.join(outside, 'bgp.sqlite3'), 'external-data');
-            fs.symlinkSync(outside, path.join(userData, 'bgp'));
+            fs.symlinkSync(outside, path.join(userData, 'bgp'), process.platform === 'win32' ? 'junction' : 'dir');
             const result = await app.handleDeleteRouteDatabase();
             assert.equal(result.status, 'error');
             assert.match(result.msg, /数据库目录/);

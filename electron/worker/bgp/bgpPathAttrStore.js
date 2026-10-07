@@ -75,6 +75,7 @@ function canonicalizeAttr(attr = {}) {
                           ? [...entry.value]
                           : entry.value
             };
+            if (entry.type === 'asPath' && entry.prependLocalAs === false) result.prependLocalAs = false;
             if (['srv6', 'srv6L2', 'srv6L3'].includes(entry.type)) {
                 result.srv6EndpointBehavior = entry.srv6EndpointBehavior;
                 result.srv6SidStructure = { ...entry.srv6SidStructure };

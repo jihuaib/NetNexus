@@ -250,7 +250,7 @@ async function installBmpMock(page, calls, { instanceResponses = [INSTANCE], rou
     await page.addInitScript({ content: getBrowserMockScript('bmp') });
 }
 
-test('shows categorized Loc-RIB Instance details in a fixed-height modal and preserves the route drawer', async ({
+test('shows categorized Loc-RIB Instance details in a fixed-height modal and opens separate route details', async ({
     page
 }) => {
     const calls = [];
@@ -366,22 +366,22 @@ test('shows categorized Loc-RIB Instance details in a fixed-height modal and pre
 
     await routeTable.getByTestId('bmp-loc-rib-route-detail').click();
 
-    const routeDrawer = page.getByRole('dialog', {
-        name: `路由detail: ${INSTANCE_ROUTE.ip}`,
-        exact: true
-    });
-    await expect(routeDrawer).toBeVisible();
-    await expect(page.locator('.nn-drawer-content:visible')).toHaveCount(1);
+    const routeModal = page.getByTestId('bmp-route-detail-modal');
+    await expect(routeModal).toBeVisible();
+    await expect(routeModal).toHaveClass(/(^|\s)nn-modal(\s|$)/u);
+    await expect(page.locator('.nn-drawer-content:visible')).toHaveCount(0);
     await expect(page.getByTestId('bmp-loc-rib-instance-detail-modal')).toBeHidden();
-    await expect(routeDrawer.getByRole('tab')).toHaveCount(0);
-    await expect(routeDrawer).toContainText('persistentRouteId');
-    await expect(routeDrawer).toContainText(INSTANCE_ROUTE.persistentRouteId);
-    await expect(routeDrawer).toContainText('routeDetailMarker');
-    await expect(routeDrawer).toContainText(INSTANCE_ROUTE.routeDetailMarker);
+    await expect(routeModal.getByTestId('bmp-route-detail-raw-json')).toHaveCount(0);
+    await routeModal.getByRole('tab', { name: '原始数据', exact: true }).click();
+    const routeRawJson = routeModal.getByTestId('bmp-route-detail-raw-json');
+    await expect(routeRawJson).toContainText('persistentRouteId');
+    await expect(routeRawJson).toContainText(INSTANCE_ROUTE.persistentRouteId);
+    await expect(routeRawJson).toContainText('routeDetailMarker');
+    await expect(routeRawJson).toContainText(INSTANCE_ROUTE.routeDetailMarker);
     await expect.poll(() => calls.filter(call => call.method === 'getBgpInstanceRouteDetail').length).toBe(1);
 
-    await routeDrawer.getByRole('button', { name: '关闭', exact: true }).click();
-    await expect(routeDrawer).toBeHidden();
+    await routeModal.getByRole('button', { name: '关闭', exact: true }).click();
+    await expect(routeModal).toBeHidden();
 });
 
 test('reloads the latest Loc-RIB topology every time details are opened without resetting route pagination', async ({

@@ -445,6 +445,32 @@ assert.equal(vpnv6BmpRoute.ip, '2001:db8::');
 assert.equal(vpnv6BmpRoute.rd, '65000:1');
 assert.equal(vpnv6BmpRoute.labels, '101(BOS)');
 
+const mappedVpnv6NextHop = Buffer.concat([
+    Buffer.alloc(BgpConst.BGP_RD_LEN),
+    Buffer.from('00000000000000000000ffffc0a8e401', 'hex')
+]);
+for (const [nextHop, expected] of [
+    [mappedVpnv6NextHop, '::ffff:192.168.228.1'],
+    [
+        Buffer.concat([
+            mappedVpnv6NextHop,
+            Buffer.alloc(BgpConst.BGP_RD_LEN),
+            Buffer.from('fe800000000000000000000000000001', 'hex')
+        ]),
+        '::ffff:192.168.228.1, fe80::1'
+    ]
+]) {
+    const packet = parseUpdateWithMpReach(
+        BgpConst.BGP_AFI_TYPE.AFI_IPV6,
+        BgpConst.BGP_SAFI_TYPE.SAFI_VPN,
+        nextHop,
+        Buffer.concat([Buffer.from([120]), labelEntry(101), rd65000, Buffer.from([0x20, 0x01, 0x0d, 0xb8])])
+    );
+    assert.equal(packet.valid, true);
+    assert.equal(packet.pathAttributes[0].mpReach.nextHop, expected);
+    assert.equal(new BmpSession({ sendEvent() {} }, {}).extractRouteAttributes(packet).nextHop, expected);
+}
+
 const evpnEthernetAdPacket = parseUpdateWithMpReach(
     BgpConst.BGP_AFI_TYPE.AFI_L2VPN,
     BgpConst.BGP_SAFI_TYPE.SAFI_EVPN,

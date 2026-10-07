@@ -96,6 +96,7 @@ IPv4 单播路由：
 
 IPv4 单播路由支持：
 
+- AS Path：每个属性节点提供“eBGP 追加本地 AS”开关，默认开启，发送时在配置路径前添加本地 AS；留空时发送只包含本地 AS 的路径。关闭该节点的开关后按配置路径发送，空路径仍为空。同一路由中的多个 AS Path 节点可独立设置。iBGP 保持配置的路径。固定、递增、随机和值列表模式均支持此开关，适用于 IPv4、IPv6、Label、VPNv4、VPNv6、EVPN、MVPN 和 QP 路由；本地路由及 MRT 导出保存配置的原始路径，重发不会累积本地 AS。移除 AS Path 节点仍可用于构造不携带该属性的测试报文。
 - 随机 AS Path：可设置起始/结束 AS，以及最少/最多 AS 个数；每条路由会同时随机路径长度和路径中的 AS。IPv4/IPv6 单播、Label、MVPN 和 QP 路由统一支持。
 - IPv4 高级配置：ADD-PATH、SRv6 和随机 AS Path 收纳到高级配置弹层，主页面保留常用基础字段，为路由表释放更多显示空间。
 - Add-Path 批量生成：开启后按 `Add-Path数量` 为同一前缀生成多条路径，列表通过 `pathId` 区分。
@@ -144,7 +145,7 @@ IPv6 单播路由详情：
 
 VPNv6 下一跳使用 8 字节全零 RD 加 IPv6 地址；IPv4 下一跳转换为 IPv4-mapped IPv6。VPNv4 使用 IPv6 下一跳时，双方需启用对应地址族的 Extended Next Hop Encoding 能力；未协商时保留本地路由，但不向该邻居发送。EVPN SRv6 的 MP Next Hop 必须使用 IPv6 地址；IPv4 TCP 邻居可通过固定 IPv6 下一跳发送。当前这三个地址族不支持 Add-Path，VPNv4 / VPNv6 不支持 SRv6 属性节点。
 
-BGP 路由数据库 schema 6 自动升级到 schema 7，保留既有路由和路由组，并增加 EVPN NLRI 字段存储。更早的主版本仍需按应用提示处理数据库版本兼容性。
+应用启动和 BGP 服务启动时会检查本地路由数据库版本。版本不一致时，自动删除 `bgp/bgp.sqlite3` 及其 WAL、SHM、journal 文件，并在 BGP 服务打开数据库时创建当前版本的空数据库；已生成的路由、属性和路由组数据会清空，可使用保存的路由组配置重新生成。版本一致时保留数据；无法读取版本或同版本数据库结构损坏时报告错误。
 
 ### IPv4 MVPN 路由
 

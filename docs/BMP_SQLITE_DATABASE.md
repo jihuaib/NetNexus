@@ -883,7 +883,9 @@ EVPN RT1–RT5 的键字段按 RFC 7432 和 RFC 9136 区分：
 
 Identity、payload 和 attributes 分离后，route 更新属性时无需复制 NLRI；同一组属性也不会在数百万条 route 中重复保存。
 
-当前 canonical `attr_json` 由应用写入的顶层字段是 `origin`、`asPath`、`med`、`localPref`、`communities`、`otc`、`nextHop` 和 `prefixSid`。这些是 JSON 内部字段，不是 SQLite 独立列；按 Next Hop 或 AS Path 搜索时需要解析/搜索 `attr_json`，页面读取则一次解析后覆盖到路由投影。
+当前 canonical `attr_json` 保留 `origin`、`asPath`、`med`、`localPref`、`communities`、`otc`、`nextHop` 和 `prefixSid`；AS4 重建时另保留 `wireAsPath` 和 `as4Path`。新上报还保存 `pathAttributes`，包含有序属性列表、类型码、Flags、解析字段及原始属性值，未知属性也保留。这些是 JSON 内部字段，不是 SQLite 独立列；按 Next Hop 或 AS Path 搜索时需要解析/搜索 `attr_json`，页面读取则一次解析后覆盖到路由投影。
+
+MP_REACH/MP_UNREACH 仅保存属于当前路由地址族的属性头和下一跳，不保存同一 UPDATE 的整批 NLRI；其编码长度位和整批长度不参与共享属性标识，当前路由的 NLRI 仍来自 identity/payload。这样重复上报的属性共享不受 NLRI 分批方式影响。旧记录没有 `pathAttributes` 时继续读取已有字段，不修改 schema v14；未保存的属性需重新上报后补齐。
 
 读取 current route 时，应用按以下来源重建 route 投影：
 
@@ -1340,6 +1342,16 @@ Worker 默认周期性执行小批量 sweep：
 除默认周期 sweep 外，Worker 会为最早的 scope refresh 维护单一 deadline timer；到期清理完成后，按受影响的 `source_id/scope_id` 发送路由刷新事件，使已打开的页面重新查询 SQLite，而不是继续显示清理前的列表缓存。
 
 不要绕过 Writer 直接删除 current row：绕过 trigger 会让 scope counters 失真，绕过 Writer 的 `RETURNING` 收集会让被释放的对象错过回收（它们不会造成错误，但会一直占用空间）。
+
+### 14.1 查询优化器统计维护
+
+`sqlite_stat1` 是优化器的行数和索引分布估计，不是 BMP Statistics Report，也不会随路由插入自动更新。最初十条路由共用一份属性时，属性表统计为一行是正确的；后续大量不同 AS Path 使属性表增长后，必须重新检查统计，否则分页 JOIN 可能仍按一行属性选择全表扫描。
+
+Writer 在打开数据库、maintenance sweep，以及成功提交后累计新增 256 份属性时执行 `PRAGMA optimize=0x10012`：检查所有表，并启用 SQLite 的有界分析预算。唯一键属性查找不会阻止属性表被检查；重复属性、批次重放和失败批次不计入新增量。lifecycle sweep 不额外执行统计分析。
+
+只读 Reader 在路由分页和流式分析开始前检查 `data_version`；数据库变化时才读取小型 `sqlite_stat1` 表，统计内容变化时仅重新打开对应 client 的读连接，使查询计划加载新统计。初始化时，schema、统计指纹和 `data_version` 在同一个只读快照内读取。分页和汇总仍共用一个查询快照，不等待写队列，也不在读连接执行分析。
+
+回归 `test/ci/bmp_persistence_query_statistics.js` 覆盖共享属性后大量独立属性的增长、维护补刷、已有 Reader 重载及普通数据变化不重载。
 
 ## 15. 正常停止与崩溃恢复
 

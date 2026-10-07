@@ -116,17 +116,17 @@ test.describe('BMP route detail tooltip dismissal', () => {
         await installBmpMock(page);
     });
 
-    test('keeps the Session route tooltip dismissed after the drawer restores focus', async ({ page }) => {
+    test('keeps the Session route tooltip dismissed after the modal restores focus', async ({ page }) => {
         await page.goto(SESSION_MONITOR_ROUTE);
 
         const detailButton = page.getByTestId('bmp-session-route-detail');
         await expect(detailButton).toBeVisible();
         await detailButton.hover();
-        await expect(page.getByRole('tooltip')).toHaveText('查询路由detail');
+        await expect(page.getByRole('tooltip')).toHaveText('查看路由详情');
 
         await detailButton.click();
 
-        const drawer = page.getByRole('dialog', { name: '路由detail: 203.0.113.0' });
+        const drawer = page.getByRole('dialog', { name: '路由详情 · 203.0.113.0' });
         await expect(drawer).toBeVisible();
         await expect(page.getByRole('tooltip')).toHaveCount(0);
 
@@ -138,20 +138,20 @@ test.describe('BMP route detail tooltip dismissal', () => {
 
         await page.mouse.move(0, 0);
         await detailButton.hover();
-        await expect(page.getByRole('tooltip')).toHaveText('查询路由detail');
+        await expect(page.getByRole('tooltip')).toHaveText('查看路由详情');
     });
 
-    test('keeps the Loc-RIB route tooltip dismissed after keyboard drawer close', async ({ page }) => {
+    test('keeps the Loc-RIB route tooltip dismissed after keyboard modal close', async ({ page }) => {
         await page.goto(LOC_RIB_MONITOR_ROUTE);
 
         const detailButton = page.getByTestId('bmp-loc-rib-route-detail');
         await expect(detailButton).toBeVisible();
         await detailButton.focus();
-        await expect(page.getByRole('tooltip')).toHaveText('查询路由detail');
+        await expect(page.getByRole('tooltip')).toHaveText('查看路由详情');
 
         await detailButton.press('Enter');
 
-        const drawer = page.getByRole('dialog', { name: '路由detail: 198.51.100.0' });
+        const drawer = page.getByRole('dialog', { name: '路由详情 · 198.51.100.0' });
         await expect(drawer).toBeVisible();
         await expect(page.getByRole('tooltip')).toHaveCount(0);
 
@@ -164,6 +164,6 @@ test.describe('BMP route detail tooltip dismissal', () => {
         await detailButton.press('Tab');
         await page.keyboard.press('Shift+Tab');
         await expect(detailButton).toBeFocused();
-        await expect(page.getByRole('tooltip')).toHaveText('查询路由detail');
+        await expect(page.getByRole('tooltip')).toHaveText('查看路由详情');
     });
 });

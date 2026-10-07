@@ -146,7 +146,7 @@
                                         <template #bodyCell="{ column, record }">
                                             <template v-if="column.key === 'routeAction'">
                                                 <nn-space size="small">
-                                                    <nn-tooltip title="查询路由detail">
+                                                    <nn-tooltip title="查看路由详情">
                                                         <nn-button
                                                             type="text"
                                                             size="small"
@@ -184,20 +184,13 @@
             @update:open="handleSessionDetailOpenChange"
         />
 
-        <nn-drawer
-            v-model:open="detailsDrawerVisible"
+        <BmpRouteDetailModal
+            :open="detailsDrawerVisible"
             :title="detailsDrawerTitle"
-            placement="right"
-            :width="routeEventTarget ? '760px' : '500px'"
-            @close="closeDetailsDrawer"
-        >
-            <nn-spin v-if="routeEventTarget" :spinning="routeDetailLoading">
-                <div v-if="routeDetailLoading && !currentDetails" class="route-detail-loading" />
-                <nn-empty v-else-if="!currentDetails" description="暂无路由详情" />
-                <nn-json-viewer v-else class="route-detail-json" :value="currentDetails" wrap />
-            </nn-spin>
-            <nn-json-viewer v-else-if="currentDetails" class="route-detail-json" :value="currentDetails" wrap />
-        </nn-drawer>
+            :route="currentDetails"
+            :loading="routeDetailLoading"
+            @update:open="open => !open && closeDetailsDrawer()"
+        />
     </div>
 </template>
 
@@ -208,6 +201,7 @@
     import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
     import { ProfileOutlined } from 'netnexus-ui/icons';
     import BmpSessionDetailModal from '../../components/BmpSessionDetailModal.vue';
+    import BmpRouteDetailModal from '../../components/BmpRouteDetailModal.vue';
     import {
         BMP_SESSION_TYPE_NAME,
         BMP_SESSION_STATE_NAME,
@@ -707,7 +701,7 @@
         const routeKey = getRouteKey(record);
         const sessionInfo = getSessionApiInfo(getActiveSession());
 
-        detailsDrawerTitle.value = `路由detail: ${record.ip || ''}`;
+        detailsDrawerTitle.value = `路由详情 · ${record.ip || ''}`;
         detailsDrawerVisible.value = true;
         currentDetails.value = null;
         routeDetailLoading.value = true;
@@ -1640,10 +1634,6 @@
 </script>
 
 <style scoped>
-    .route-detail-loading {
-        min-height: 160px;
-    }
-
     .bmp-full-page {
         height: 100%;
         min-height: 0;

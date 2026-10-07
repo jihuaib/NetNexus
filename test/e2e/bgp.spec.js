@@ -1101,7 +1101,7 @@ test.describe('BGP pages', () => {
         }
     });
 
-    test('sends ordered duplicate tree attributes without Origin and keeps MP next hops independent', async ({
+    test('sends ordered duplicate tree attributes with per-node eBGP local AS controls and independent MP next hops', async ({
         page
     }) => {
         test.setTimeout(60000);
@@ -1125,9 +1125,14 @@ test.describe('BGP pages', () => {
         await fixedRule('nextHop', '192.0.2.10');
         await fixedRule('med', '10');
         await fixedRule('asPath', '65011 65012');
+        const prependLocalAs = page.getByTestId('bgp-ipv4-attribute-prependLocalAs-switch');
+        await expect(prependLocalAs).toBeChecked();
         await fixedRule('localPref', '200');
         await fixedRule('nextHop', '192.0.2.11');
         await fixedRule('asPath', '65021');
+        await expect(prependLocalAs).toBeChecked();
+        await prependLocalAs.click();
+        await expect(prependLocalAs).not.toBeChecked();
         await fixedRule('med', '90');
         await expect(page.getByTestId('bgp-ipv4-tree-attribute-nextHop')).toHaveCount(2);
         await expect(page.getByTestId('bgp-ipv4-tree-attribute-med')).toHaveCount(2);
@@ -1138,6 +1143,23 @@ test.describe('BGP pages', () => {
         await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('192.0.2.11');
         await addTreeRule(page, 'origin');
         await removeTreeRule(page, page.getByTestId('bgp-ipv4-tree-attribute-origin'));
+        await page.getByTestId('bgp-ipv4-save-workspace-button').click();
+        await expect
+            .poll(() =>
+                controller.savedIpv4RouteConfig?.attributeRules
+                    .filter(rule => rule.type === 'asPath')
+                    .map(rule => rule.prependLocalAs)
+            )
+            .toEqual([true, false]);
+        await page.reload();
+        const asPathNodes = page.getByTestId('bgp-ipv4-tree-attribute-asPath');
+        await expect(asPathNodes).toHaveCount(2);
+        await asPathNodes.first().click();
+        await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('65011 65012');
+        await expect(prependLocalAs).toBeChecked();
+        await asPathNodes.nth(1).click();
+        await expect(page.getByTestId('bgp-ipv4-attribute-value-input')).toHaveValue('65021');
+        await expect(prependLocalAs).not.toBeChecked();
         await page.getByTestId('bgp-generate-ipv4-routes-button').click();
 
         const routes = await controller.waitForRoutes(1, 3);
@@ -1150,7 +1172,7 @@ test.describe('BGP pages', () => {
                 { type: 'asPath', value: '65011 65012' },
                 { type: 'localPref', value: 200 },
                 { type: 'nextHop', value: '192.0.2.11' },
-                { type: 'asPath', value: '65021' },
+                { type: 'asPath', value: '65021', prependLocalAs: false },
                 { type: 'med', value: 90 }
             ]);
         }
@@ -1172,7 +1194,7 @@ test.describe('BGP pages', () => {
             expect(update.pathAttributes).toMatchObject([
                 { typeCode: 3, nextHop: '192.0.2.10' },
                 { typeCode: 4, med: 10 },
-                { typeCode: 2, asPath: '65011 65012' },
+                { typeCode: 2, asPath: '65535 65011 65012' },
                 { typeCode: 5, localPref: 200 },
                 { typeCode: 3, nextHop: '192.0.2.11' },
                 { typeCode: 2, asPath: '65021' },
@@ -1190,7 +1212,21 @@ test.describe('BGP pages', () => {
         }
         await expect(page.getByTestId('bgp-ipv4-tree-attribute-origin')).toHaveCount(0);
         await clearToasts(page);
+        await asPathNodes.nth(1).click();
+        await prependLocalAs.click();
+        await expect(prependLocalAs).toBeChecked();
+        const reenabledOffset = controller.getClientUpdates().length;
         await page.getByTestId('bgp-generate-ipv4-routes-button').click();
+        const reenabledUpdates = await controller.waitForClientUpdates(
+            items => flattenUpdateNlri(items.slice(reenabledOffset)).length >= 3
+        );
+        for (const update of reenabledUpdates.slice(reenabledOffset)) {
+            expect(
+                update.pathAttributes
+                    .filter(attribute => attribute.typeCode === BgpConst.BGP_PATH_ATTR.AS_PATH)
+                    .map(attribute => attribute.asPath)
+            ).toEqual(['65535 65011 65012', '65535 65021']);
+        }
         await expect(page.getByText('共 3 条，每页 25 条')).toBeVisible();
         const sparseResult = await page.evaluate(() =>
             window.bgpApi.generateIpv4Routes({
@@ -1214,7 +1250,7 @@ test.describe('BGP pages', () => {
         expect(sparseUpdate.pathAttributes[0].med).toBe(0);
         expect(sparseUpdate.mpReach.nextHop).toBe('192.0.2.202');
         await recordStep(
-            'Output: duplicate NEXT_HOP/MED/AS_PATH retain order and values; independent MP next hops form two groups; eBGP does not prepend or remove Local Preference; a MED-only rule emits no mandatory attributes'
+            'Output: duplicate AS_PATH nodes retain independent local AS settings across reload; toggling prepend sends changed UPDATEs; ordered attributes, explicit Local Preference and independent MP next hops are preserved; a MED-only rule emits no mandatory attributes'
         );
     });
 

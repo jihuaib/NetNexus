@@ -66,6 +66,7 @@ const DUPLICATED_ROUTE_ATTRIBUTE_FIELDS = [
     'communities',
     'otc',
     'prefixSid',
+    'pathAttributes',
     'attrId',
     'attrRefCount',
     'routeState',

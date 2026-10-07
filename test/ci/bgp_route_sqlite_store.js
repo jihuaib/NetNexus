@@ -262,18 +262,32 @@ try {
 
 const incompatibleTempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-bgp-route-schema-'));
 try {
-    for (const version of [1, 2, 3, 5, BgpRouteSqliteStore.SCHEMA_VERSION + 1]) {
+    for (const version of [0, 1, 2, 3, 5, 6, BgpRouteSqliteStore.SCHEMA_VERSION + 1, -1]) {
         const incompatiblePath = path.join(incompatibleTempDir, `schema-${version}.sqlite3`);
         const incompatibleDb = new Database(incompatiblePath);
+        incompatibleDb.exec(
+            "CREATE TABLE old_data(value TEXT); INSERT INTO old_data VALUES ('discard-on-version-change')"
+        );
         incompatibleDb.pragma(`user_version = ${version}`);
         incompatibleDb.close();
 
         assert.throws(
-            () => new BgpRouteSqliteStore({ dbPath: incompatiblePath }).open(),
-            new RegExp(
-                `BGP route SQLite schema ${version} is incompatible with schema ${BgpRouteSqliteStore.SCHEMA_VERSION}; data migration is not supported across major versions`
-            )
+            () => new BgpRouteSqliteStore({ dbPath: incompatiblePath, readOnly: true }).open(),
+            /does not match expected schema/
         );
+        const resetStore = new BgpRouteSqliteStore({ dbPath: incompatiblePath }).open();
+        try {
+            assert.equal(resetStore.getStatus().schemaVersion, BgpRouteSqliteStore.SCHEMA_VERSION);
+            assert.equal(resetStore.getStatus().attributes, 0);
+            assert.deepEqual(resetStore.listRouteGroups(), []);
+            assert.equal(
+                resetStore.db.prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'old_data'").get()
+                    .count,
+                0
+            );
+        } finally {
+            resetStore.close();
+        }
     }
 
     const legacyPath = path.join(incompatibleTempDir, 'legacy-version-zero.sqlite3');
@@ -289,21 +303,19 @@ try {
     assert.equal(legacyDb.pragma('user_version', { simple: true }), 0);
     legacyDb.close();
 
-    assert.throws(
-        () => new BgpRouteSqliteStore({ dbPath: legacyPath }).open(),
-        /BGP route SQLite schema 0 is not empty; data migration is not supported across major versions/
-    );
-
-    const preservedLegacyDb = new Database(legacyPath, { readonly: true });
-    assert.equal(preservedLegacyDb.prepare('SELECT COUNT(*) AS count FROM legacy_bgp_routes').get().count, 1);
-    assert.equal(
-        preservedLegacyDb
-            .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE type = 'table' AND name = 'bgp_routes'")
-            .get().count,
-        0,
-        'a rejected version-0 database must not be partially initialized'
-    );
-    preservedLegacyDb.close();
+    const freshLegacyStore = new BgpRouteSqliteStore({ dbPath: legacyPath }).open();
+    try {
+        assert.equal(freshLegacyStore.getStatus().schemaVersion, BgpRouteSqliteStore.SCHEMA_VERSION);
+        assert.equal(
+            freshLegacyStore.db
+                .prepare("SELECT COUNT(*) AS count FROM sqlite_master WHERE name = 'legacy_bgp_routes'")
+                .get().count,
+            0,
+            'a nonempty version-0 database must be reset'
+        );
+    } finally {
+        freshLegacyStore.close();
+    }
 } finally {
     fs.rmSync(incompatibleTempDir, { recursive: true, force: true });
 }

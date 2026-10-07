@@ -117,7 +117,7 @@ function assertOrdered(packet) {
     );
     assert.deepStrictEqual(
         all(packet, type.AS_PATH).map(attribute => attribute.segments.flatMap(segment => segment.asNumbers)),
-        [[64512, 64513], []]
+        [[65000, 64512, 64513], [65000]]
     );
     assert.strictEqual(all(packet, type.LOCAL_PREF)[0].localPref, 1001, 'explicit eBGP Local Pref must be sent');
     assert.deepStrictEqual(

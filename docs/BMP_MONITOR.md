@@ -134,9 +134,20 @@ Session RIB 路由详情：
 
 ![BMP Session 路由详情](images/bmp/bmp-session-route-detail.png)
 
-路由详情抽屉展示由 NLRI identity、payload、Path Attributes、Scope 和连接信息组装出的完整对象。
+Session、Loc-RIB 和路由追踪共用路由详情弹窗，沿用 Session 详情的固定高度、页签和分组展示：
+
+- **路由概览**：路由身份、地址族、来源、RIB 阶段、状态、Path Marking 和生命周期。
+- **BGP 属性**：用可读卡片展示路径属性，包括路由来源、AS 路径、选路参数、Community、聚合与隧道信息。标准 Community 显示约定名称，扩展 Community 显示 Route Target、Site of Origin 等含义；未知属性保留类型和可展开的原始值。
+- **NLRI / TLV**：按地址族展示前缀、RD、MPLS 标签、EVPN 的 MAC/VNI、FlowSpec 匹配规则、BGP-LS 描述符和 Route Monitoring TLV。
+- **原始数据**：完整详情 JSON，进入该页签时才加载，保留原始字段和值。
+
+![BMP 路由完整属性](images/bmp/bmp-route-detail-attributes.png)
+
+后续上报会保存原先未进入详情的路径属性；历史记录中未保存的属性需要设备重新上报后才能补齐。MP_REACH/MP_UNREACH 的属性头在 BGP 属性中展示，当前路由的 NLRI 单独展示，不混入同一 UPDATE 内其他路由。
 
 路由列表包含地址组、`pathId`、`rd`、前缀、掩码、下一跳、AS Path、路由状态等字段。IPv4/IPv6 单播没有携带 RD 时，页面和存储按 `0:0` 处理，避免路由 key 歧义。
+
+VPNv6 的 IPv4-mapped IPv6 下一跳在路由列表和详情中显示为 `::ffff:192.168.228.1` 这样的格式；历史路由中保存的十六进制写法也会按此格式显示。
 
 路由操作：
 

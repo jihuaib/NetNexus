@@ -394,7 +394,7 @@ function attrs(packet) {
         assert.strictEqual(attr.get(BgpConst.BGP_PATH_ATTR.MED).med, 50 + index);
         assert.deepStrictEqual(
             attr.get(BgpConst.BGP_PATH_ATTR.AS_PATH).segments.flatMap(segment => segment.asNumbers),
-            [64512, 64512]
+            [65000, 64512, 64512]
         );
         assert.strictEqual(
             attr.has(BgpConst.BGP_PATH_ATTR.LOCAL_PREF),
@@ -424,9 +424,10 @@ function attrs(packet) {
     assert.strictEqual(attr.get(BgpConst.BGP_PATH_ATTR.NEXT_HOP).nextHop, '203.0.113.1');
     assert.deepStrictEqual(
         attr.get(BgpConst.BGP_PATH_ATTR.AS_PATH).segments.map(segment => segment.asNumbers.length),
-        [255],
-        'configured AS Path must be sent without an automatic eBGP prepend'
+        [255, 1],
+        'eBGP local AS prepend must split paths exceeding the 255-AS segment limit'
     );
+    assert.strictEqual(attr.get(BgpConst.BGP_PATH_ATTR.AS_PATH).segments[0].asNumbers[0], 65000);
     instance.routeStore.close();
 }
 

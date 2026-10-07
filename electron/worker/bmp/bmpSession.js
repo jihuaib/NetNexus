@@ -26,6 +26,7 @@ const {
 const BmpBgpInstance = require('./bmpBgpInstance');
 const IdentityFallbackMap = require('./identityFallbackMap');
 const { canonicalizeBmpRouteAttr } = require('./bmpRouteAttrStore');
+const { createPathAttributeContext, selectPathAttributes } = require('./bmpRoutePathAttributes');
 const { reconstructLegacyAsPath, formatAsPath } = require('../../utils/bgp/bgpAsPath');
 const {
     buildScope,
@@ -1278,7 +1279,7 @@ class BmpSession {
     }
 
     // 辅助方法：设置路由属性
-    extractRouteAttributes(bgpUpdate, includeMpNextHop = true) {
+    extractRouteAttributes(bgpUpdate, includeMpNextHop = true, includePathAttributes = true) {
         const routeAttr = {};
         let asPath = null;
         let as4Path = null;
@@ -1340,6 +1341,9 @@ class BmpSession {
             }
         }
 
+        if (includePathAttributes) {
+            routeAttr.pathAttributes = selectPathAttributes(createPathAttributeContext(bgpUpdate.pathAttributes));
+        }
         return routeAttr;
     }
 
@@ -1347,7 +1351,8 @@ class BmpSession {
         // Only the parser's local UPDATE context shares attributes. Public
         // setRouteAttributes callers may mutate/reuse their parsed packet.
         return {
-            base: canonicalizeBmpRouteAttr(this.extractRouteAttributes(bgpUpdate, false)),
+            base: canonicalizeBmpRouteAttr(this.extractRouteAttributes(bgpUpdate, false, false)),
+            pathAttributes: createPathAttributeContext(bgpUpdate.pathAttributes),
             families: new Map()
         };
     }
@@ -1362,12 +1367,14 @@ class BmpSession {
         // Classical IPv4 NLRI uses NEXT_HOP, not another family's MP_REACH.
         // MP NLRI uses the next hop belonging to its own MP_REACH group.
         const nextHop = mpReach ? mpReach.nextHop : context.base.nextHop;
-        let shared = nextHops.get(nextHop);
+        let shared = nextHops.get(mpReach);
         if (!shared) {
-            // Extracted BMP attribute values are scalars (AS_PATH/communities
-            // and PREFIX_SID are already formatted strings).
-            shared = Object.freeze({ ...context.base, nextHop });
-            nextHops.set(nextHop, shared);
+            shared = Object.freeze({
+                ...context.base,
+                nextHop,
+                pathAttributes: selectPathAttributes(context.pathAttributes, afi, safi, mpReach)
+            });
+            nextHops.set(mpReach, shared);
         }
         return shared;
     }
@@ -1377,7 +1384,14 @@ class BmpSession {
             route.assignSharedRouteAttr(sharedAttributes);
             return;
         }
-        const routeAttr = sharedAttributes || this.extractRouteAttributes(bgpUpdate);
+        const routeAttr = sharedAttributes || this.extractRouteAttributes(bgpUpdate, true, false);
+        if (!sharedAttributes) {
+            routeAttr.pathAttributes = selectPathAttributes(
+                createPathAttributeContext(bgpUpdate.pathAttributes),
+                route.afi ?? null,
+                route.safi ?? null
+            );
+        }
 
         if (typeof route.assignRouteAttr === 'function') {
             route.assignRouteAttr(routeAttr);

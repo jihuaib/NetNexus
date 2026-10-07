@@ -7,6 +7,7 @@ const BgpConst = require('../../const/bgpConst');
 const { getAfiAndSafi } = require('../../utils/bgp/bgpUtils');
 const BgpRoute = require('./bgpRoute');
 const { canonicalizeAttr } = require('./bgpPathAttrStore');
+const { resetDatabaseIfVersionChanged } = require('./bgpDatabaseVersionCheck');
 const {
     normalizeVpnRoute,
     normalizeEvpnRoute,
@@ -743,6 +744,7 @@ class BgpRouteSqliteStore {
             return this;
         }
         if (!this.readOnly && this.dbPath !== ':memory:') {
+            resetDatabaseIfVersionChanged(this.dbPath, SCHEMA_VERSION);
             fs.mkdirSync(path.dirname(this.dbPath), { recursive: true });
         }
         this.db = new Database(this.dbPath, {
@@ -790,22 +792,8 @@ class BgpRouteSqliteStore {
         if (currentVersion === SCHEMA_VERSION) {
             return;
         }
-        if (currentVersion === 6) {
-            this.db
-                .transaction(() => {
-                    ROUTE_TABLE_DEFINITIONS.forEach(({ tableName }) => {
-                        this.db.exec(`ALTER TABLE ${tableName} ADD COLUMN nlri_json TEXT`);
-                    });
-                    this.db.pragma(`user_version = ${SCHEMA_VERSION}`);
-                    this.validateSchema();
-                })
-                .immediate();
-            return;
-        }
         if (currentVersion !== 0) {
-            throw new Error(
-                `BGP route SQLite schema ${currentVersion} is incompatible with schema ${SCHEMA_VERSION}; data migration is not supported across major versions`
-            );
+            throw new Error('BGP database changed after version check; refusing to initialize an incompatible schema');
         }
 
         const initializeTransaction = this.db.transaction(() => {
@@ -818,9 +806,7 @@ class BgpRouteSqliteStore {
                 )
                 .all();
             if (existingObjects.length > 0) {
-                throw new Error(
-                    `BGP route SQLite schema 0 is not empty; data migration is not supported across major versions`
-                );
+                throw new Error('BGP database changed after version check; refusing to initialize a non-empty schema');
             }
 
             this.db.exec(`

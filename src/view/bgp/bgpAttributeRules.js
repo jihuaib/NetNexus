@@ -78,6 +78,7 @@ export function normalizeAttributeRules(rules) {
                 if (result.mode === 'list') result.values = (result.values || []).map(typedRouteTargets);
             }
             const definition = definitionFor(result.type);
+            if (result.type === 'asPath') result.prependLocalAs = result.prependLocalAs !== false;
             if (definition?.valueCountValidation && result.valueCount === undefined)
                 result.valueCount = definition.default.valueCount;
             if (!result.id || ids.has(result.id)) result.id = `attr-${Date.now().toString(36)}-${++sequence}`;

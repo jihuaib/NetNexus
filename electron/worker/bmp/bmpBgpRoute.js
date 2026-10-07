@@ -1,6 +1,7 @@
 const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 const BmpConst = require('../../const/bmpConst');
 const { DEFAULT_BMP_ROUTE_ATTR } = require('./bmpRouteAttrStore');
+const { cloneAttributeValue } = require('./bmpRoutePathAttributes');
 const {
     canonicalizeRouteIdentity,
     formatRouteLookupKey,
@@ -175,7 +176,10 @@ class BmpBgpRoute {
     }
 
     getInlineRouteAttr() {
-        return this._inlineAttr ? { ...DEFAULT_BMP_ROUTE_ATTR, ...this._inlineAttr } : null;
+        if (!this._inlineAttr) return null;
+        const attr = { ...DEFAULT_BMP_ROUTE_ATTR, ...this._inlineAttr };
+        if (attr.pathAttributes !== undefined) attr.pathAttributes = cloneAttributeValue(attr.pathAttributes);
+        return attr;
     }
 
     getRouteAttr() {
@@ -196,11 +200,13 @@ class BmpBgpRoute {
     }
 
     makeRouteAttr(overrides = {}) {
-        return {
+        const attr = {
             ...DEFAULT_BMP_ROUTE_ATTR,
             ...this.getRouteAttr(),
             ...overrides
         };
+        if (attr.pathAttributes !== undefined) attr.pathAttributes = cloneAttributeValue(attr.pathAttributes);
+        return attr;
     }
 
     assignRouteAttr(attr) {
@@ -232,7 +238,9 @@ class BmpBgpRoute {
     }
 
     getRouteAttrValue(field) {
-        const attr = this.getRouteAttr();
+        // Internal scalar reads must not clone the full shared path attribute
+        // array; public attribute/detail getters still return isolated copies.
+        const attr = this.getImmutableRouteAttr() || this.getRouteAttr();
         return attr[field] === undefined ? DEFAULT_BMP_ROUTE_ATTR[field] : attr[field];
     }
 
@@ -549,6 +557,7 @@ class BmpBgpRoute {
             routeInfo.wireAsPath = routeAttr.wireAsPath;
             routeInfo.as4Path = routeAttr.as4Path;
         }
+        if (routeAttr.pathAttributes !== undefined) routeInfo.pathAttributes = routeAttr.pathAttributes;
         return routeInfo;
     }
 
