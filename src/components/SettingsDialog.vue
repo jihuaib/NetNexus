@@ -163,6 +163,18 @@
 </script>
 
 <style scoped>
+    :global(.settings-dialog-modal .nn-modal-content) {
+        padding: 0 !important;
+    }
+
+    :global(.settings-dialog-modal .nn-modal-body) {
+        flex: 1 1 0 !important;
+        min-height: 0 !important;
+        max-height: none !important;
+        padding: 0 !important;
+        overflow: hidden !important;
+    }
+
     :global(.settings-dialog-modal .nn-navigation-modal-rail) {
         width: 160px;
         flex-basis: 160px;
