@@ -1,6 +1,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { XMLParser } = require('fast-xml-parser');
 const { parseYang } = require('./yangParser');
 const { sha256, stableStringify, atomicWriteFile, atomicWriteJson } = require('./yangRepository');
 const { LibyangRuntime } = require('./libyangRuntime');
@@ -12,7 +13,7 @@ const {
     resolveRpcValidationTarget
 } = require('./yangRpcInstanceValidation');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 7;
+const COMPILE_CACHE_SCHEMA_VERSION = 8;
 const LIBYANG_SCHEMA_OUTPUT_VERSION = 3;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
@@ -21,6 +22,19 @@ const DEFAULT_VERSION_TIMEOUT = 5_000;
 const MAX_RPC_VALIDATION_BYTES = 8 * 1024 * 1024;
 const ROOT_NODE_ID = 'yang-schema-root';
 const FILE_VALIDATION_CONCURRENCY = 3;
+// libyang loads these during ly_ctx_new(), before any workspace input. Its pinned
+// core revisions must remain available, including imported-only base type modules.
+const LIBYANG_INTERNAL_MODULES = new Set([
+    'ietf-inet-types',
+    'ietf-yang-types',
+    'ietf-yang-metadata',
+    'yang',
+    'default',
+    'ietf-yang-schema-mount',
+    'ietf-yang-structure-ext',
+    'ietf-datastores',
+    'ietf-yang-library'
+]);
 const LIBYANG_BASE_TYPES = new Set([
     'binary',
     'bits',
@@ -574,6 +588,18 @@ class YangCompiler {
         };
     }
 
+    hasReusableSchema(result) {
+        return (
+            result?.success === true ||
+            (result?.success === false &&
+                result.schemaAvailable === true &&
+                result.partialSchema === true &&
+                result.schemaTree?.authoritative === true &&
+                result.schemaTree?.source === 'libyang-effective' &&
+                result.schemaCompiler?.succeeded === true)
+        );
+    }
+
     readCache(contextHash) {
         const cachePath = path.join(this.cacheDir, contextHash, 'result.json');
         if (!fs.existsSync(cachePath)) return null;
@@ -582,7 +608,7 @@ class YangCompiler {
             if (
                 cache.schemaVersion !== COMPILE_CACHE_SCHEMA_VERSION ||
                 cache.contextHash !== contextHash ||
-                cache.result?.success !== true ||
+                !this.hasReusableSchema(cache.result) ||
                 !cache.tree
             ) {
                 return null;
@@ -794,6 +820,88 @@ class YangCompiler {
         const listPath = path.join(inputDirectory, `.schema-${sha256(content).slice(0, 24)}.list`);
         atomicWriteFile(listPath, content);
         return listPath;
+    }
+
+    materializeFallbackSearchPaths(contextHash, searchPaths, modules, bundledSearchPath) {
+        const workspaceNames = new Set(modules.map(module => module.metadata?.name).filter(Boolean));
+        const yinParser = new XMLParser({ ignoreAttributes: false, removeNSPrefix: true, processEntities: false });
+        return searchPaths.map(searchPath => {
+            if (!fs.existsSync(searchPath) || !fs.statSync(searchPath).isDirectory()) return searchPath;
+            const bundled =
+                bundledSearchPath &&
+                normalizedPathKey(fs.realpathSync(searchPath)) ===
+                    normalizedPathKey(fs.realpathSync(bundledSearchPath));
+            const files = [];
+            const visitedDirectories = new Set();
+            const visit = (currentPath, relativePath = '') => {
+                let realPath;
+                let stats;
+                try {
+                    realPath = fs.realpathSync(currentPath);
+                    stats = fs.statSync(realPath);
+                } catch (_error) {
+                    // A dangling link or unrelated unreadable entry is not a schema dependency.
+                    return;
+                }
+                if (stats.isDirectory()) {
+                    const key = normalizedPathKey(realPath);
+                    if (visitedDirectories.has(key)) return;
+                    const cacheKey = normalizedPathKey(this.cacheDir);
+                    if (key === cacheKey || key.startsWith(`${cacheKey}${path.sep}`)) return;
+                    visitedDirectories.add(key);
+                    let names;
+                    try {
+                        names = fs.readdirSync(realPath).sort();
+                    } catch (_error) {
+                        return;
+                    }
+                    for (const name of names) {
+                        visit(path.join(realPath, name), path.join(relativePath, name));
+                    }
+                    return;
+                }
+                if (!stats.isFile() || !/\.(yang|yin)$/iu.test(relativePath)) return;
+                let content;
+                try {
+                    content = fs.readFileSync(realPath);
+                } catch (_error) {
+                    return;
+                }
+                let name;
+                try {
+                    if (/\.yin$/iu.test(relativePath)) {
+                        const parsed = yinParser.parse(content.toString('utf8'));
+                        name = (parsed.module || parsed.submodule)?.['@_name'];
+                    } else {
+                        name = parseYang(content.toString('utf8'), { sourceName: relativePath }).metadata?.name;
+                    }
+                } catch (_error) {
+                    // Leave malformed fallback sources for libyang to diagnose if they are imported.
+                }
+                files.push({
+                    relativePath,
+                    content,
+                    hash: sha256(content),
+                    shadowed: workspaceNames.has(name) && !(bundled && LIBYANG_INTERNAL_MODULES.has(name))
+                });
+            };
+            visit(searchPath);
+            if (!files.some(file => file.shadowed)) return searchPath;
+
+            const retained = files.filter(file => !file.shadowed);
+            const fingerprint = sha256(
+                Buffer.from(stableStringify(retained.map(file => ({ path: file.relativePath, hash: file.hash }))))
+            );
+            // Keep this beside inputs: libyang searches inputs recursively, so a nested fallback
+            // directory would leak excluded revisions back into the workspace search path.
+            const filteredPath = path.join(this.cacheDir, contextHash, `fallback-${fingerprint.slice(0, 24)}`);
+            fs.mkdirSync(filteredPath, { recursive: true });
+            for (const file of retained) {
+                const targetPath = path.join(filteredPath, file.relativePath);
+                if (!fs.existsSync(targetPath)) atomicWriteFile(targetPath, file.content);
+            }
+            return filteredPath;
+        });
     }
 
     readSchemaPathList(listPath) {
@@ -1108,23 +1216,51 @@ class YangCompiler {
                 tree: null
             };
         }
-        /* libyang searches its configured directories in reverse insertion order. Keep the
-         * authoritative workspace directory last so it wins over user and bundled fallbacks. */
-        const searchPaths = normalizeStringList([
-            ...(bundledSearchPath && fs.existsSync(bundledSearchPath) ? [bundledSearchPath] : []),
-            ...normalizeStringList(options.searchPaths || options.schemaSearchPaths || this.searchPaths),
-            ...deviationPaths.map(deviationPath => path.dirname(deviationPath)),
-            materialized.inputDirectory
-        ]).map(searchPath => path.resolve(searchPath));
+        for (const input of schemaInputs.filter(input => input.externalDeviation)) {
+            // Explicit schema files add their parent directory to libyang's search paths.
+            // Stage external deviations so their original directory cannot bypass filtering.
+            const targetPath = path.join(
+                this.cacheDir,
+                contextHash,
+                'deviations',
+                `${input.hash.slice(0, 12)}-${path.basename(input.path)}`
+            );
+            if (!fs.existsSync(targetPath)) atomicWriteFile(targetPath, fs.readFileSync(input.path));
+            input.sourcePath = input.path;
+            input.path = targetPath;
+        }
+        if (!options.preparedSchemaSearchPaths) {
+            const fallbackPaths = normalizeStringList([
+                ...(bundledSearchPath && fs.existsSync(bundledSearchPath) ? [bundledSearchPath] : []),
+                ...normalizeStringList(options.searchPaths || options.schemaSearchPaths || this.searchPaths),
+                ...deviationPaths.map(deviationPath => path.dirname(deviationPath))
+            ])
+                .map(searchPath => path.resolve(searchPath))
+                .filter(searchPath => normalizedPathKey(searchPath) !== normalizedPathKey(materialized.inputDirectory));
+            // Directory ordering alone does not pin an unversioned import: libyang can select
+            // a newer revision from any fallback. Hide same-named workspace modules instead.
+            options.preparedSchemaSearchPaths = [
+                ...this.materializeFallbackSearchPaths(
+                    contextHash,
+                    fallbackPaths,
+                    [...modules, ...schemaInputs.filter(input => input.externalDeviation)],
+                    bundledSearchPath
+                ),
+                materialized.inputDirectory
+            ];
+        }
+        const searchPaths = options.preparedSchemaSearchPaths;
         const schemaPaths = materialized.inputs
             .filter(
                 input => input.module.metadata?.kind === 'module' && (!rootHashes || rootHashes.has(input.module.hash))
             )
             .map(input => input.path);
         const schemaPathKeys = new Set(schemaPaths.map(normalizedPathKey));
-        const externalDeviationPaths = deviationPaths.filter(
-            deviationPath => !schemaPathKeys.has(normalizedPathKey(deviationPath))
-        );
+        const externalDeviationPaths = deviationPaths
+            .filter(deviationPath => !schemaPathKeys.has(normalizedPathKey(deviationPath)))
+            .map(
+                deviationPath => schemaInputs.find(input => input.sourcePath === deviationPath)?.path || deviationPath
+            );
         const generatedArgs = [];
         for (const searchPath of searchPaths) generatedArgs.push('-p', searchPath);
         for (const featureArgument of featureArguments) generatedArgs.push('-F', featureArgument);
@@ -1149,6 +1285,7 @@ class YangCompiler {
                 throw error;
             }
             result = await runtime.executeSchema(args, {
+                includeBundledSearchPath: false,
                 cwd: materialized.inputDirectory,
                 timeoutMs: timeout,
                 maxOutputBytes: maxBuffer,
@@ -1487,7 +1624,7 @@ class YangCompiler {
 
         if (!options.force && hashes.cacheable) {
             const inMemory = this.results.get(compileId);
-            if (inMemory?.result?.success === true) {
+            if (inMemory?.tree && this.hasReusableSchema(inMemory.result)) {
                 this.latestCompileId = compileId;
                 const result = { ...inMemory.result, cacheHit: true };
                 progress('completed', {
@@ -1569,6 +1706,7 @@ class YangCompiler {
             }))
         );
 
+        const compilerOptions = { ...options, preparedSchemaSearchPaths: null };
         let externalCompiler = {
             invoked: false,
             succeeded: false,
@@ -1590,7 +1728,7 @@ class YangCompiler {
                 compilerStatus,
                 compileId,
                 modules,
-                options
+                compilerOptions
             );
             if (options.signal?.aborted) {
                 const error = new Error('YANG compilation was cancelled');
@@ -1619,18 +1757,13 @@ class YangCompiler {
             });
         }
 
-        const finalDiagnostics = deduplicateDiagnostics(diagnostics);
-        const errorCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'error').length;
-        const authoritativeErrorCount = finalDiagnostics.filter(
+        let finalDiagnostics = deduplicateDiagnostics(diagnostics);
+        const initialAuthoritativeErrorCount = finalDiagnostics.filter(
             diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative !== false
         ).length;
-        const indexErrorCount = finalDiagnostics.filter(
-            diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative === false
-        ).length;
-        const warningCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'warning').length;
         const aggregateTree = externalCompiler.tree;
         const succeeded =
-            externalCompiler.succeeded === true && Boolean(aggregateTree) && authoritativeErrorCount === 0;
+            externalCompiler.succeeded === true && Boolean(aggregateTree) && initialAuthoritativeErrorCount === 0;
         const fileResults = await this.buildFileResults({
             entries: uniqueEntries,
             modules,
@@ -1639,7 +1772,7 @@ class YangCompiler {
             runtime,
             compilerStatus,
             compileId,
-            options,
+            options: compilerOptions,
             progress,
             compileDiagnostics: finalDiagnostics
         });
@@ -1692,7 +1825,7 @@ class YangCompiler {
                 compilerStatus,
                 compileId,
                 modules,
-                options,
+                compilerOptions,
                 new Set(compiledTopLevelHashes)
             );
             if (options.signal?.aborted) {
@@ -1704,8 +1837,22 @@ class YangCompiler {
                 tree = partialCompiler.tree;
                 schemaCompiler = partialCompiler;
                 partialSchema = true;
+            } else {
+                finalDiagnostics = deduplicateDiagnostics([
+                    ...finalDiagnostics,
+                    ...partialCompiler.diagnostics.map(diagnostic => ({ ...diagnostic, origin: 'partial-schema' }))
+                ]);
+                if (!tree) schemaCompiler = partialCompiler;
             }
         }
+        const errorCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'error').length;
+        const authoritativeErrorCount = finalDiagnostics.filter(
+            diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative !== false
+        ).length;
+        const indexErrorCount = finalDiagnostics.filter(
+            diagnostic => diagnostic.severity === 'error' && diagnostic.authoritative === false
+        ).length;
+        const warningCount = finalDiagnostics.filter(diagnostic => diagnostic.severity === 'warning').length;
         const schemaAvailable = Boolean(tree);
         const schemaModuleHashes = schemaAvailable
             ? partialSchema
@@ -1775,7 +1922,7 @@ class YangCompiler {
             }
         };
 
-        if (succeeded && hashes.cacheable) {
+        if (tree && this.hasReusableSchema(publicResult) && hashes.cacheable) {
             progress('caching', { completed: uniqueEntries.length, message: 'Saving YANG compilation cache' });
             this.saveCache(compileId, publicResult, tree);
         }
@@ -2136,6 +2283,7 @@ class YangCompiler {
                     inputPath
                 ],
                 {
+                    includeBundledSearchPath: false,
                     cwd: path.dirname(schemaPaths[0]),
                     timeoutMs: normalizePositiveInteger(
                         options.timeoutMs,

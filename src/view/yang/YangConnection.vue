@@ -648,7 +648,7 @@
         };
 
         try {
-            const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
+            const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId, restoreSchema: false });
             if (requestRevision !== profileDataLoadRevision) return;
             const workspace = data?.workspace || data || {};
             const summary = workspace.summary || {};

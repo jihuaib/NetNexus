@@ -620,6 +620,70 @@ async function run() {
             ['duplicate-demo']
         );
 
+        const partialRuntime = registry.compiler.runtime;
+        const executeSchema = partialRuntime.executeSchema;
+        let partialSchemaExecutions = 0;
+        partialRuntime.executeSchema = function (...args) {
+            partialSchemaExecutions += 1;
+            return executeSchema.apply(this, args);
+        };
+        try {
+            const memoryPartial = await registry.compile({ workspaceId: 'dependency-errors', runtime: partialRuntime });
+            assert.equal(memoryPartial.cacheHit, true, 'a usable partial Schema must reuse the in-memory cache');
+            const restoredPartialRegistry = createRegistry(repositoryRoot, { runtime: partialRuntime });
+            const diskPartial = await restoredPartialRegistry.compile({
+                workspaceId: 'dependency-errors',
+                runtime: partialRuntime
+            });
+            assert.equal(diskPartial.cacheHit, true, 'a fresh registry must restore the partial Schema from disk');
+            assert.equal(partialSchemaExecutions, 0, 'restoring a partial Schema must not invoke the native compiler');
+            for (const restoredPartial of [memoryPartial, diskPartial]) {
+                assert.equal(restoredPartial.success, false);
+                assert.equal(restoredPartial.schemaAvailable, true);
+                assert.equal(restoredPartial.partialSchema, true);
+                for (const field of [
+                    'moduleHashes',
+                    'schemaModuleHashes',
+                    'excludedModuleHashes',
+                    'diagnostics',
+                    'fileResults',
+                    'schemaTree',
+                    'summary'
+                ]) {
+                    assert.deepEqual(
+                        restoredPartial[field],
+                        dependencyFailure[field],
+                        `cached ${field} must be retained`
+                    );
+                }
+            }
+            assert.deepEqual(
+                restoredPartialRegistry.getSchemaRoots({ workspaceId: 'dependency-errors' }),
+                registry.getSchemaRoots({ workspaceId: 'dependency-errors' }),
+                'restoring a partial cache must install the complete usable Schema tree'
+            );
+            const partialCachePath = path.join(registry.compiler.cacheDir, dependencyFailure.compileId, 'result.json');
+            const partialCacheContent = fs.readFileSync(partialCachePath, 'utf8');
+            const invalidPartialCache = JSON.parse(partialCacheContent);
+            invalidPartialCache.result.schemaCompiler.succeeded = false;
+            fs.writeFileSync(partialCachePath, JSON.stringify(invalidPartialCache));
+            assert.equal(
+                restoredPartialRegistry.compiler.readCache(dependencyFailure.compileId),
+                null,
+                'a failed combined Schema must not be restored as an authoritative partial cache'
+            );
+            fs.writeFileSync(partialCachePath, partialCacheContent);
+            const forcedPartial = await restoredPartialRegistry.compile({
+                workspaceId: 'dependency-errors',
+                runtime: partialRuntime,
+                force: true
+            });
+            assert.equal(forcedPartial.cacheHit, false);
+            assert(partialSchemaExecutions > 0, 'force must still invoke the native compiler for partial results');
+        } finally {
+            partialRuntime.executeSchema = executeSchema;
+        }
+
         const sharedNamespaceOne = `module shared-namespace-one {
   yang-version 1.1;
   namespace "urn:shared:namespace";
@@ -650,6 +714,11 @@ async function run() {
         assert.equal(partialSchemaConflict.schemaAvailable, false);
         assert.equal(partialSchemaConflict.partialSchema, false);
         assert.equal(partialSchemaConflict.schemaTree, null);
+        assert.equal(
+            fs.existsSync(path.join(registry.compiler.cacheDir, partialSchemaConflict.compileId, 'result.json')),
+            false,
+            'individually valid files without a safe combined Schema must not be cached'
+        );
         assert.equal(
             registry.getSchemaRoots({
                 workspaceId: 'partial-schema-conflict',
@@ -683,6 +752,13 @@ async function run() {
         );
         assert.equal(semanticFailure.summary.compiledFiles, 0);
         assert.equal(semanticFailure.summary.failedFiles, 1);
+        assert.equal(
+            fs.existsSync(path.join(registry.compiler.cacheDir, semanticFailure.compileId, 'result.json')),
+            false,
+            'a compilation failure without a Schema must not be saved to disk'
+        );
+        const retriedSemanticFailure = await registry.compile({ workspaceId: 'semantic-error' });
+        assert.equal(retriedSemanticFailure.cacheHit, false, 'a compilation failure must remain retryable');
         assert.match(
             semanticFailure.fileResults[0].diagnostic?.message || '',
             /does-not-exist|Referenced type/iu,

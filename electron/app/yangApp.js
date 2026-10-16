@@ -12,6 +12,8 @@ const { YANG_PROCESS_REQ_TYPES, YANG_PROCESS_EVT_TYPES } = require('../worker/ya
 const STATE_STORE_KEY = 'yang-profile-workspace-states';
 const PENDING_WORKSPACE_DELETIONS_KEY = 'yang-pending-workspace-deletions';
 const DEFAULT_REQUEST_TIMEOUT = 120000;
+// Schema queries may first restore a persisted compilation using the compiler's ten-minute budget.
+const RESTORE_REQUEST_TIMEOUT = 10 * 60 * 1000 + 5000;
 
 function unavailableCompilerStatus() {
     return {
@@ -291,7 +293,7 @@ class YangApp {
 
     async handleGetWorkspace(event, query = {}) {
         if (!this.processClient) return successResponse(emptyWorkspace(query?.profileId));
-        return this.forward(event, 'yang:getWorkspace', query || {});
+        return this.forward(event, 'yang:getWorkspace', query || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT });
     }
 
     async handleGetCompilerStatus(event, options = {}) {
@@ -335,19 +337,20 @@ class YangApp {
     }
 
     handleGetSchemaRoots(event, query = {}) {
-        return this.forward(event, 'yang:getSchemaRoots', query || {});
+        return this.forward(event, 'yang:getSchemaRoots', query || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT });
     }
 
     handleGetSchemaChildren(event, request = {}) {
-        return this.forward(event, 'yang:getSchemaChildren', request || {});
+        return this.forward(event, 'yang:getSchemaChildren', request || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT });
     }
 
     handleGetSchemaNode(event, request = {}) {
-        return this.forward(event, 'yang:getSchemaNode', request || {});
+        return this.forward(event, 'yang:getSchemaNode', request || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT });
     }
 
     handleValidateRpc(event, request = {}) {
-        return this.forward(event, 'yang:validateRpc', request || {}, { timeoutMs: 60000 });
+        // The runtime keeps the RPC validation phase at sixty seconds, after any Schema restore.
+        return this.forward(event, 'yang:validateRpc', request || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT + 60000 });
     }
 
     handleGetModuleSource(event, request = {}) {
@@ -355,7 +358,7 @@ class YangApp {
     }
 
     handleGetDiagnostics(event, query = {}) {
-        return this.forward(event, 'yang:getDiagnostics', query || {});
+        return this.forward(event, 'yang:getDiagnostics', query || {}, { timeoutMs: RESTORE_REQUEST_TIMEOUT });
     }
 
     async handleGetRuntimeState() {

@@ -87,7 +87,7 @@ function assertInvalid(mutate, expectedMessage) {
 
 assert.equal(SCHEMA_HELPER_CONTRACT_VERSION, 4);
 assert.equal(LIBYANG_SCHEMA_OUTPUT_VERSION, 3);
-assert.equal(COMPILE_CACHE_SCHEMA_VERSION, 7);
+assert.equal(COMPILE_CACHE_SCHEMA_VERSION, 8);
 
 const validTree = createSchemaTree();
 assert.strictEqual(validateAuthoritativeSchemaTree(validTree), validTree);

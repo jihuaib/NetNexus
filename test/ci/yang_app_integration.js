@@ -698,12 +698,28 @@ async function main() {
         const failedCompileId = failedWorkspace.data.compileId;
         await app.close();
         app = new YangApp(new FakeIpcMain(), store, appOptions);
+        const failedWorkspaceMetadata = await app.handleGetWorkspace(event, {
+            profileId: PROFILE_A,
+            restoreSchema: false
+        });
+        assert.equal(failedWorkspaceMetadata.status, 'success');
+        assert.equal(failedWorkspaceMetadata.data.compileId, failedCompileId);
+        assert.equal(failedWorkspaceMetadata.data.schemaAvailable, true);
+        assert.equal(failedWorkspaceMetadata.data.schemaTree, null);
+        assert.equal(failedWorkspaceMetadata.data.summary.nodeCount, failedWorkspace.data.summary.nodeCount);
+        assert.equal(app.compileResult.size, 0, 'connection metadata reads must not restore or recompile the Schema');
+        assert.equal(app.workerClient.registry.compiler.results.size, 0);
         const restartedFailedWorkspace = await app.handleGetWorkspace(event, { profileId: PROFILE_A });
         assert.equal(restartedFailedWorkspace.data.compileId, failedCompileId);
         assert.equal(restartedFailedWorkspace.data.success, false);
         assert.equal(restartedFailedWorkspace.data.schemaAvailable, true);
         assert.equal(restartedFailedWorkspace.data.partialSchema, true);
         assert.equal(restartedFailedWorkspace.data.schemaTree.partial, true);
+        assert.equal(
+            restartedFailedWorkspace.data.summary.cacheHit,
+            true,
+            'partial Schema must restore from disk cache'
+        );
         assert(
             restartedFailedWorkspace.data.diagnostics.some(
                 diagnostic =>

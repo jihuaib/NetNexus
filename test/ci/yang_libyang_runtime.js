@@ -1,4 +1,6 @@
 const assert = require('assert');
+const childProcess = require('child_process');
+const { EventEmitter } = require('events');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -16,6 +18,47 @@ const {
 } = require('../../electron/utils/yang/libyangRuntime');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-libyang-runtime-'));
+
+async function testSearchPathArguments(status) {
+    const runtimeModulePath = require.resolve('../../electron/utils/yang/libyangRuntime');
+    const originalRuntimeModule = require.cache[runtimeModulePath];
+    const originalSpawn = childProcess.spawn;
+    const executions = [];
+    try {
+        childProcess.spawn = (executablePath, args) => {
+            executions.push({ executablePath, args });
+            const child = new EventEmitter();
+            child.stdout = new EventEmitter();
+            child.stderr = new EventEmitter();
+            setImmediate(() => child.emit('close', 0, null));
+            return child;
+        };
+        delete require.cache[runtimeModulePath];
+        const { LibyangRuntime: CapturedRuntime } = require(runtimeModulePath);
+        const runtime = new CapturedRuntime({ schemaHelperArgs: ['--fixture-helper'] });
+        runtime.cachedStatus = status;
+        const filteredSearchPath = path.join(tempDir, 'filtered-modules');
+        const explicitArgs = ['-p', filteredSearchPath, 'schema.yang'];
+
+        await runtime.execute(explicitArgs);
+        await runtime.execute(explicitArgs, { includeBundledSearchPath: false });
+        await runtime.executeSchema(explicitArgs);
+        await runtime.executeSchema(explicitArgs, { includeBundledSearchPath: false });
+
+        assert.deepEqual(executions, [
+            { executablePath: status.path, args: ['-p', status.moduleSearchPath, ...explicitArgs] },
+            { executablePath: status.path, args: explicitArgs },
+            {
+                executablePath: status.schemaPath,
+                args: ['--fixture-helper', '-p', status.moduleSearchPath, ...explicitArgs]
+            },
+            { executablePath: status.schemaPath, args: ['--fixture-helper', ...explicitArgs] }
+        ]);
+    } finally {
+        childProcess.spawn = originalSpawn;
+        require.cache[runtimeModulePath] = originalRuntimeModule;
+    }
+}
 
 async function run() {
     try {
@@ -199,6 +242,7 @@ else console.log(JSON.stringify(args));
         assert.equal(discovered.capabilities.coreSchemaExport, true);
         assert.equal(discovered.capabilities.extensionSchemaExport, false);
         assert.equal(discovered.capabilities.bundledModules, true);
+        await testSearchPathArguments(discovered);
 
         const incompatibleSchemaContract = await discoverLibyangRuntime({
             ...discoveryOptions,

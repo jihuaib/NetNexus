@@ -878,7 +878,7 @@ class YangRuntimeService {
             summary: {
                 moduleCount: modules.length,
                 nodeCount: result?.schemaTree?.nodeCount || current?.summary?.schemaNodes || 0,
-                cacheHit: Boolean(current?.cacheHit),
+                cacheHit: Boolean(result?.cacheHit || current?.cacheHit),
                 errors: current?.summary?.errors || 0,
                 warnings: current?.summary?.warnings || 0,
                 compiledFiles: fileResults.filter(fileResult => fileResult.status === 'compiled').length,
@@ -900,6 +900,7 @@ class YangRuntimeService {
             const result = this.compileResult.get(context.workspaceId);
             let restoreError = '';
             const needsStoredResult =
+                query.restoreSchema !== false &&
                 storedIsCurrent &&
                 result?.compileId !== stored?.compileId &&
                 (stored?.success === true ||

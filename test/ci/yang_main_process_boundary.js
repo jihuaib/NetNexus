@@ -24,6 +24,14 @@ const {
 } = require('../../electron/worker/yang/yangProcessProtocol');
 
 const DEFAULT_REQUEST_TIMEOUT = 120000;
+const RESTORE_REQUEST_TIMEOUT = 10 * 60 * 1000 + 5000;
+const RESTORE_CHANNELS = new Set([
+    'yang:getWorkspace',
+    'yang:getSchemaRoots',
+    'yang:getSchemaChildren',
+    'yang:getSchemaNode',
+    'yang:getDiagnostics'
+]);
 
 class FakeIpcMain {
     constructor() {
@@ -270,8 +278,10 @@ async function assertRunningForwardingContract(app, ipc, store) {
             channel === 'yang:compile'
                 ? 10 * 60 * 1000
                 : channel === 'yang:validateRpc'
-                  ? 60000
-                  : DEFAULT_REQUEST_TIMEOUT,
+                  ? RESTORE_REQUEST_TIMEOUT + 60000
+                  : RESTORE_CHANNELS.has(channel)
+                    ? RESTORE_REQUEST_TIMEOUT
+                    : DEFAULT_REQUEST_TIMEOUT,
             `${channel} must use the facade timeout contract`
         );
         assert.deepEqual(result, {

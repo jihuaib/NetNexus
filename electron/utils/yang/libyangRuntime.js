@@ -780,7 +780,9 @@ class LibyangRuntime {
                 (argument === '-p' || argument === '--path') && args[index + 1] === status.moduleSearchPath
         );
         const executionArgs =
-            status.moduleSearchPath && !hasBundledSearchPath ? ['-p', status.moduleSearchPath, ...args] : args;
+            options.includeBundledSearchPath !== false && status.moduleSearchPath && !hasBundledSearchPath
+                ? ['-p', status.moduleSearchPath, ...args]
+                : args;
         return executeYanglint(status.path, executionArgs, {
             ...options,
             env: buildLibyangEnvironment(candidate, {
@@ -813,7 +815,7 @@ class LibyangRuntime {
                 (argument === '-p' || argument === '--path') && allArgs[index + 1] === status.moduleSearchPath
         );
         const executionArgs =
-            status.moduleSearchPath && !hasBundledSearchPath
+            options.includeBundledSearchPath !== false && status.moduleSearchPath && !hasBundledSearchPath
                 ? [...helperArgs, '-p', status.moduleSearchPath, ...args]
                 : allArgs;
         return executeLibyangTool(status.schemaPath, executionArgs, {

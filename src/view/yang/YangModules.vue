@@ -1034,7 +1034,7 @@
 
     const fetchCompileContext = async (profileId = selectedProfileId.value) => {
         if (!profileId || !runtimeRunning.value) return normalizeCompileContext(null);
-        const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId });
+        const { data } = await invokeBridge('yangApi', 'getWorkspace', { profileId, restoreSchema: false });
         return normalizeCompileContext(data);
     };
 
