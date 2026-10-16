@@ -123,6 +123,8 @@ class BmpSession {
         this.persistenceConnectionOpened = false;
         this.persistenceConnectionClosed = false;
         this.persistenceSequence = 0;
+        this.sourceAdmissionRejected = false;
+        this.admittedSourceId = null;
     }
 
     static makeKey(localIp, localPort, remoteIp, remotePort) {
@@ -166,11 +168,14 @@ class BmpSession {
     }
 
     makeAndEnqueuePersistenceMutation(factory, ensureConnection = true) {
+        if (this.sourceAdmissionRejected) return false;
         try {
             if (ensureConnection && !this.persistenceConnectionOpened) {
                 this.persistConnectionOpen();
             }
-            return this.enqueuePersistenceMutation(factory());
+            if (this.sourceAdmissionRejected) return false;
+            const mutation = factory();
+            return mutation ? this.enqueuePersistenceMutation(mutation) : false;
         } catch (error) {
             logger.error(`Failed to build BMP persistence mutation: ${error.message}`);
             // Once persistence is active, silently skipping an event would make the
@@ -184,14 +189,17 @@ class BmpSession {
     }
 
     persistConnectionOpen() {
-        if (this.persistenceConnectionOpened || !this.remoteIp) {
+        if (this.persistenceConnectionOpened || this.sourceAdmissionRejected || !this.remoteIp) {
             return false;
         }
-        this.persistenceConnectionOpened = true;
-        const accepted = this.makeAndEnqueuePersistenceMutation(
-            () => buildConnectionMutation(this, 'connection_open'),
-            false
-        );
+        const accepted = this.makeAndEnqueuePersistenceMutation(() => {
+            const mutation = buildConnectionMutation(this, 'connection_open');
+            if (this.bmpWorker?.admitBmpSource && !this.bmpWorker.admitBmpSource(this, mutation.source.id)) {
+                return null;
+            }
+            this.persistenceConnectionOpened = true;
+            return mutation;
+        }, false);
         if (accepted) {
             this.invalidateRouteAssurance('persistence-connection-open');
             // Arm the single refresh deadline for both scopes explicitly reopened
@@ -202,6 +210,7 @@ class BmpSession {
     }
 
     requestPersistenceSweep() {
+        if (this.sourceAdmissionRejected) return false;
         const sourceId = this.getPersistentSourceId();
         if (!sourceId) {
             return false;
@@ -2425,7 +2434,7 @@ class BmpSession {
     }
 
     sendSessionUpdateEvent(bgpSession) {
-        if (!bgpSession) {
+        if (this.sourceAdmissionRejected || !bgpSession) {
             return false;
         }
         const session = this.getSessionUpdateEventInfo(bgpSession);
@@ -2439,7 +2448,7 @@ class BmpSession {
     }
 
     sendInstanceUpdateEvent(bgpInstance) {
-        if (!bgpInstance) {
+        if (this.sourceAdmissionRejected || !bgpInstance) {
             return false;
         }
         const instance = this.getInstanceUpdateEventInfo(bgpInstance);
@@ -2490,6 +2499,7 @@ class BmpSession {
     }
 
     sendRouteUpdateEvent(type, bgpSession, af, ribType, changedCount = 1) {
+        if (this.sourceAdmissionRejected) return;
         const session = this.getSessionRouteEventInfo(bgpSession, af, ribType);
         const client = this.getClientRouteEventInfo();
         const update = {
@@ -2517,6 +2527,7 @@ class BmpSession {
     }
 
     sendInstanceRouteUpdateEvent(type, bgpInstance, af, changedCount = 1) {
+        if (this.sourceAdmissionRejected) return;
         const instance = this.getInstanceRouteEventInfo(bgpInstance);
         const client = this.getClientRouteEventInfo();
         const update = {
@@ -2543,6 +2554,7 @@ class BmpSession {
     }
 
     invalidateRouteAssurance(reason) {
+        if (this.sourceAdmissionRejected) return;
         if (this.bmpWorker && typeof this.bmpWorker.invalidateRouteAssurance === 'function') {
             this.bmpWorker.invalidateRouteAssurance(reason);
         }
@@ -2588,6 +2600,7 @@ class BmpSession {
             this.receivedAt = new Date();
 
             this.persistConnectionOpen();
+            if (this.sourceAdmissionRejected) return;
             this.persistSourceUpdate();
             // Persistence context supplies the stable source ID used to merge the
             // live connection with its SQLite-backed offline topology.
@@ -3444,11 +3457,13 @@ class BmpSession {
                 updatedAt: new Date().toISOString()
             };
             splitSessionStatisticsReport(report).forEach(ribReport => {
+                if (this.sourceAdmissionRejected) return;
                 this.bgpStatisticsReportMap.set(
                     BmpSession.makeStatisticsReportKey(...getSessionStatisticsReportIdentityParts(ribReport)),
                     ribReport
                 );
                 this.persistStatistics(ribReport, sessionTimestampMs);
+                if (this.sourceAdmissionRejected) return;
                 this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, {
                     data: ribReport
                 });
@@ -3541,6 +3556,7 @@ class BmpSession {
             );
 
             this.persistStatistics(report, instanceTimestampMs);
+            if (this.sourceAdmissionRejected) return;
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.STATISTICS_REPORT, { data: report });
         } catch (err) {
             logger.error(`Error processing statistics report (local rib):`, err);

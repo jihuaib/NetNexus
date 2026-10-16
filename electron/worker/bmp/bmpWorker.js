@@ -64,6 +64,7 @@ class BmpWorker {
 
         this.bmpConfigData = null; // bmp配置数据
         this.bmpSessionMap = new Map(); // bmp会话map
+        this.bmpSourceSessionMap = new Map();
         this.ingestPool = null;
         this.routeAssuranceService = this.createRouteAssuranceService();
         this.routeAssuranceFilters = {};
@@ -213,15 +214,52 @@ class BmpWorker {
         }
 
         if (bmpSession.ingestRecord) {
+            if (bmpSession.sourceAdmissionRejected) {
+                this.bmpSessionMap.delete(sessionKey);
+            }
             bmpSession.closeSession();
             return bmpSession;
         }
 
         this.bmpSessionMap.delete(sessionKey);
         bmpSession.closeSession();
+        this.releaseBmpSource(bmpSession);
+        if (bmpSession.sourceAdmissionRejected) return bmpSession;
         const clientInfo = bmpSession.getClientInfo();
         this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: clientInfo });
         return bmpSession;
+    }
+
+    admitBmpSource(session, sourceId) {
+        if (session.sourceAdmissionRejected) return false;
+        if (!sourceId) return true;
+        if (!(this.bmpSourceSessionMap instanceof Map)) {
+            this.bmpSourceSessionMap = new Map();
+        }
+        const existing = this.bmpSourceSessionMap.get(sourceId);
+        if (existing && existing !== session) {
+            session.sourceAdmissionRejected = true;
+            logger.warn(
+                `BMP duplicate source rejected: sourceId=${sourceId}, existing=${existing.remoteIp}:${existing.remotePort}, rejected=${session.remoteIp}:${session.remotePort}`
+            );
+            this.clearClientInitializationTimer(session);
+            const key = BmpSession.makeKey(session.localIp, session.localPort, session.remoteIp, session.remotePort);
+            if (!this.removeBmpSessionByKey(key, session)) {
+                session.closeSession();
+            }
+            return false;
+        }
+        this.bmpSourceSessionMap.set(sourceId, session);
+        session.admittedSourceId = sourceId;
+        return true;
+    }
+
+    releaseBmpSource(session) {
+        const sourceId = session.admittedSourceId;
+        if (sourceId && this.bmpSourceSessionMap?.get(sourceId) === session) {
+            this.bmpSourceSessionMap.delete(sourceId);
+        }
+        session.admittedSourceId = null;
     }
 
     enqueueRouteUpdateEvent(update) {
@@ -1161,6 +1199,9 @@ class BmpWorker {
     }
 
     handleIngestResult(record, result) {
+        if (record.session.sourceAdmissionRejected) return;
+        const sourceId = result.snapshot?.session?.persistenceSourceKey?.keyHex;
+        if (sourceId && !this.admitBmpSource(record.session, sourceId)) return;
         applyIngestSnapshot(record.session, result.snapshot);
         this.completeClientInitialization(record.session);
         const restored = new Map();
@@ -1216,7 +1257,8 @@ class BmpWorker {
         if (this.bmpSessionMap.get(key) === session) {
             this.bmpSessionMap.delete(key);
         }
-        if (!this.bmpStopping) {
+        this.releaseBmpSource(session);
+        if (!this.bmpStopping && !session.sourceAdmissionRejected) {
             this.messageHandler.sendEvent(BmpConst.BMP_EVT_TYPES.TERMINATION, { data: session.getClientInfo() });
         }
     }
@@ -1740,6 +1782,7 @@ class BmpWorker {
                 this.ingestPool = null;
             }
             this.bmpSessionMap.clear();
+            this.bmpSourceSessionMap?.clear();
             await tcpServersClosed;
             this.routeAssuranceService?.setEnabled?.(false);
 

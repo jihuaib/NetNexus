@@ -54,6 +54,8 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 配置 BMP 监听端口、认证方式、BMPv4 TLV draft 和 Path Marking TLV 类型。页面下方展示当前 BMP 客户端及其认证状态。
 
+同一来源（sysName + 源 IP）只允许一个成功初始化的在线连接。先确认来源身份的连接被保留，随后收到有效 Initiation 的同来源连接会被关闭，原连接不受影响；原连接完成关闭后允许重连。来源身份通常在有效 Initiation 后确认；对于提前到达的 Peer Up 或路由消息，会使用当时已知的来源身份进行检查，因此不是在 TCP 握手时拒绝连接。
+
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
 按钮说明：

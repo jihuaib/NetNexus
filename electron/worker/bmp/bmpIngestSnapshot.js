@@ -7,6 +7,8 @@ const SESSION_LOCAL_FIELDS = new Set([
     'messageHandler',
     'bmpWorker',
     'ingestRecord',
+    'sourceAdmissionRejected',
+    'admittedSourceId',
     'initializationTimer',
     'messageBuffer',
     'bgpSessionMap',
