@@ -21,7 +21,7 @@
 
 <script setup>
     import { ref, computed, nextTick, watch } from 'vue';
-    import { moduleNavigationIcons, settingsNavigationIcons } from '../const/navigationIcons';
+    import { settingsNavigationIcons } from '../const/navigationIcons';
 
     import GeneralSettings from '../view/settings/GeneralSettings.vue';
     import ToolsSettings from '../view/settings/ToolsSettings.vue';
@@ -108,13 +108,13 @@
             key: 'tcp-ao',
             label: 'TCP-AO',
             description: 'BMP/RPKI TCP-AO 密钥与轮换 Profile',
-            icon: moduleNavigationIcons.rpki
+            icon: settingsNavigationIcons.tcpAo
         },
         {
             key: 'tcp-md5',
             label: 'TCP MD5',
             description: 'BMP 与 RPKI TCP MD5 对端与密钥 Profile',
-            icon: moduleNavigationIcons.rpki
+            icon: settingsNavigationIcons.tcpMd5
         },
         {
             key: 'update',

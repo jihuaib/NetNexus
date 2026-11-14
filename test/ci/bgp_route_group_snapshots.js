@@ -120,6 +120,22 @@ async function main() {
             [10, 11, 12, 13, 14, 15]
         );
         assert.equal(announced(f.packets()).length, 6);
+        f.sent.length = 0;
+        await f.generate('alpha');
+        assert.equal(withdrawn(f.packets()).length, 0, 'regenerating unchanged routes must only announce updates');
+        assert.equal(announced(f.packets()).length, 6, 'unchanged routes must still be sent again');
+        f.sent.length = 0;
+        await f.generate('alpha', {
+            nlriRules: [
+                { type: 'addPath', count: 2 },
+                { type: 'mpNextHop', mode: 'fixed', value: '192.0.2.201' }
+            ],
+            attributeRules: [{ type: 'med', value: 100 }]
+        });
+        assert.equal(withdrawn(f.packets()).length, 0, 'next-hop and attribute changes replace the same prefix paths');
+        assert.deepEqual(identities(announced(f.packets())), identities(f.rows()));
+        assert.ok(f.packets().every(packet => mp(packet, type.MP_REACH_NLRI)?.mpReach.nextHop === '192.0.2.201'));
+        assert.ok(f.packets().every(packet => mp(packet, type.MED)?.med === 100));
         f.worker.getRouteGroupStates('states');
         assert.equal(f.responses.at(-1).data.groups[0].routeCount, 6);
         assert.equal(f.responses.at(-1).data.groups[0].groupName, 'Group alpha');
@@ -161,7 +177,7 @@ async function main() {
         assert.ok(mp(f.packets()[0], type.MP_UNREACH_NLRI), 'withdraw old keys before announcing replacement');
         f.sent.length = 0;
         await f.generate('alpha', { count: 2, nlriEncoding: 'auto', nlriRules: [] });
-        assert.equal(withdrawn(f.packets()).length, 2, 'an encoding change withdraws the original MP NLRI');
+        assert.equal(withdrawn(f.packets()).length, 0, 'an encoding change updates the same prefix paths');
         assert.equal(announced(f.packets()).length, 2);
         assert.deepEqual(
             announced(f.packets()).map(route => route.pathId),
@@ -235,12 +251,23 @@ async function main() {
         });
         assert.equal(
             withdrawn(f.packets()).length,
-            1,
-            'an encoding replacement must withdraw the old MP NLRI even when its prefix still exists'
+            0,
+            'an encoding replacement updates the existing prefix for a peer without ADD-PATH'
         );
-        assert.ok(mp(f.packets()[0], type.MP_UNREACH_NLRI));
         assert.equal(announced(f.packets()).length, 1);
         assert.equal(f.packets().at(-1).nlri.length, 1);
+        f.sent.length = 0;
+        await f.generate('no-add-path', {
+            count: 1,
+            attributeRules: [{ type: 'med', value: 100 }],
+            nlriRules: [
+                { type: 'addPath', count: 2 },
+                { type: 'mpNextHop', mode: 'fixed', value: '192.0.2.201' }
+            ]
+        });
+        assert.equal(withdrawn(f.packets()).length, 0, 'switching back to MP encoding must also update in place');
+        assert.equal(announced(f.packets()).length, 1);
+        assert.equal(mp(f.packets()[0], type.MP_REACH_NLRI).mpReach.nextHop, '192.0.2.201');
         f.sent.length = 0;
         await f.generate('no-add-path', {
             count: 1,

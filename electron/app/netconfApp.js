@@ -1624,7 +1624,7 @@ class NetconfApp {
             return successResponse({ ...result.data, latency: Date.now() - startedAt }, 'NETCONF连接测试成功');
         } catch (error) {
             logger.error('NETCONF连接测试失败:', error.message);
-            return errorResponse('连接测试失败: ' + error.message, { code: error.code });
+            return errorResponse('连接测试失败: ' + error.message, { code: error.code, details: error.data });
         } finally {
             if (!existingClient && client) {
                 await this.terminateYangProcess(client, 'connection-test').catch(() => {});

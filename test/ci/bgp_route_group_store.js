@@ -86,8 +86,7 @@ try {
     ]);
     assert.equal(changedEncoding.updated, 1);
     assert.equal(changedEncoding.deleted, 0);
-    assert.equal(changedEncoding.withdrawnRoutes.length, 1);
-    assert.equal(changedEncoding.withdrawnRoutes[0].forceWithdraw, true);
+    assert.deepEqual(changedEncoding.withdrawnRoutes, [], 'next-hop and encoding changes must update the same NLRI');
     assert.ok(
         store.getRouteGroupRoutes('a').every(route => route.forceWithdraw === undefined),
         'force-withdraw is only a transient result marker'

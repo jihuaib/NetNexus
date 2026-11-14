@@ -5,7 +5,6 @@ const WorkerMessageHandler = require('../core/workerMessageHandler');
 const WorkerWithPromise = require('../core/workerWithPromise');
 const SnmpConst = require('../../const/snmpConst');
 const MibRegistry = require('../../utils/mibRegistry');
-const { formatSnmpValue } = require('../../utils/snmpValueFormatter');
 const { createIpv6OnlyDgramModule } = require('../../utils/ipv6OnlyDgram');
 const { LOG_REQ_TYPES } = require('../../const/toolsConst');
 
@@ -1104,9 +1103,10 @@ class SnmpWorker {
     }
 
     formatSessionVarbind(varbind) {
-        const shouldFormatValue = Buffer.isBuffer(varbind.value) || typeof varbind.value === 'bigint';
-        const formattedValue = shouldFormatValue ? formatSnmpValue(varbind.value) : { value: varbind.value };
-        return { oid: varbind.oid, type: snmp.ObjectType[varbind.type] || varbind.type, ...formattedValue };
+        const result = this.mibRegistry.enrichVarbind(varbind);
+        // Preserve query value types while adding the same MIB metadata used by the tree and Traps.
+        if (!Buffer.isBuffer(varbind.value) && typeof varbind.value !== 'bigint') result.value = varbind.value;
+        return result;
     }
 
     getSessionVersion(version) {

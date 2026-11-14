@@ -151,13 +151,13 @@ async function main() {
         });
         assert.equal(f.rows()[0].mpNextHop, '');
         assert.equal(f.rows()[0].attrId, attrId, 'MP Next Hop presence is NLRI state, outside the path attribute hash');
-        assert.equal(f.packets()[0].pathAttributes[0].typeCode, type.MP_UNREACH_NLRI);
+        assert.equal(attributes(f, type.MP_UNREACH_NLRI).length, 0, 'adding a next hop updates the existing prefix');
         assert.equal(reaches(f)[0].value[3], 4);
         assert.equal(reaches(f)[0].value.subarray(4, 8).toString('hex'), 'c00002fe');
         f.sent.length = 0;
         await f.generate('sparse');
         assert.equal(attributes(f, type.NEXT_HOP).length, 0, 'removed Type 3 must not be injected into MP UPDATE');
-        assert.equal(f.packets()[0].pathAttributes[0].typeCode, type.MP_UNREACH_NLRI);
+        assert.equal(attributes(f, type.MP_UNREACH_NLRI).length, 0, 'removing a next hop updates the existing prefix');
         assertEmptyMpHop(f);
         assert.deepEqual(
             f

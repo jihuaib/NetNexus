@@ -1448,10 +1448,9 @@ class BgpRouteSqliteStore {
                 const oldRoute = JSON.parse(row.route_json);
                 const candidate = oldRoute.instanceKey === instanceKey ? candidateByKey.get(oldRoute.routeKey) : null;
                 const newRoute = candidate ? JSON.parse(candidate.route_json) : null;
+                // Next-hop and UPDATE encoding changes replace the same NLRI without an explicit withdrawal.
                 if (
                     !newRoute ||
-                    (oldRoute.nlriEncoding ?? null) !== newRoute.nlriEncoding ||
-                    (oldRoute.mpNextHop ?? null) !== newRoute.mpNextHop ||
                     (definition.safi === BgpConst.BGP_SAFI_TYPE.SAFI_LABEL_UNICAST &&
                         (oldRoute.label === null) !== (newRoute.label === null))
                 ) {

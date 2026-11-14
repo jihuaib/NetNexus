@@ -5,7 +5,7 @@ const MIB_COMPILE_ROUTE = '/#/snmp/snmp-mib-compile';
 const MIB_WORKSPACE_ROUTE = '/#/snmp/snmp-mib';
 
 const pageCases = [
-    { route: '/#/snmp/snmp-config', title: '查询目标' },
+    { route: '/#/snmp/snmp-config', title: '查询与协议认证' },
     { route: MIB_COMPILE_ROUTE, title: 'MIB 编译', expectText: 'NETNEXUS-DEMO-MIB.mib' },
     { route: MIB_WORKSPACE_ROUTE, title: 'MIB 工作区', expectText: 'system' }
 ];
@@ -120,18 +120,24 @@ test.describe('SNMP pages', () => {
         const runtimeActions = page.getByTestId('snmp-runtime-actions');
         const trapActions = page.getByTestId('snmp-trap-actions');
         const trapPort = page.getByPlaceholder('请输入Trap端口');
-        const trapAuthCard = page.locator('.trap-auth-card');
+        const sharedAuthCard = page.locator('.shared-auth-card');
+        const trapServiceCard = page.locator('.trap-service-card');
+        const community = sharedAuthCard.getByPlaceholder('请输入Community字符串');
+        const version = sharedAuthCard.getByRole('radio', { name: 'SNMPv1', exact: true });
 
-        await expect(page.locator('.query-target-card').getByTestId('snmp-runtime-start-button')).toBeVisible();
+        await expect(sharedAuthCard).toContainText('查询与协议认证');
+        await expect(sharedAuthCard.getByTestId('snmp-runtime-start-button')).toBeVisible();
+        await expect(sharedAuthCard.locator('.card-section-title')).toHaveText('协议认证');
+        await expect(sharedAuthCard.getByRole('radio', { name: 'SNMPv2c', exact: true })).toBeVisible();
         await expectStandaloneCenteredActionRow(runtimeActions);
-        await expect(trapAuthCard).toContainText('Trap 服务与协议认证');
-        await expect(trapAuthCard.getByTestId('snmp-trap-start-button')).toBeVisible();
+        await expect(trapServiceCard).toContainText('Trap 服务');
+        await expect(trapServiceCard.getByTestId('snmp-trap-start-button')).toBeVisible();
+        await expect(trapServiceCard.getByRole('radio')).toHaveCount(0);
+        await expect(trapServiceCard.getByPlaceholder('请输入Community字符串')).toHaveCount(0);
         await expectStandaloneCenteredActionRow(trapActions);
         await expect
             .poll(() => trapActions.evaluate(element => element.parentElement?.lastElementChild === element))
             .toBe(true);
-        await expect(trapAuthCard.locator('.card-section-title')).toHaveText('协议认证');
-        await expect(trapAuthCard.getByRole('radio', { name: 'SNMPv2c', exact: true })).toBeVisible();
         await expect(runtimeStartButton).toBeEnabled();
         await expect(runtimeStopButton).toBeDisabled();
         await expect(trapStartButton).toBeDisabled();
@@ -139,6 +145,8 @@ test.describe('SNMP pages', () => {
         await expect(page.getByRole('button', { name: '保存配置', exact: true })).toHaveCount(0);
 
         await page.getByPlaceholder('例如 127.0.0.1').fill('198.51.100.25');
+        await sharedAuthCard.locator('.version-radio-group label').filter({ hasText: 'SNMPv1' }).click();
+        await community.fill('query-and-trap-community');
         await trapPort.fill('invalid');
         await runtimeStartButton.click();
         await expect(runtimeStartButton).toBeDisabled();
@@ -147,10 +155,15 @@ test.describe('SNMP pages', () => {
         await expect(trapStopButton).toBeDisabled();
         await expect(page.getByPlaceholder('例如 127.0.0.1')).toBeDisabled();
         await expect(page.getByPlaceholder('请输入查询端口')).toBeDisabled();
+        await expect(version).toBeChecked();
+        await expect(version).toBeDisabled();
+        await expect(community).toBeDisabled();
         expect(apiCallCount(harness, 'snmp.saveSnmpConfig')).toBe(1);
         expect(apiCallCount(harness, 'snmp.startSnmp')).toBe(1);
         expect(harness.controller.state.snmp.config).toMatchObject({
             targetHost: '198.51.100.25',
+            supportedVersions: ['v1'],
+            community: 'query-and-trap-community',
             port: 162
         });
         expect(
@@ -173,6 +186,10 @@ test.describe('SNMP pages', () => {
         await expect(runtimeStopButton).toBeEnabled();
         expect(apiCallCount(harness, 'snmp.saveSnmpConfig')).toBe(2);
         expect(apiCallCount(harness, 'snmp.startSnmpTrap')).toBe(1);
+        expect(harness.controller.state.snmp.config).toMatchObject({
+            supportedVersions: ['v1'],
+            community: 'query-and-trap-community'
+        });
 
         await trapStopButton.click();
         await expect(trapStartButton).toBeEnabled();
@@ -186,8 +203,31 @@ test.describe('SNMP pages', () => {
         await expect(runtimeStopButton).toBeDisabled();
         await expect(trapStartButton).toBeDisabled();
         await expect(trapStopButton).toBeDisabled();
+        await expect(version).toBeEnabled();
+        await expect(community).toBeEnabled();
         expect(apiCallCount(harness, 'snmp.stopSnmp')).toBe(1);
         expect(apiCallCount(harness, 'snmp.saveSnmpConfig')).toBe(2);
+    });
+
+    test('explains the SNMPv3 query limit beside the shared authentication settings', async ({ page }) => {
+        await page.goto('/#/snmp/snmp-config');
+
+        const sharedAuthCard = page.locator('.shared-auth-card');
+        const trapServiceCard = page.locator('.trap-service-card');
+        const v3Hint = sharedAuthCard.getByText(
+            '当前 SNMPv3 认证用于 Trap 接收，GET、GET-NEXT、WALK、SET 查询支持 SNMPv1/v2c。',
+            { exact: true }
+        );
+
+        await sharedAuthCard.locator('.version-radio-group label').filter({ hasText: 'SNMPv3' }).click();
+        await expect(v3Hint).toBeVisible();
+        await expect(sharedAuthCard.getByPlaceholder('请输入SNMPv3用户名')).toBeVisible();
+        await expect(sharedAuthCard.getByPlaceholder('请输入Community字符串')).toHaveCount(0);
+        await expect(trapServiceCard.getByPlaceholder('请输入SNMPv3用户名')).toHaveCount(0);
+
+        await sharedAuthCard.locator('.version-radio-group label').filter({ hasText: 'SNMPv2c' }).click();
+        await expect(sharedAuthCard.getByPlaceholder('请输入Community字符串')).toBeVisible();
+        await expect(v3Hint).toHaveCount(0);
     });
 
     test('loads MIB data only for the active runtime and drops late status responses', async ({ page }) => {

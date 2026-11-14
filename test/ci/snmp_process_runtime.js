@@ -14,6 +14,7 @@ const DEMO_AGENT_NAME_OID = '1.3.6.1.4.1.55555.1.1.1';
 const DEMO_WRITABLE_NAME_OID = '1.3.6.1.4.1.55555.1.1.3';
 const DEMO_IF_ENTRY_OID = '1.3.6.1.4.1.55555.1.2.1.1';
 const DEMO_IF_NAME_OID = `${DEMO_IF_ENTRY_OID}.2`;
+const DEMO_IF_STATUS_OID = `${DEMO_IF_ENTRY_OID}.3`;
 const TEST_TRAP_OID = '1.3.6.1.4.1.55555.0.1';
 
 class MemoryStore {
@@ -129,6 +130,12 @@ function createLocalAgent(port, errors) {
                     name: 'demoIfName',
                     type: snmp.ObjectType.OctetString,
                     maxAccess: snmp.MaxAccess['read-only']
+                },
+                {
+                    number: 3,
+                    name: 'demoIfStatus',
+                    type: snmp.ObjectType.Integer,
+                    maxAccess: snmp.MaxAccess['read-write']
                 }
             ],
             tableIndex: [{ columnName: 'demoIfIndex' }]
@@ -136,8 +143,8 @@ function createLocalAgent(port, errors) {
     ]);
     mib.setScalarValue('demoAgentName', 'NetNexus Utility Agent');
     mib.setScalarValue('demoWritableName', 'before-set');
-    mib.addTableRow('demoIfTable', [1, 'loopback0']);
-    mib.addTableRow('demoIfTable', [2, 'ethernet0']);
+    mib.addTableRow('demoIfTable', [1, 'loopback0', 1]);
+    mib.addTableRow('demoIfTable', [2, 'ethernet0', 2]);
     return agent;
 }
 
@@ -367,6 +374,11 @@ async function exerciseMibRuntime(snmpApp, sender, expectedPid) {
 }
 
 async function exerciseManagerRequests(snmpApp, expectedPid) {
+    const assertMibVarbind = (varbind, objectName, instance) => {
+        assert.equal(varbind.oidMatched, true);
+        assert.equal(varbind.oidName, `NETNEXUS-DEMO-MIB::${objectName}`);
+        assert.equal(varbind.oidInstance, instance);
+    };
     const getData = assertSuccess(
         await snmpApp.handleSendGetRequest(null, {
             oid: `${DEMO_AGENT_NAME_OID}.0`,
@@ -377,6 +389,7 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
     );
     assert.equal(getData.varbinds[0].oid, `${DEMO_AGENT_NAME_OID}.0`);
     assert.equal(getData.varbinds[0].value, 'NetNexus Utility Agent');
+    assertMibVarbind(getData.varbinds[0], 'demoAgentName', '0');
 
     const nextData = assertSuccess(
         await snmpApp.handleSendGetNextRequest(null, {
@@ -387,6 +400,7 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
         'send real GET-NEXT through SNMP Utility'
     );
     assert.equal(nextData.varbinds[0].oid, `${DEMO_AGENT_NAME_OID}.0`);
+    assertMibVarbind(nextData.varbinds[0], 'demoAgentName', '0');
 
     const setData = assertSuccess(
         await snmpApp.handleSendSetRequest(null, {
@@ -399,6 +413,7 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
         'send real SET through SNMP Utility'
     );
     assert.equal(setData.varbinds[0].value, 'after-set');
+    assertMibVarbind(setData.varbinds[0], 'demoWritableName', '0');
     const readAfterSet = assertSuccess(
         await snmpApp.handleSendGetRequest(null, {
             oid: `${DEMO_WRITABLE_NAME_OID}.0`,
@@ -408,6 +423,7 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
         'read value written by Utility SET'
     );
     assert.equal(readAfterSet.varbinds[0].value, 'after-set');
+    assertMibVarbind(readAfterSet.varbinds[0], 'demoWritableName', '0');
 
     const walkData = assertSuccess(
         await snmpApp.handleSendWalkRequest(null, {
@@ -423,6 +439,28 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
         walkData.rows.map(row => row.value),
         ['loopback0', 'ethernet0']
     );
+    walkData.rows.forEach((row, index) => assertMibVarbind(row, 'demoIfName', String(index + 1)));
+
+    const statusWalkData = assertSuccess(
+        await snmpApp.handleSendWalkRequest(null, {
+            oid: DEMO_IF_STATUS_OID,
+            limit: 10,
+            maxRepetitions: 5,
+            timeout: 2000,
+            retries: 0
+        }),
+        'resolve real WALK enum values using the compiled MIB tree'
+    );
+    assert.deepEqual(
+        statusWalkData.rows.map(row => row.value),
+        [1, 2],
+        'MIB enrichment preserves numeric response values'
+    );
+    assert.deepEqual(
+        statusWalkData.rows.map(row => row.displayValue),
+        ['up (1)', 'down (2)']
+    );
+    statusWalkData.rows.forEach((row, index) => assertMibVarbind(row, 'demoIfStatus', String(index + 1)));
 
     const instanceData = assertSuccess(
         await snmpApp.handleListOidInstances(null, {
@@ -438,6 +476,7 @@ async function exerciseManagerRequests(snmpApp, expectedPid) {
         instanceData.rows.map(row => row.instance),
         ['1', '2']
     );
+    instanceData.rows.forEach((row, index) => assertMibVarbind(row, 'demoIfName', String(index + 1)));
     assert.equal(snmpApp.worker.pid, expectedPid, 'manager requests must reuse the same SNMP Utility PID');
 }
 

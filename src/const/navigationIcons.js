@@ -11,6 +11,7 @@ import {
     FileTextOutlined,
     FolderOutlined,
     KeyOutlined,
+    ReloadOutlined,
     RouteOutlined,
     SafetyOutlined,
     SettingOutlined,
@@ -42,5 +43,7 @@ export const settingsNavigationIcons = Object.freeze({
     externalApi: ApiOutlined,
     dataManagement: DatabaseOutlined,
     runtime: ToolOutlined,
+    tcpAo: ReloadOutlined,
+    tcpMd5: KeyOutlined,
     update: CloudDownloadOutlined
 });

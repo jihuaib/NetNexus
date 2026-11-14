@@ -472,6 +472,19 @@ async function testIpv6(directory) {
         assert.equal(attrs(f, type.MP_REACH_NLRI)[0].mpReach.afi, 2);
         assert.ok(attrs(f, type.MP_REACH_NLRI).every(attr => attr.value[3] === 16));
         f.sent.length = 0;
+        await f.generate('ipv6', {
+            ...config,
+            nlriRules: [
+                { type: 'addPath', count: 3 },
+                { type: 'mpNextHop', mode: 'fixed', value: '2001:db8::99' }
+            ],
+            attributeRules: [{ type: 'med', value: 99 }]
+        });
+        assert.equal(withdrawn(f).length, 0, 'IPv6 next-hop and attribute changes must update existing prefix paths');
+        assert.equal(reached(f).length, 6);
+        assert.ok(attrs(f, type.MP_REACH_NLRI).every(attr => attr.mpReach.nextHop === '2001:db8::99'));
+        assert.ok(attrs(f, type.MED).every(attr => attr.med === 99));
+        f.sent.length = 0;
         const before = f.store.getRouteGroupRoutes('ipv6');
         await assert.rejects(
             f.generate('other', { ...config, nlriRules: [{ type: 'addPath', count: 1 }] }),

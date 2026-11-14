@@ -332,6 +332,44 @@
             </section>
         </nn-modal>
 
+        <nn-modal
+            :open="connectionPageActive && Boolean(hostKeyChange)"
+            title="设备 Host Key 已变化"
+            :footer="null"
+            width="680px"
+            @update:open="open => !open && (hostKeyChange = null)"
+        >
+            <template v-if="hostKeyChange">
+                <nn-alert
+                    type="warning"
+                    show-icon
+                    message="设备返回的 SSH 主机密钥与已保存指纹不一致"
+                    description="请核对设备当前指纹，确认后将保存新指纹并重试连接。"
+                />
+                <nn-descriptions :column="1" bordered size="small" class="test-result-detail">
+                    <nn-descriptions-item label="设备">
+                        {{ hostKeyChange.host }}:{{ hostKeyChange.port }}
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="已保存指纹">
+                        <nn-typography-text copyable class="host-key-change-fingerprint">
+                            {{ hostKeyChange.expectedFingerprint }}
+                        </nn-typography-text>
+                    </nn-descriptions-item>
+                    <nn-descriptions-item label="当前设备指纹">
+                        <nn-typography-text copyable class="host-key-change-fingerprint">
+                            {{ hostKeyChange.observedFingerprint }}
+                        </nn-typography-text>
+                    </nn-descriptions-item>
+                </nn-descriptions>
+                <div class="profile-data-load-actions">
+                    <nn-button @click="hostKeyChange = null">取消</nn-button>
+                    <nn-button type="primary" :loading="saving" @click="confirmHostKeyChange">
+                        {{ hostKeyChange.action === 'test' ? '确认新指纹并重新测试' : '确认新指纹并重连' }}
+                    </nn-button>
+                </div>
+            </template>
+        </nn-modal>
+
         <nn-modal v-model:open="testResultOpen" title="连接测试结果" :footer="null" width="680px">
             <nn-alert
                 :type="testResult.success ? 'success' : 'error'"
@@ -409,6 +447,7 @@
     const capabilityQuery = ref('');
     const testResultOpen = ref(false);
     const testResult = ref({ success: false, message: '' });
+    const hostKeyChange = ref(null);
     const connectionPageActive = ref(true);
     const profileDataLoad = ref({
         visible: false,
@@ -449,6 +488,7 @@
         disconnecting.value = false;
         privateKeySelecting.value = false;
         testResultOpen.value = false;
+        hostKeyChange.value = null;
     };
 
     const normalizeProfile = profile => ({
@@ -776,6 +816,7 @@
             if (!profileContextMatches(profileId, requestRevision)) return;
             session.value = { ...session.value, ...(data || {}) };
             if (activateSharedProfile) updateConnectedProfile(session.value, { loadData: false });
+            if (connectionPageActive.value && !session.value.connected) showHostKeyChange(session.value.lastError);
         } catch (error) {
             if (profileContextMatches(profileId, requestRevision)) {
                 console.warn('Unable to load NETCONF session state:', error.message);
@@ -873,6 +914,35 @@
 
     const saveProfile = () => persistProfile();
 
+    const showHostKeyChange = (error, action = 'connect') => {
+        if (error?.code !== 'NETCONF_HOST_KEY_MISMATCH') return false;
+        const details = error.details?.details || error.details;
+        if (!details?.expectedFingerprint || !details.observedFingerprint) return false;
+        const profileId = String(details.profileId || selectedProfileId.value || '');
+        if (profileId !== String(selectedProfileId.value || '')) return false;
+        hostKeyChange.value = {
+            ...details,
+            profileId,
+            contextRevision: profileContextRevision,
+            action
+        };
+        profileDataLoadRevision += 1;
+        profileDataLoad.value = { ...profileDataLoad.value, visible: false };
+        testResultOpen.value = false;
+        return true;
+    };
+
+    const confirmHostKeyChange = async () => {
+        const change = hostKeyChange.value;
+        if (!change || !profileContextMatches(change.profileId, change.contextRevision)) return;
+        draft.value.hostKeyFingerprint = change.observedFingerprint;
+        const saved = await persistProfile({ silent: true });
+        if (!saved || hostKeyChange.value !== change) return;
+        hostKeyChange.value = null;
+        if (change.action === 'test') await testConnection();
+        else await connectProfile();
+    };
+
     const deleteProfile = () => {
         const profile = selectedProfile.value || draft.value;
         if (!profile?.id) return;
@@ -934,6 +1004,7 @@
             testResultOpen.value = true;
         } catch (error) {
             if (!profileContextMatches(profileId, requestContextRevision)) return;
+            if (showHostKeyChange(error, 'test')) return;
             testResult.value = { success: false, message: error.message };
             testResultOpen.value = true;
         } finally {
@@ -1007,7 +1078,7 @@
             };
             profileConnectionStatuses.set(targetProfileId, NETCONF_SESSION_STATUS.ERROR);
             pendingProfileSwitches.delete(targetProfileId);
-            showProfileConnectionFailure(targetProfileId, error);
+            if (!showHostKeyChange(error)) showProfileConnectionFailure(targetProfileId, error);
         } finally {
             if (profileConnectionStatuses.get(targetProfileId) !== NETCONF_SESSION_STATUS.CONNECTED) {
                 pendingProfileSwitches.delete(targetProfileId);
@@ -1074,6 +1145,7 @@
         session.value = data;
         connecting.value = ['connecting', 'reconnecting'].includes(data.status || data.state);
         disconnecting.value = (data.status || data.state) === 'disconnecting';
+        if (!pendingExplicitConnect && connectionPageActive.value) showHostKeyChange(data.lastError);
     };
 
     const clearValidationErrors = () => {};
@@ -1122,6 +1194,7 @@
         }
         capabilityDrawerOpen.value = false;
         testResultOpen.value = false;
+        hostKeyChange.value = null;
     });
 
     onBeforeUnmount(() => {
@@ -1132,6 +1205,10 @@
 </script>
 
 <style scoped>
+    .host-key-change-fingerprint {
+        overflow-wrap: anywhere;
+    }
+
     .yang-connection-page,
     .connection-card {
         height: 100%;

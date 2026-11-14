@@ -3,7 +3,10 @@
         <div class="snmp-config-layout">
             <div class="snmp-config-stack">
                 <nn-form :model="formData" :label-col="labelCol" :wrapper-col="wrapperCol" class="snmp-config-form">
-                    <nn-card title="查询目标" class="snmp-config-card query-target-card">
+                    <nn-card
+                        title="查询与协议认证"
+                        class="snmp-config-card query-target-card protocol-card shared-auth-card"
+                    >
                         <nn-row :gutter="12">
                             <nn-col :span="12">
                                 <nn-form-item label="目标地址" name="targetHost">
@@ -37,55 +40,8 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
-                        <div class="service-control-row snmp-runtime-actions" data-testid="snmp-runtime-actions">
-                            <nn-button
-                                type="primary"
-                                :loading="runtimeLoading && !snmpRuntime.running"
-                                :disabled="
-                                    configLoading || !snmpRuntime.initialized || snmpRuntime.running || runtimeLoading
-                                "
-                                aria-label="启动SNMP进程"
-                                data-testid="snmp-runtime-start-button"
-                                @click="startSnmpProcess"
-                            >
-                                启动进程
-                            </nn-button>
-                            <nn-button
-                                type="primary"
-                                danger
-                                :loading="runtimeLoading && snmpRuntime.running"
-                                :disabled="!snmpRuntime.running || runtimeLoading"
-                                aria-label="停止SNMP进程"
-                                data-testid="snmp-runtime-stop-button"
-                                @click="stopSnmpProcess"
-                            >
-                                停止进程
-                            </nn-button>
-                        </div>
-                    </nn-card>
-
-                    <nn-card
-                        title="Trap 服务与协议认证"
-                        class="snmp-config-card trap-auth-card trap-service-card protocol-card"
-                    >
-                        <nn-row :gutter="12">
-                            <nn-col :span="8">
-                                <nn-form-item label="Trap端口" name="port">
-                                    <nn-tooltip
-                                        :title="validationSnmpConfigErrors.port"
-                                        :open="!!validationSnmpConfigErrors.port"
-                                    >
-                                        <nn-input
-                                            v-model:value="formData.port"
-                                            :disabled="snmpRuntime.trapRunning || trapLoading"
-                                            placeholder="请输入Trap端口"
-                                            :status="validationSnmpConfigErrors.port ? 'error' : ''"
-                                        />
-                                    </nn-tooltip>
-                                </nn-form-item>
-                            </nn-col>
-                        </nn-row>
                         <div class="card-section-title">协议认证</div>
+                        <p class="config-scope-hint">SNMPv1/v2c 查询与 Trap 接收共用版本和 Community。</p>
                         <nn-row :gutter="12">
                             <nn-col :span="24">
                                 <nn-form-item label="SNMP版本" name="supportedVersions">
@@ -107,35 +63,35 @@
                             </nn-col>
                         </nn-row>
 
-                        <div
+                        <nn-row
                             v-if="
                                 formData.supportedVersions.includes('v1') || formData.supportedVersions.includes('v2c')
                             "
-                            class="config-section"
+                            :gutter="12"
                         >
-                            <div class="config-section-title">SNMPv1/v2c</div>
-                            <nn-row :gutter="12">
-                                <nn-col :span="24">
-                                    <nn-form-item label="Community" name="community">
-                                        <nn-tooltip
-                                            :title="validationSnmpConfigErrors.community"
-                                            :open="!!validationSnmpConfigErrors.community"
-                                        >
-                                            <nn-input
-                                                v-model:value="formData.community"
-                                                :disabled="snmpRuntime.running || runtimeLoading"
-                                                placeholder="请输入Community字符串"
-                                                allow-clear
-                                                :status="validationSnmpConfigErrors.community ? 'error' : ''"
-                                            />
-                                        </nn-tooltip>
-                                    </nn-form-item>
-                                </nn-col>
-                            </nn-row>
-                        </div>
+                            <nn-col :span="24">
+                                <nn-form-item label="Community" name="community">
+                                    <nn-tooltip
+                                        :title="validationSnmpConfigErrors.community"
+                                        :open="!!validationSnmpConfigErrors.community"
+                                    >
+                                        <nn-input
+                                            v-model:value="formData.community"
+                                            :disabled="snmpRuntime.running || runtimeLoading"
+                                            placeholder="请输入Community字符串"
+                                            allow-clear
+                                            :status="validationSnmpConfigErrors.community ? 'error' : ''"
+                                        />
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
 
                         <div v-if="formData.supportedVersions.includes('v3')" class="config-section">
                             <div class="config-section-title">SNMPv3</div>
+                            <p class="config-scope-hint">
+                                当前 SNMPv3 认证用于 Trap 接收，GET、GET-NEXT、WALK、SET 查询支持 SNMPv1/v2c。
+                            </p>
                             <nn-row :gutter="12">
                                 <nn-col :span="10">
                                     <nn-form-item label="用户名" name="v3Username">
@@ -237,6 +193,51 @@
                             </nn-row>
                         </div>
 
+                        <div class="service-control-row snmp-runtime-actions" data-testid="snmp-runtime-actions">
+                            <nn-button
+                                type="primary"
+                                :loading="runtimeLoading && !snmpRuntime.running"
+                                :disabled="
+                                    configLoading || !snmpRuntime.initialized || snmpRuntime.running || runtimeLoading
+                                "
+                                aria-label="启动SNMP进程"
+                                data-testid="snmp-runtime-start-button"
+                                @click="startSnmpProcess"
+                            >
+                                启动进程
+                            </nn-button>
+                            <nn-button
+                                type="primary"
+                                danger
+                                :loading="runtimeLoading && snmpRuntime.running"
+                                :disabled="!snmpRuntime.running || runtimeLoading"
+                                aria-label="停止SNMP进程"
+                                data-testid="snmp-runtime-stop-button"
+                                @click="stopSnmpProcess"
+                            >
+                                停止进程
+                            </nn-button>
+                        </div>
+                    </nn-card>
+
+                    <nn-card title="Trap 服务" class="snmp-config-card trap-service-card">
+                        <nn-row :gutter="12">
+                            <nn-col :span="12">
+                                <nn-form-item label="Trap端口" name="port">
+                                    <nn-tooltip
+                                        :title="validationSnmpConfigErrors.port"
+                                        :open="!!validationSnmpConfigErrors.port"
+                                    >
+                                        <nn-input
+                                            v-model:value="formData.port"
+                                            :disabled="snmpRuntime.trapRunning || trapLoading"
+                                            placeholder="请输入Trap端口"
+                                            :status="validationSnmpConfigErrors.port ? 'error' : ''"
+                                        />
+                                    </nn-tooltip>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                         <div class="service-control-row snmp-trap-actions" data-testid="snmp-trap-actions">
                             <nn-button
                                 type="primary"
@@ -733,6 +734,13 @@
         line-height: 20px;
     }
 
+    .config-scope-hint {
+        margin: 0 0 8px;
+        color: var(--nn-color-text-secondary);
+        font-size: 12px;
+        line-height: 20px;
+    }
+
     .card-section-title {
         margin: 2px 0 8px;
         padding-top: 8px;
@@ -759,6 +767,7 @@
         gap: 7px;
     }
 
+    .snmp-runtime-actions,
     .snmp-trap-actions {
         margin-top: 10px;
     }

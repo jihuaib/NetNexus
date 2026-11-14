@@ -49,6 +49,9 @@
         name: 'UpdateNotification'
     });
 
+    const ERROR_NOTIFICATION_DURATION_MS = 5000;
+    let notificationTimer = null;
+
     // 响应式数据
     const showNotification = ref(false);
     const updateInfo = ref(null);
@@ -87,52 +90,77 @@
         return isDownloading.value || isChecking.value ? 'loading' : 'info';
     });
 
+    const clearNotificationTimer = () => {
+        if (notificationTimer !== null) {
+            clearTimeout(notificationTimer);
+            notificationTimer = null;
+        }
+    };
+
+    const clearError = () => {
+        clearNotificationTimer();
+        hasError.value = false;
+        errorMessage.value = '';
+    };
+
+    const showError = message => {
+        clearNotificationTimer();
+        isChecking.value = false;
+        isDownloading.value = false;
+        hasError.value = true;
+        errorMessage.value = message || '更新过程中发生错误';
+        showNotification.value = true;
+        notificationTimer = setTimeout(closeNotification, ERROR_NOTIFICATION_DURATION_MS);
+    };
+
     // 处理更新状态
     const handleUpdateStatus = respData => {
         if (respData.status !== 'success') {
-            notify.error('检查更新失败');
+            showError(respData.msg || '检查更新失败');
             return;
         }
         const { type, data } = respData.data;
 
         switch (type) {
             case 'checking-for-update':
+                clearError();
                 isChecking.value = true;
-                hasError.value = false;
                 showNotification.value = false;
                 break;
             case 'update-available':
+                clearError();
                 isChecking.value = false;
                 updateAvailable.value = true;
+                updateDownloaded.value = false;
                 updateInfo.value = data;
                 showNotification.value = true;
                 break;
             case 'update-not-available':
+                clearError();
                 isChecking.value = false;
                 updateAvailable.value = false;
-                // 如果没有可用更新，3秒后自动隐藏通知
-                setTimeout(() => {
-                    showNotification.value = false;
-                }, 3000);
+                closeNotification();
                 break;
             case 'download-started':
+                clearError();
+                isChecking.value = false;
                 isDownloading.value = true;
+                updateDownloaded.value = false;
+                downloadProgress.value = {};
                 showNotification.value = true;
                 break;
             case 'download-progress':
                 downloadProgress.value = data;
                 break;
             case 'update-downloaded':
+                clearError();
+                isChecking.value = false;
                 isDownloading.value = false;
                 updateDownloaded.value = true;
                 showNotification.value = true;
                 break;
             case 'update-error':
-                isChecking.value = false;
-                isDownloading.value = false;
-                hasError.value = true;
-                errorMessage.value = data.error || '更新过程中发生错误';
-                showNotification.value = true;
+                showError(data.error);
                 break;
         }
     };
@@ -148,7 +176,7 @@
             await window.updaterApi.downloadUpdate();
         } catch (error) {
             console.error('下载更新失败:', error);
-            notify.error('下载更新失败');
+            showError('下载更新失败: ' + error.message);
         }
     };
 
@@ -163,7 +191,7 @@
             await window.updaterApi.quitAndInstall();
         } catch (error) {
             console.error('安装更新失败:', error);
-            notify.error('安装更新失败');
+            showError('安装更新失败: ' + error.message);
         }
     };
 
@@ -175,6 +203,7 @@
 
     // 关闭通知
     const closeNotification = () => {
+        clearNotificationTimer();
         showNotification.value = false;
     };
 
@@ -183,6 +212,7 @@
     });
 
     onBeforeUnmount(() => {
+        clearNotificationTimer();
         EventBus.off('updater:update-status', TOOLS_EVENT_PAGE_ID.PAGE_ID_TOOLS_UPDATE_NOTIFICATION);
     });
 </script>

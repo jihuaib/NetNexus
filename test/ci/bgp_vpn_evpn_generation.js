@@ -61,7 +61,10 @@ function evpnRules(config) {
         if (Number(config.routeType) === 2 && (config.label2 !== undefined || config.vni2 !== undefined))
             rules.push({ type: vxlan ? 'vni2' : 'label2', mode: 'fixed', value: vxlan ? config.vni2 : config.label2 });
     }
-    rules.push({ type: 'mpNextHop', mode: 'auto' });
+    rules.push({
+        type: 'mpNextHop',
+        ...(config.mpNextHop ? { mode: 'fixed', value: config.mpNextHop } : { mode: 'auto' })
+    });
     return rules;
 }
 
@@ -415,6 +418,21 @@ async function testVpn(directory, addressFamily) {
         );
         const nextHop = f.packets()[0].pathAttributes.find(attr => attr.typeCode === type.MP_REACH_NLRI).mpReach;
         assert.equal(nextHop.nextHopLength, addressFamily === family.VPNV6 ? 24 : 12);
+        const updatedNextHop = addressFamily === family.VPNV6 ? '2001:db8::99' : '192.0.2.99';
+        f.sent.length = 0;
+        await f.generate('vpn', { nlriRules: vpnRules({}, {}, { mode: 'fixed', value: updatedNextHop }) });
+        assert.equal(withdrawals(f).length, 0, 'VPN next-hop updates retain every existing RD/prefix');
+        assert.equal(reaches(f).length, 3);
+        assert.ok(
+            f
+                .packets()
+                .every(packet =>
+                    packet.pathAttributes.some(
+                        attr => attr.typeCode === type.MP_REACH_NLRI && attr.mpReach.nextHop === updatedNextHop
+                    )
+                ),
+            'each replacement UPDATE carries the new VPN next hop'
+        );
         f.sent.length = 0;
         await f.generate('vpn', { count: 2, nlriRules: vpnRules({}, { start: 17000 }) });
         assert.equal(f.rows().length, 2);
@@ -637,11 +655,21 @@ async function testEvpn(directory) {
             mask: 64,
             gatewayIp: '2001:db8::5',
             encapsulationType: 'vxlan',
-            vni: 11000
+            vni: 11000,
+            mpNextHop: '192.0.2.99'
         });
-        assert.equal(withdrawals(f).length, 0, 'gateway/VNI updates replace the existing IP prefix routes');
+        assert.equal(withdrawals(f).length, 0, 'gateway/VNI/next-hop updates replace the existing IP prefix routes');
         assert.equal(reaches(f).length, 3);
         assert.ok(reaches(f).every(route => route.gatewayIp === '2001:db8::5' && route.labels[0].vni === 11000));
+        assert.ok(
+            f
+                .packets()
+                .every(packet =>
+                    packet.pathAttributes.some(
+                        attr => attr.typeCode === type.MP_REACH_NLRI && attr.mpReach.nextHop === '192.0.2.99'
+                    )
+                )
+        );
         f.store.close();
         f = fixture(dbPath, family.L2VPN_EVPN);
         assert.equal(f.rows().length, 15);

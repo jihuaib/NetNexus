@@ -393,13 +393,29 @@
     font-size: 16px !important;
 }
 
+/* 将全局提示固定在右侧，并限制堆叠高度，避免遮挡导航和大面积内容。 */
+.nn-toast-host {
+    position: fixed;
+    top: 48px;
+    right: 16px;
+    bottom: auto;
+    left: auto;
+    width: min(360px, calc(100vw - 32px));
+    max-height: min(320px, calc(100vh - 64px));
+    overflow-y: auto;
+}
+
 /* 全局提示：允许鼠标交互与选中复制文本（组件库默认 pointer-events: none，鼠标会穿透） */
 .nn-toast-host .nn-toast {
+    flex-shrink: 0;
+    align-items: start;
     pointer-events: auto;
     user-select: text;
     cursor: default;
 }
 
 .nn-toast-host .nn-toast-content {
+    max-height: 84px;
+    overflow-y: auto;
     user-select: text;
 }

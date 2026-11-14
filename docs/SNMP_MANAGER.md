@@ -18,7 +18,7 @@ SNMP 模块当前包含 Trap 接收、Trap 历史、MIB 管理和基础 SNMP 查
 
 ### SNMP 配置
 
-配置 Trap 服务和查询目标。
+“查询与协议认证”配置查询目标、SNMP 版本和认证参数。SNMPv1/v2c 查询与 Trap 接收共用版本和 Community；SNMPv3 认证参数当前用于 Trap 接收，查询支持 SNMPv1/v2c。“Trap 服务”单独配置接收端口并控制监听。
 
 ![SNMP 配置界面](images/snmp/snmp-config.png)
 
@@ -26,8 +26,9 @@ SNMP 模块当前包含 Trap 接收、Trap 历史、MIB 管理和基础 SNMP 查
 
 | 按钮 | 功能 |
 | --- | --- |
-| 启动SNMP / 已启动 | 按 Trap 端口、查询端口、版本和认证参数启动 SNMP 服务。 |
-| 停止SNMP | 停止 Trap 接收和查询服务，并关闭已经打开的 Trap 独立监控窗口。 |
+| 启动进程 | 保存查询目标、版本和认证参数并启动 SNMP 运行时，供查询和 MIB 操作使用。 |
+| 停止进程 | 停止查询运行时和 Trap 接收，并关闭已经打开的 Trap 独立监控窗口。 |
+| 启动服务 / 停止服务 | 在“Trap 服务”中独立启停 Trap 监听，需要先启动 SNMP 进程。 |
 | 打开 Trap 监控 | 打开或切换到独立 Trap 监控窗口。 |
 
 主要字段：
@@ -39,7 +40,7 @@ SNMP 模块当前包含 Trap 接收、Trap 历史、MIB 管理和基础 SNMP 查
 - v1/v2c Community。
 - v3 用户名、安全级别、认证协议、认证密码、加密协议、加密密码。
 
-配置页可以启动或停止 Trap 服务，并展示当前运行状态。
+进程运行期间，查询目标、版本和认证参数保持固定，修改后需重新启动进程。Trap 服务停止后可单独修改接收端口。右侧展示进程、Trap 服务和查询目标的运行状态。
 
 ### Trap 监控
 
@@ -120,6 +121,8 @@ WALK 界面说明：
 | 返回上限 | 控制单次 WALK 最多返回的 varbind 数量。 |
 | Max Repetitions | SNMP v2c 下控制 GETBULK 的批量返回规模。 |
 | 开始 WALK | 发起 WALK 查询，并在下方文本区展示序号、OID、对象名、类型和值。 |
+
+GET、GET-NEXT、WALK 和 SET 的响应使用当前已编译的 MIB 解析对象名与实例后缀；有枚举定义的值显示为 `up (1)` 等名称和原始值。数字 OID 始终保留，未加载对应 MIB 时回退显示数字 OID。
 
 支持：
 

@@ -630,12 +630,10 @@ test.describe('Custom UI component interactions', () => {
             ['通用', '工具', 'FTP', 'API', '数据', '运行时', 'TCP-AO', 'TCP MD5', '更新'],
             'tab'
         );
-        expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length - 1);
+        expect(new Set(Object.values(settingsIconShapes)).size).toBe(Object.keys(settingsIconShapes).length);
         expect(settingsIconShapes['通用']).toBe(quickIconShapes['设置']);
         expect(settingsIconShapes['工具']).toBe(mainIconShapes['工具']);
         expect(settingsIconShapes.FTP).toBe(mainIconShapes.FTP);
-        expect(settingsIconShapes['TCP-AO']).toBe(mainIconShapes.RPKI);
-        expect(settingsIconShapes['TCP MD5']).toBe(mainIconShapes.RPKI);
     });
 
     test('keeps configuration labels compact, radio buttons joined and selected sidebar text emphasized', async ({

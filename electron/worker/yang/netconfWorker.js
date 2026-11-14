@@ -698,8 +698,17 @@ function errorData(error) {
         messageId: error?.messageId || null,
         requestXml: error?.requestXml || null,
         replyXml: error?.replyXml || null,
-        subscription: error?.subscription || null
+        subscription: error?.subscription || null,
+        ...(error?.data === undefined ? {} : { details: error.data })
     };
+}
+
+function connectionError(error, observed) {
+    if (!observed.hostKeyMismatch) return error;
+    const mismatch = new Error('设备 Host Key 指纹已变化，请核对新指纹后确认更新');
+    mismatch.code = 'NETCONF_HOST_KEY_MISMATCH';
+    mismatch.data = observed.hostKeyMismatch;
+    return mismatch;
 }
 
 function approximateJsonBytes(value) {
@@ -842,7 +851,17 @@ class NetconfWorkerService {
         runtime.hostVerifier = key => {
             const fingerprints = calculateFingerprints(key);
             observed.hostKeyFingerprint = fingerprints.sha256;
-            return verifier ? verifier(key) : runtime.hostKeyPolicy !== 'strict';
+            const verified = verifier ? verifier(key) : runtime.hostKeyPolicy !== 'strict';
+            if (!verified && expected) {
+                observed.hostKeyMismatch = {
+                    profileId: String(profile.id || ''),
+                    host: profile.host,
+                    port: Number(profile.port) || 830,
+                    expectedFingerprint: expected,
+                    observedFingerprint: fingerprints.sha256
+                };
+            }
+            return verified;
         };
         return runtime;
     }
@@ -1892,10 +1911,11 @@ class NetconfWorkerService {
             entry.client = null;
             entry.connectedAt = null;
             entry.disconnectedAt = new Date().toISOString();
-            entry.lastError = entry.manualClose ? null : errorData(error);
+            entry.lastError = entry.manualClose ? null : errorData(connectionError(error, entry.observed));
             entry.status = 'disconnected';
             this.emitState(entry);
-            if (!entry.manualClose && entry.profile.autoReconnect && !this.closing) this.scheduleReconnect(entry);
+            if (!entry.manualClose && entry.profile.autoReconnect && !this.closing && !entry.observed.hostKeyMismatch)
+                this.scheduleReconnect(entry);
             else this.scrubEntrySecrets(entry);
         });
     }
@@ -1934,16 +1954,23 @@ class NetconfWorkerService {
             this.emitState(entry);
             this.scheduleSchemaDiscovery(entry);
             return this.publicState(entry);
-        } catch (error) {
+        } catch (cause) {
+            const error = connectionError(cause, entry.observed);
             if (entry.client === client) entry.client = null;
             const cancelled = error?.code === 'NETCONF_CONNECT_CANCELLED' || entry.manualClose;
             if (cancelled) client.disconnect?.('connection request cancelled');
             entry.lastError = cancelled ? null : errorData(error);
-            if (reconnecting && entry.profile.autoReconnect && !entry.manualClose && !this.closing) {
+            if (
+                reconnecting &&
+                entry.profile.autoReconnect &&
+                !entry.manualClose &&
+                !this.closing &&
+                error.code !== 'NETCONF_HOST_KEY_MISMATCH'
+            ) {
                 this.scheduleReconnect(entry);
             }
             entry.status = cancelled ? 'disconnected' : entry.reconnectTimer ? 'reconnecting' : 'error';
-            if (cancelled) this.scrubEntrySecrets(entry);
+            if (cancelled || error.code === 'NETCONF_HOST_KEY_MISMATCH') this.scrubEntrySecrets(entry);
             this.emitState(entry);
             if (cancelled && error?.code !== 'NETCONF_CONNECT_CANCELLED') throw this.requestCancelledError();
             throw error;
@@ -2050,7 +2077,7 @@ class NetconfWorkerService {
             const capabilitySupport = capabilitySupportFrom(info.capabilities || []);
             return {
                 ...info,
-                ...observed,
+                hostKeyFingerprint: observed.hostKeyFingerprint || '',
                 profileId: profile?.id ? String(profile.id) : null,
                 profileName: profile?.name || profile?.id || '',
                 host: profile?.host || '',
@@ -2072,6 +2099,8 @@ class NetconfWorkerService {
                 },
                 capabilitySupport
             };
+        } catch (error) {
+            throw connectionError(error, observed);
         } finally {
             if (client.connected) {
                 try {

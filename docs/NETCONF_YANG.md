@@ -121,6 +121,8 @@ Mock 默认只监听 `127.0.0.1`。默认账号、密码以及仓库中的固定
 
 设备侧需要启用 NETCONF over SSH，并允许该用户打开 `netconf` subsystem。普通 SSH Shell 登录成功不代表 NETCONF subsystem 一定可用。
 
+设备重启、重置或重新生成 SSH 密钥后，如果 Host Key 与已保存指纹不一致，连接会暂停并显示新旧指纹。核对设备当前指纹后，点击“确认新指纹并重连”（测试连接时为“确认新指纹并重新测试”），即可保存新指纹并重试；取消会保留原指纹。自动重连遇到指纹变化也会暂停，等待确认。
+
 ![NETCONF 连接 Profile 与当前会话](images/yang/yang-connection.png)
 
 ### 2. 读取和下载设备模型

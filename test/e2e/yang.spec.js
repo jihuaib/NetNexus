@@ -1002,6 +1002,120 @@ test.describe('NETCONF/YANG workbench', () => {
         expect(primarySession.data.connected).toBe(true);
     });
 
+    for (const action of ['connect', 'testConnection']) {
+        test(`confirms a changed Host Key before retrying NETCONF ${action}`, async ({ page }, testInfo) => {
+            const profile = harness.controller.state.yang.profiles[1];
+            const originalFingerprint = profile.hostKeyFingerprint;
+            const newFingerprint = 'SHA256:NetNexusRebootedDeviceHostKey';
+            const attempts = [];
+            const originalControllerCall = harness.controller.call.bind(harness.controller);
+            harness.controller.call = async (method, ...args) => {
+                if (method === `yang.netconf.${action}`) {
+                    const requestProfile =
+                        typeof args[0] === 'string'
+                            ? harness.controller.state.yang.profiles.find(item => item.id === args[0])
+                            : args[0];
+                    attempts.push(requestProfile.hostKeyFingerprint);
+                    if (requestProfile.hostKeyFingerprint !== newFingerprint) {
+                        return {
+                            status: 'error',
+                            msg: '设备 Host Key 指纹已变化，请核对新指纹后确认更新',
+                            data: {
+                                code: 'NETCONF_HOST_KEY_MISMATCH',
+                                details: {
+                                    code: 'NETCONF_HOST_KEY_MISMATCH',
+                                    details: {
+                                        profileId: profile.id,
+                                        host: profile.host,
+                                        port: profile.port,
+                                        expectedFingerprint: originalFingerprint,
+                                        observedFingerprint: newFingerprint
+                                    }
+                                }
+                            }
+                        };
+                    }
+                }
+                return originalControllerCall(method, ...args);
+            };
+
+            await page.goto('/#/yang/yang-connection');
+            await page.locator('.profile-list-item').filter({ hasText: profile.name }).click();
+            const editor = page.locator('.profile-editor-card');
+            const button = editor.getByRole('button', {
+                name: action === 'connect' ? '连接' : '测试连接',
+                exact: true
+            });
+            await button.click();
+            const confirmation = page.getByRole('dialog', { name: '设备 Host Key 已变化', exact: true });
+            await expect(confirmation).toContainText(originalFingerprint);
+            await expect(confirmation).toContainText(newFingerprint);
+            expect(attempts).toEqual([originalFingerprint]);
+            expect(profile.hostKeyFingerprint).toBe(originalFingerprint);
+            await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+            await expect(confirmation).toBeHidden();
+            expect(profile.hostKeyFingerprint).toBe(originalFingerprint);
+
+            await button.click();
+            await expect(confirmation).toBeVisible();
+            await page.screenshot({ path: testInfo.outputPath(`host-key-change-${action}.png`) });
+            await confirmation
+                .getByRole('button', {
+                    name: action === 'connect' ? '确认新指纹并重连' : '确认新指纹并重新测试',
+                    exact: true
+                })
+                .click();
+            await expect(confirmation).toBeHidden();
+            await expect.poll(() => attempts).toEqual([originalFingerprint, originalFingerprint, newFingerprint]);
+            expect(harness.controller.state.yang.profiles.find(item => item.id === profile.id).hostKeyFingerprint).toBe(
+                newFingerprint
+            );
+            await expect(
+                editor.locator('.nn-form-item').filter({ hasText: 'Host Key 指纹' }).getByRole('textbox')
+            ).toHaveValue(newFingerprint);
+            if (action === 'testConnection') {
+                await expect(page.getByRole('dialog', { name: '连接测试结果' })).toContainText('NETCONF 连接测试成功');
+            } else {
+                await expect(page.getByRole('dialog', { name: '切换 Profile' })).toContainText(
+                    '模型库与 Schema 工作区已载入'
+                );
+            }
+        });
+    }
+
+    test('shows a changed Host Key from an automatic reconnect without accepting it', async ({ page }) => {
+        const profile = harness.controller.state.yang.profiles[0];
+        const fingerprint = 'SHA256:RebootedDuringAutoReconnect';
+        await page.goto('/#/yang/yang-connection');
+        await expect(page.locator('.session-card')).toContainText('e2e-session-101');
+        harness.controller.emitEvent('netconf:sessionEvent', {
+            status: 'success',
+            data: {
+                profileId: profile.id,
+                status: 'error',
+                connected: false,
+                lastError: {
+                    code: 'NETCONF_HOST_KEY_MISMATCH',
+                    details: {
+                        profileId: profile.id,
+                        host: profile.host,
+                        port: profile.port,
+                        expectedFingerprint: profile.hostKeyFingerprint,
+                        observedFingerprint: fingerprint
+                    }
+                }
+            }
+        });
+        const confirmation = page.getByRole('dialog', { name: '设备 Host Key 已变化', exact: true });
+        await expect(confirmation).toContainText(fingerprint);
+        await confirmation.getByRole('button', { name: '取消', exact: true }).click();
+        await expect(confirmation).toBeHidden();
+        expect(profile.hostKeyFingerprint).not.toBe(fingerprint);
+        expect(
+            harness.controller.timeline.some(item => item.message === 'renderer API call: yang.netconf.connect')
+        ).toBe(false);
+    });
+
     test('keeps a delayed Profile save attached to its original editor context', async ({ page }) => {
         let releaseSave = null;
         const originalControllerCall = harness.controller.call.bind(harness.controller);

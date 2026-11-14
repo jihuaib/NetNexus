@@ -97,11 +97,21 @@ try {
             () => replace(store, `${id}-duplicate`, [qpEntry(profile, 2), qpEntry(profile, 2)], profile),
             /duplicate route key/
         );
+        const updatedNextHop = replace(
+            store,
+            id,
+            [qpEntry(profile, null, { mpNextHop: '2001:db8::88' }), qpEntry(profile, 0, { mpNextHop: '2001:db8::88' })],
+            profile
+        );
+        assert.equal(updatedNextHop.updated, 2);
+        assert.equal(updatedNextHop.deleted, 0);
+        assert.deepEqual(updatedNextHop.withdrawnRoutes, [], 'a next-hop update retains both QP NLRIs');
+        assert.ok(store.getRouteGroupRoutes(id).every(route => route.mpNextHop === '2001:db8::88'));
         const changedBsid = replace(store, id, [qpEntry(profile, null, { mpNextHop: '2001:db8::99' })], profile);
         assert.equal(changedBsid.updated, 1);
         assert.equal(changedBsid.deleted, 1);
-        assert.equal(changedBsid.withdrawnRoutes.length, 2);
-        assert.equal(changedBsid.withdrawnRoutes.find(route => route.dqpn === null).forceWithdraw, true);
+        assert.equal(changedBsid.withdrawnRoutes.length, 1, 'only the removed QP NLRI is withdrawn');
+        assert.equal(changedBsid.withdrawnRoutes[0].dqpn, 0);
         assert.equal(
             store.getRouteGroupRoutes(id)[0].attrId,
             before[0].attrId,
