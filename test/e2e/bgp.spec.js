@@ -961,7 +961,7 @@ test.describe('BGP pages', () => {
         );
     });
 
-    test('withdraws the previous NLRI encoding when replacing the same prefix without ADD-PATH', async ({ page }) => {
+    test('updates the same prefix across NLRI encoding changes without ADD-PATH', async ({ page }) => {
         test.setTimeout(60000);
         await openAndStartIpv4Bgp(page, controller, { localAs: 65535 });
         await page.goto('/#/bgp/route-ipv4');
@@ -975,12 +975,10 @@ test.describe('BGP pages', () => {
             attributeRules: [...mpConfig.attributeRules, { type: 'nextHop', mode: 'fixed', value: '192.0.2.33' }]
         };
         expect((await generateManagedGroup(page, classicConfig)).status).toBe('success');
-        let updates = await controller.waitForClientUpdates(
-            items =>
-                items.slice(offset).some(update => update.mpUnreach?.withdrawnCount === 1) &&
-                items.slice(offset).some(update => update.nlriCount === 1)
+        let updates = await controller.waitForClientUpdates(items =>
+            items.slice(offset).some(update => update.nlriCount === 1)
         );
-        expect(routeIdentities(flattenWithdrawnRoutes(updates.slice(offset)))).toEqual(['10.59.0.1/32#0']);
+        expect(flattenWithdrawnRoutes(updates.slice(offset))).toEqual([]);
         const classic = updates.slice(offset).find(update => update.nlriCount === 1);
         expect(classic.mpReach).toBeNull();
         expect(classic.pathAttributes.find(attribute => attribute.typeCode === 3).nextHop).toBe('192.0.2.33');
@@ -996,12 +994,10 @@ test.describe('BGP pages', () => {
                 })
             ).status
         ).toBe('success');
-        updates = await controller.waitForClientUpdates(
-            items =>
-                items.slice(offset).some(update => update.withdrawnCount === 1) &&
-                items.slice(offset).some(update => update.mpReach?.nextHop === '192.0.2.252')
+        updates = await controller.waitForClientUpdates(items =>
+            items.slice(offset).some(update => update.mpReach?.nextHop === '192.0.2.252')
         );
-        expect(routeIdentities(flattenWithdrawnRoutes(updates.slice(offset)))).toEqual(['10.59.0.1/32#0']);
+        expect(flattenWithdrawnRoutes(updates.slice(offset))).toEqual([]);
         expect(routeIdentities(flattenUpdateNlri(updates.slice(offset)))).toEqual(['10.59.0.1/32#0']);
         expect((await getRouteSnapshot(controller)).total).toBe(1);
         expect((await getGroupStates(page))[0].routeCount).toBe(1);
