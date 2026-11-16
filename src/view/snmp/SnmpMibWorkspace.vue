@@ -675,7 +675,6 @@
         treeExpandedKeys.value = expandedKeys.filter(expandedKey => !descendantKeys.has(expandedKey));
         if (descendantKeys.has(treeSelectedKeys.value[0])) {
             treeSelectedKeys.value = [matchedNode.key];
-            setOperationContext(null, '');
         }
         scheduleTreeNodeChildrenRelease(matchedNode.key);
         hideContextMenu();
@@ -683,7 +682,6 @@
 
     const handleTreeSelect = selectedKeys => {
         treeSelectedKeys.value = selectedKeys;
-        setOperationContext(null, '');
         hideContextMenu();
     };
 
@@ -694,7 +692,6 @@
             notify.warning('请输入 OID');
             return;
         }
-        setOperationContext(null, '');
         const runtimeRevision = snmpRuntime.runtimeRevision;
         try {
             oidTranslateLoading.value = true;

@@ -102,6 +102,7 @@ function createSnmpPageState() {
             trapRunning: false
         },
         mibStatusDelayMs: 0,
+        responseRows: {},
         traps: [
             {
                 id: 1,
@@ -277,6 +278,44 @@ function findMibNode(nodes, oid) {
     return flattenMibTree(nodes).find(node => node.oid === oid || node.key === oid);
 }
 
+function translateMibOid(nodes, oid) {
+    const requestedOid = String(oid || '').replace(/^\./u, '');
+    const matchedNode = flattenMibTree(nodes)
+        .filter(node => requestedOid === node.oid || requestedOid.startsWith(node.oid + '.'))
+        .sort((left, right) => right.oid.length - left.oid.length)[0];
+    const instanceSuffix =
+        matchedNode && requestedOid !== matchedNode.oid ? requestedOid.slice(matchedNode.oid.length + 1) : '';
+
+    return {
+        ...(matchedNode || {}),
+        oid: requestedOid,
+        matched: Boolean(matchedNode),
+        matchedOid: matchedNode?.oid || '',
+        instanceSuffix
+    };
+}
+
+function getResponseRows(snmp, method, defaultRows) {
+    return (snmp.responseRows[method] || defaultRows).map(row => {
+        const oidInfo = translateMibOid(snmp.mibStatus.oidTree, row.oid);
+        const isOidValue = ['OID', 'ObjectIdentifier', 'OBJECT IDENTIFIER', 6].includes(row.rawType || row.type);
+        const valueInfo = isOidValue ? translateMibOid(snmp.mibStatus.oidTree, row.value) : null;
+        return {
+            ...row,
+            oidName: oidInfo.moduleQualifiedName || oidInfo.objectName || '',
+            oidModule: oidInfo.moduleName || '',
+            oidObject: oidInfo.objectName || '',
+            oidPath: oidInfo.pathName || '',
+            oidMacro: oidInfo.macro || '',
+            oidInstance: oidInfo.instanceSuffix,
+            oidMatched: oidInfo.matched,
+            valueName: valueInfo?.moduleQualifiedName || '',
+            valuePath: valueInfo?.pathName || '',
+            valueInstance: valueInfo?.instanceSuffix || ''
+        };
+    });
+}
+
 async function handlePageCall(controller, method, args) {
     const snmp = controller.state.snmp;
     if (method === 'snmp.getSnmpConfig') return successResponse(snmp.config);
@@ -340,19 +379,7 @@ async function handlePageCall(controller, method, args) {
     }
     if (method === 'snmp.translateOid') {
         const requestedOid = typeof args?.[0] === 'string' ? args[0] : String(args?.[0]?.oid || '1.3.6.1.2.1.1.1.0');
-        const matchedNode = flattenMibTree(snmp.mibStatus.oidTree)
-            .filter(node => requestedOid === node.oid || requestedOid.startsWith(node.oid + '.'))
-            .sort((left, right) => right.oid.length - left.oid.length)[0];
-        const instanceSuffix =
-            matchedNode && requestedOid !== matchedNode.oid ? requestedOid.slice(matchedNode.oid.length + 1) : '';
-
-        return successResponse({
-            ...(matchedNode || {}),
-            oid: requestedOid,
-            matched: Boolean(matchedNode),
-            matchedOid: matchedNode?.oid || '',
-            instanceSuffix
-        });
+        return successResponse(translateMibOid(snmp.mibStatus.oidTree, requestedOid));
     }
     if (method === 'snmp.listMibProjects') return successResponse({ rootDir: controller.protocolRoot, projects: [] });
     if (method === 'snmp.selectMibFiles')
@@ -366,14 +393,14 @@ async function handlePageCall(controller, method, args) {
             targetHost: snmp.config.targetHost,
             targetPort: snmp.config.queryPort,
             version: 'v2c',
-            varbinds: [
+            varbinds: getResponseRows(snmp, method, [
                 {
                     oid,
                     type: 'OctetString',
                     value: method === 'snmp.sendGetNextRequest' ? 'noc@example.test' : 'NetNexus E2E',
                     displayValue: method === 'snmp.sendGetNextRequest' ? 'noc@example.test' : 'NetNexus E2E'
                 }
-            ]
+            ])
         });
     }
     if (method === 'snmp.sendWalkRequest') {
@@ -385,7 +412,7 @@ async function handlePageCall(controller, method, args) {
             baseOid: request.oid || '1.3.6.1.2.1.1',
             limit: request.limit || 100,
             maxRepetitions: request.maxRepetitions || 20,
-            rows: [
+            rows: getResponseRows(snmp, method, [
                 {
                     oid: '1.3.6.1.2.1.1.1.0',
                     type: 'OctetString',
@@ -398,7 +425,7 @@ async function handlePageCall(controller, method, args) {
                     value: 'noc@example.test',
                     displayValue: 'noc@example.test'
                 }
-            ],
+            ]),
             stoppedBy: 'endOfSubtree',
             limitReached: false
         });
@@ -409,14 +436,14 @@ async function handlePageCall(controller, method, args) {
             targetHost: snmp.config.targetHost,
             targetPort: snmp.config.queryPort,
             version: 'v2c',
-            varbinds: [
+            varbinds: getResponseRows(snmp, method, [
                 {
                     oid: request.oid || '1.3.6.1.2.1.1.4.0',
                     type: request.type || 'OctetString',
                     value: request.value || 'updated@example.test',
                     displayValue: request.value || 'updated@example.test'
                 }
-            ]
+            ])
         });
     }
     if (method === 'snmp.listOidInstances') {
@@ -428,7 +455,7 @@ async function handlePageCall(controller, method, args) {
             baseOid: request.oid || '1.3.6.1.2.1.2.2',
             limit: request.limit || 100,
             maxRepetitions: request.maxRepetitions || 20,
-            rows: [
+            rows: getResponseRows(snmp, method, [
                 {
                     oid: '1.3.6.1.2.1.2.2.1.2.1',
                     instance: '1',
@@ -436,7 +463,7 @@ async function handlePageCall(controller, method, args) {
                     value: 'Ethernet0',
                     displayValue: 'Ethernet0'
                 }
-            ],
+            ]),
             stoppedBy: 'endOfSubtree',
             limitReached: false
         });

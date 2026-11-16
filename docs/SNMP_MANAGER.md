@@ -107,6 +107,8 @@ OID 树节点支持右键操作：
 | SET 设置 | 对可写节点打开 SET 表单，填写类型和值后发送。 |
 | Trap变量 | 标识该节点仅用于 Trap/Inform 变量绑定，不用于普通 GET/SET。 |
 
+单击、展开、折叠或定位 OID 树节点时，右侧当前操作的请求内容和响应结果保持不变；通过右键菜单选择新的查询操作时切换查询对象。
+
 WALK 查询界面：
 
 ![SNMP MIB WALK 查询](images/snmp/snmp-mib-walk.png)
@@ -122,7 +124,7 @@ WALK 界面说明：
 | Max Repetitions | SNMP v2c 下控制 GETBULK 的批量返回规模。 |
 | 开始 WALK | 发起 WALK 查询，并在下方文本区展示序号、OID、对象名、类型和值。 |
 
-GET、GET-NEXT、WALK 和 SET 的响应使用当前已编译的 MIB 解析对象名与实例后缀；有枚举定义的值显示为 `up (1)` 等名称和原始值。数字 OID 始终保留，未加载对应 MIB 时回退显示数字 OID。
+GET、GET-NEXT、WALK 和 SET 的响应统一使用可选择、复制的文本格式，按序号列出 `OID`、`INDEX` / `SUFFIX`、`TYPE` 和 `VALUE`。数字 OID 下一行显示从 `iso.org.dod` 开始的完整名称路径；字段后的实例索引单独列为 `INDEX`，只匹配到分组节点时剩余数字列为 `SUFFIX`。OID 类型的返回值同样显示完整名称路径和独立后缀；有枚举定义的值显示为 `up (1)` 等名称和原始值。无法解析的 OID 保留数字。
 
 支持：
 

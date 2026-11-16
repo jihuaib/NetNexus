@@ -1261,8 +1261,10 @@ class MibRegistry {
             pathName: definition.NameSpace || '',
             macro: definition.MACRO || '',
             syntax: this.formatSyntax(definition.SYNTAX),
+            enumValues: definition.EnumValues || {},
             maxAccess: definition['MAX-ACCESS'] || definition.ACCESS || '',
             status: definition.STATUS || '',
+            description: definition.DESCRIPTION || '',
             ...accessCapabilities,
             ...queryMetadata,
             hasChildren: childOids.length > 0,
@@ -1480,6 +1482,7 @@ class MibRegistry {
             oidMatched: oidInfo.matched,
             valueName: valueInfo?.moduleQualifiedName || '',
             valuePath: valueInfo?.pathName || '',
+            valueInstance: valueInfo?.instanceSuffix || '',
             ...(enumName
                 ? {
                       enumName,

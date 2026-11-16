@@ -516,7 +516,7 @@ test.describe('SNMP pages', () => {
 
         await operations.getByRole('button', { name: '发送 GET', exact: true }).click();
         await expect(operations.locator('.operation-result-pane')).toContainText('成功');
-        await expect(operations.locator('.operation-result-descriptions')).toContainText('NetNexus E2E');
+        await expect(operations.locator('.operation-result-output')).toHaveValue(/NetNexus E2E/u);
         expect(apiCallCount(harness, 'snmp.translateOid')).toBe(0);
         await expect(page.getByRole('dialog')).toHaveCount(0);
 
@@ -538,6 +538,230 @@ test.describe('SNMP pages', () => {
         await expect(operationSeparator).toBeVisible();
         await expect(operationSeparator).toHaveAttribute('aria-orientation', 'horizontal');
         await expect(operationSeparator).toHaveAttribute('aria-valuenow', /^\d+$/u);
+    });
+
+    test('preserves the operation draft and response while navigating the OID tree', async ({ page }, testInfo) => {
+        await startSnmpRuntime(page);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto(MIB_WORKSPACE_ROUTE);
+        const systemNode = await expandSystemTree(page);
+
+        const operations = page.locator('.snmp-mib-operations');
+        const requestTitle = operations.locator('.operation-request-pane .operation-title');
+        const requestObject = operations.locator('.operation-object-name');
+        const oidInput = operations.getByPlaceholder('请输入数字 OID');
+        const setValueInput = operations.getByPlaceholder('请输入 SET 值');
+        const draftOid = '1.3.6.1.2.1.1.4.23';
+        const draftValue = 'preserved-draft@example.test';
+        const setMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysContact'));
+        await setMenu.getByRole('menuitem', { name: 'SET 设置', exact: true }).click();
+        await oidInput.fill(draftOid);
+        await setValueInput.fill(draftValue);
+
+        const expectSetDraft = async () => {
+            await expect(requestTitle).toHaveText('请求 · SET');
+            await expect(requestObject).toHaveText('SNMPv2-MIB::sysContact');
+            await expect(oidInput).toHaveValue(draftOid);
+            await expect(setValueInput).toHaveValue(draftValue);
+        };
+        const readOnlyNode = mibTreeNode(page, 'sysDescr');
+        await readOnlyNode.click();
+        await expectSetDraft();
+        await readOnlyNode.click();
+        await expectSetDraft();
+
+        await mibTreeNode(page, 'sysContact').click();
+        await expect(mibTreeNode(page, 'sysContact')).toHaveAttribute('aria-selected', 'true');
+        await systemNode.getByRole('button', { name: '收起节点' }).click();
+        await expect(systemNode).toHaveAttribute('aria-expanded', 'false');
+        await expect(systemNode).toHaveAttribute('aria-selected', 'true');
+        await expectSetDraft();
+        expect(apiCallCount(harness, 'snmp.sendSetRequest')).toBe(0);
+
+        await expandSystemTree(page);
+        const getMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysDescr'));
+        await getMenu.getByRole('menuitem', { name: 'GET 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET', exact: true }).click();
+        const result = operations.locator('.operation-result-output');
+        await expect(operations.locator('.operation-result-pane')).toContainText('成功');
+        await expect(result).toHaveValue(/NetNexus E2E/u);
+        const responseText = await result.inputValue();
+
+        const expectGetResponse = async () => {
+            await expect(requestTitle).toHaveText('请求 · GET');
+            await expect(requestObject).toHaveText('SNMPv2-MIB::sysDescr');
+            await expect(oidInput).toHaveValue('1.3.6.1.2.1.1.1.0');
+            await expect(operations.locator('.operation-result-pane')).toContainText('成功');
+            await expect(result).toHaveValue(responseText);
+        };
+        await mibTreeNode(page, 'sysContact').click();
+        await expectGetResponse();
+
+        await page.locator('.oid-query-row input').fill('1.3.6.1.2.1.1.4.0');
+        await page.locator('.oid-query-row').getByRole('button', { name: '定位节点', exact: true }).click();
+        await expect(mibTreeNode(page, 'sysContact')).toHaveAttribute('aria-selected', 'true');
+        expect(apiCallCount(harness, 'snmp.translateOid')).toBe(1);
+        await expectGetResponse();
+        expect(apiCallCount(harness, 'snmp.sendGetRequest')).toBe(1);
+        await page.screenshot({ path: testInfo.outputPath('snmp-preserved-operation.png'), fullPage: true });
+    });
+
+    test('shows complete field paths with separate indexes and preserves unknown OIDs', async ({ page }) => {
+        await startSnmpRuntime(page);
+        await page.goto(MIB_WORKSPACE_ROUTE);
+        await expandSystemTree(page);
+
+        const operations = page.locator('.snmp-mib-operations');
+        const result = operations.locator('.operation-result-output');
+        const getMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysDescr'));
+        await getMenu.getByRole('menuitem', { name: 'GET 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET', exact: true }).click();
+        await expect(result).toHaveValue(
+            /OID\s*:\s*1\.3\.6\.1\.2\.1\.1\.1\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysDescr\nINDEX\s*:\s*0\nTYPE\s*:\s*OctetString\nVALUE\s*:\s*NetNexus E2E/u
+        );
+
+        const getNextMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysDescr'));
+        await getNextMenu.getByRole('menuitem', { name: 'GET-NEXT 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET-NEXT', exact: true }).click();
+        await expect(result).toHaveValue(
+            /OID\s*:\s*1\.3\.6\.1\.2\.1\.1\.4\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysContact\nINDEX\s*:\s*0/u
+        );
+        await expect(result).not.toHaveValue(/system\.sysDescr/u);
+
+        const unknownOid = '1.3.6.1.4.1.99999.1.0';
+        harness.controller.state.snmp.responseRows['snmp.sendGetNextRequest'] = [
+            { oid: unknownOid, type: 'Integer', value: 7 }
+        ];
+        await operations.getByRole('button', { name: '发送 GET-NEXT', exact: true }).click();
+        await expect(result).toHaveValue(`#1\nOID   : ${unknownOid}\nTYPE  : Integer\nVALUE : 7`);
+
+        const setMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysContact'));
+        await setMenu.getByRole('menuitem', { name: 'SET 设置', exact: true }).click();
+        await operations.getByPlaceholder('请输入 SET 值').fill('updated@example.test');
+        await operations.getByRole('button', { name: '发送 SET', exact: true }).click();
+        await expect(result).toHaveValue(
+            /OID\s*:\s*1\.3\.6\.1\.2\.1\.1\.4\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysContact\nINDEX\s*:\s*0\nTYPE\s*:\s*OctetString\nVALUE\s*:\s*updated@example\.test/u
+        );
+        expect(apiCallCount(harness, 'snmp.translateOid')).toBe(0);
+    });
+
+    test('uses identical GET, GET-NEXT, and WALK output with full OID value paths and suffixes', async ({
+        page
+    }, testInfo) => {
+        const systemNode = harness.controller.state.snmp.mibStatus.oidTree[0];
+        const objectOid = '1.3.6.1.2.1.1.2';
+        const instanceOid = objectOid + '.0';
+        const valueOid = '1.3.6.1.2.1.1.4.0';
+        systemNode.children.push({
+            ...systemNode.children[0],
+            title: 'sysObjectID',
+            key: objectOid,
+            oid: objectOid,
+            objectName: 'sysObjectID',
+            moduleQualifiedName: 'SNMPv2-MIB::sysObjectID',
+            pathName: 'iso.org.dod.internet.mgmt.mib-2.system.sysObjectID',
+            syntax: 'OBJECT IDENTIFIER',
+            queryOid: instanceOid,
+            treePath: [systemNode.oid, objectOid]
+        });
+        const oidVarbind = { oid: instanceOid, type: 'OID', value: valueOid };
+        harness.controller.state.snmp.responseRows['snmp.sendGetRequest'] = [oidVarbind];
+        harness.controller.state.snmp.responseRows['snmp.sendGetNextRequest'] = [oidVarbind];
+        harness.controller.state.snmp.responseRows['snmp.sendWalkRequest'] = [oidVarbind];
+
+        await startSnmpRuntime(page);
+        await page.setViewportSize({ width: 1440, height: 1000 });
+        await page.goto(MIB_WORKSPACE_ROUTE);
+        await expandSystemTree(page);
+
+        const operations = page.locator('.snmp-mib-operations');
+        const getMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysObjectID'));
+        await getMenu.getByRole('menuitem', { name: 'GET 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET', exact: true }).click();
+        const result = operations.locator('.operation-result-output');
+        const expectedOutput = [
+            '#1',
+            `OID   : ${instanceOid}`,
+            '        iso.org.dod.internet.mgmt.mib-2.system.sysObjectID',
+            'INDEX : 0',
+            'TYPE  : OID',
+            `VALUE : ${valueOid}`,
+            '        iso.org.dod.internet.mgmt.mib-2.system.sysContact',
+            'VALUE SUFFIX : 0'
+        ].join('\n');
+        await expect(result).toHaveValue(expectedOutput);
+        await expect(result).toHaveAttribute('aria-label', 'SNMP 响应结果');
+        await expect(result).toHaveAttribute('readonly', '');
+        const getOutput = await result.inputValue();
+        await page.screenshot({ path: testInfo.outputPath('snmp-unified-response.png'), fullPage: true });
+
+        const getNextMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysDescr'));
+        await getNextMenu.getByRole('menuitem', { name: 'GET-NEXT 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET-NEXT', exact: true }).click();
+        await expect(result).toHaveValue(getOutput);
+
+        const walkMenu = await openMibContextMenu(page, mibTreeNode(page, 'system'));
+        await walkMenu.getByRole('menuitem', { name: 'WALK 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '开始 WALK', exact: true }).click();
+        await expect(result).toHaveValue(getOutput);
+
+        harness.controller.state.snmp.responseRows['snmp.sendWalkRequest'] = [
+            { oid: '1.3.6.1.2.1.1.1.0', type: 'OctetString', value: 'NetNexus E2E' },
+            oidVarbind
+        ];
+        await operations.getByRole('button', { name: '开始 WALK', exact: true }).click();
+        await expect(result).toHaveValue(
+            /^#1\nOID\s*:\s*1\.3\.6\.1\.2\.1\.1\.1\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysDescr\nINDEX\s*:\s*0\nTYPE\s*:\s*OctetString\nVALUE\s*:\s*NetNexus E2E\n\n#2\n/u
+        );
+        await expect(result).toHaveValue(
+            /#2\nOID\s*:\s*1\.3\.6\.1\.2\.1\.1\.2\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysObjectID\nINDEX\s*:\s*0\nTYPE\s*:\s*OID\nVALUE\s*:\s*1\.3\.6\.1\.2\.1\.1\.4\.0\n\s+iso\.org\.dod\.internet\.mgmt\.mib-2\.system\.sysContact\nVALUE SUFFIX\s*:\s*0$/u
+        );
+        await expect(operations.locator('.operation-result-summary')).toContainText('2 条');
+        expect(apiCallCount(harness, 'snmp.translateOid')).toBe(0);
+    });
+
+    test('labels unmatched children of a known OID container as suffixes', async ({ page }) => {
+        const enterpriseOid = '1.3.6.1.4.1';
+        const unknownOid = enterpriseOid + '.99999.1.0';
+        const unknownVarbind = { oid: unknownOid, type: 'Integer', value: 7 };
+        harness.controller.state.snmp.mibStatus.oidTree.push({
+            title: 'enterprises',
+            key: enterpriseOid,
+            oid: enterpriseOid,
+            objectName: 'enterprises',
+            moduleQualifiedName: 'SNMPv2-SMI::enterprises',
+            moduleName: 'SNMPv2-SMI',
+            pathName: 'iso.org.dod.internet.private.enterprises',
+            macro: 'OBJECT IDENTIFIER',
+            hasChildren: false,
+            isLeaf: true,
+            children: []
+        });
+        harness.controller.state.snmp.responseRows['snmp.sendGetRequest'] = [unknownVarbind];
+        harness.controller.state.snmp.responseRows['snmp.sendWalkRequest'] = [unknownVarbind];
+
+        await startSnmpRuntime(page);
+        await page.goto(MIB_WORKSPACE_ROUTE);
+        await expandSystemTree(page);
+
+        const operations = page.locator('.snmp-mib-operations');
+        const getMenu = await openMibContextMenu(page, mibTreeNode(page, 'sysDescr'));
+        await getMenu.getByRole('menuitem', { name: 'GET 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '发送 GET', exact: true }).click();
+        const result = operations.locator('.operation-result-output');
+        await expect(result).toHaveValue(
+            /OID\s*:\s*1\.3\.6\.1\.4\.1\.99999\.1\.0\n\s+iso\.org\.dod\.internet\.private\.enterprises\nSUFFIX\s*:\s*99999\.1\.0\n/u
+        );
+        await expect(result).not.toHaveValue(/INDEX/u);
+
+        const walkMenu = await openMibContextMenu(page, mibTreeNode(page, 'system'));
+        await walkMenu.getByRole('menuitem', { name: 'WALK 查询', exact: true }).click();
+        await operations.getByRole('button', { name: '开始 WALK', exact: true }).click();
+        await expect(result).toHaveValue(
+            /OID\s*:\s*1\.3\.6\.1\.4\.1\.99999\.1\.0\n\s+iso\.org\.dod\.internet\.private\.enterprises\nSUFFIX\s*:\s*99999\.1\.0\n/u
+        );
+        await expect(result).not.toHaveValue(/INDEX/u);
+        expect(apiCallCount(harness, 'snmp.translateOid')).toBe(0);
     });
 
     test('locates a tree node by OID without opening an operation', async ({ page }) => {

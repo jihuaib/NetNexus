@@ -37,16 +37,47 @@ assert.equal(trapVarbind.value, '0001ff41');
 assert.equal(trapVarbind.valueEncoding, 'hex');
 
 const demoMibPath = path.join(__dirname, '../../scripts/manual/snmp/mibs/NETNEXUS-DEMO-MIB.mib');
+const demoIfStatusObjectOid = '1.3.6.1.4.1.55555.1.2.1.1.3';
 const demoIfStatusOid = '1.3.6.1.4.1.55555.1.2.1.1.3.1';
 const demoAgentCounterOid = '1.3.6.1.4.1.55555.1.1.2.0';
-registry.compileMibFiles([demoMibPath]);
-
-const enumOidInfo = registry.translateOid(demoIfStatusOid);
-assert.deepEqual(enumOidInfo.enumValues, {
+const demoIfStatusEnumValues = {
     1: 'up',
     2: 'down',
     3: 'testing'
-});
+};
+const demoIfStatusDescription = 'Writable demo interface status.';
+registry.compileMibFiles([demoMibPath]);
+
+const enumOidInfo = registry.translateOid(demoIfStatusOid);
+assert.deepEqual(enumOidInfo.enumValues, demoIfStatusEnumValues);
+
+function findOidTreeNode(nodes, oid) {
+    for (const node of nodes) {
+        if (node.oid === oid) return node;
+        const child = findOidTreeNode(node.children, oid);
+        if (child) return child;
+    }
+    return null;
+}
+
+function assertTreeNodeDetails(node, enumValues, description) {
+    assert.ok(node, 'Expected MIB object in OID tree');
+    assert.deepEqual(node.enumValues, enumValues);
+    assert.equal(node.description, description);
+}
+
+const demoIfEntryOid = '1.3.6.1.4.1.55555.1.2.1.1';
+assertTreeNodeDetails(
+    registry.getOidTreeChildren(demoIfEntryOid).find(node => node.oid === demoIfStatusObjectOid),
+    demoIfStatusEnumValues,
+    demoIfStatusDescription
+);
+assertTreeNodeDetails(
+    findOidTreeNode(registry.buildOidTree(), demoIfStatusObjectOid),
+    demoIfStatusEnumValues,
+    demoIfStatusDescription
+);
+assertTreeNodeDetails(registry.toOidTreeNode('1.3.6.1.4.1.55555.999'), {}, '');
 
 const enumTrapVarbind = registry.enrichVarbind({
     oid: demoIfStatusOid,
@@ -56,6 +87,12 @@ const enumTrapVarbind = registry.enrichVarbind({
 assert.equal(enumTrapVarbind.value, '2');
 assert.equal(enumTrapVarbind.enumName, 'down');
 assert.equal(enumTrapVarbind.displayValue, 'down (2)');
+assert.equal(
+    enumTrapVarbind.oidPath,
+    'iso.org.dod.internet.private.enterprises.netNexusDemoMIB.netNexusDemoObjects.demoTables.demoIfTable.demoIfEntry.demoIfStatus'
+);
+assert.equal(enumTrapVarbind.oidInstance, '1');
+assert.equal(enumTrapVarbind.oidMacro, 'OBJECT-TYPE');
 
 const unknownEnumTrapVarbind = registry.enrichVarbind({
     oid: demoIfStatusOid,
@@ -74,9 +111,26 @@ const nonEnumIntegerVarbind = registry.enrichVarbind({
 assert.equal(nonEnumIntegerVarbind.enumName, undefined);
 assert.equal(nonEnumIntegerVarbind.displayValue, undefined);
 
+for (const [value, valueName, valueInstance] of [
+    [demoAgentCounterOid, 'NETNEXUS-DEMO-MIB::demoAgentCounter', '0'],
+    [`${demoIfStatusObjectOid}.1.4.192.0.2.1`, 'NETNEXUS-DEMO-MIB::demoIfStatus', '1.4.192.0.2.1']
+]) {
+    const oidValueVarbind = registry.enrichVarbind({
+        oid: '1.3.6.1.2.1.1.2.0',
+        type: snmp.ObjectType.OID,
+        value
+    });
+    assert.equal(oidValueVarbind.value, value);
+    assert.equal(oidValueVarbind.valueName, valueName);
+    assert.equal(oidValueVarbind.valueInstance, valueInstance);
+}
+assert.equal(nonEnumIntegerVarbind.valueName, '');
+assert.equal(nonEnumIntegerVarbind.valueInstance, '');
+
 const mibDir = path.join(__dirname, '../../node_modules/net-snmp/lib/mibs');
 const textualConventionRegistry = new MibRegistry();
 textualConventionRegistry.compileMibFiles([path.join(mibDir, 'IF-MIB.mib'), path.join(mibDir, 'IANAifType-MIB.mib')]);
+const truthValueObjectOid = '1.3.6.1.2.1.31.1.1.1.16';
 const truthValueVarbind = textualConventionRegistry.enrichVarbind({
     oid: '1.3.6.1.2.1.31.1.1.1.16.1',
     type: snmp.ObjectType.Integer,
@@ -84,6 +138,20 @@ const truthValueVarbind = textualConventionRegistry.enrichVarbind({
 });
 assert.equal(truthValueVarbind.enumName, 'false');
 assert.equal(truthValueVarbind.displayValue, 'false (2)');
+
+const truthValueEnumValues = { 1: 'true', 2: 'false' };
+const truthValueDescription = textualConventionRegistry.translateOid(truthValueObjectOid).description;
+assert.ok(truthValueDescription, 'Expected IF-MIB object description');
+assertTreeNodeDetails(
+    textualConventionRegistry.getOidTreeChildren('1.3.6.1.2.1.31.1.1.1').find(node => node.oid === truthValueObjectOid),
+    truthValueEnumValues,
+    truthValueDescription
+);
+assertTreeNodeDetails(
+    findOidTreeNode(textualConventionRegistry.buildOidTree(), truthValueObjectOid),
+    truthValueEnumValues,
+    truthValueDescription
+);
 
 const cacheDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-snmp-enum-'));
 try {
@@ -94,14 +162,19 @@ try {
     const cacheReader = new MibRegistry();
     const cachedSummary = cacheReader.loadOrCompileMibFiles([demoMibPath], { cacheFilePath });
     assert.equal(cachedSummary.cacheHit, true);
-    assert.equal(
-        cacheReader.enrichVarbind({
-            oid: demoIfStatusOid,
-            type: snmp.ObjectType.Integer,
-            value: 3
-        }).displayValue,
-        'testing (3)'
+    assertTreeNodeDetails(
+        cacheReader.getOidTreeChildren(demoIfEntryOid).find(node => node.oid === demoIfStatusObjectOid),
+        demoIfStatusEnumValues,
+        demoIfStatusDescription
     );
+    const cachedEnumVarbind = cacheReader.enrichVarbind({
+        oid: demoIfStatusOid,
+        type: snmp.ObjectType.Integer,
+        value: 3
+    });
+    assert.equal(cachedEnumVarbind.displayValue, 'testing (3)');
+    assert.equal(cachedEnumVarbind.oidPath, enumTrapVarbind.oidPath);
+    assert.equal(cachedEnumVarbind.oidInstance, '1');
 } finally {
     fs.rmSync(cacheDir, { recursive: true, force: true });
 }

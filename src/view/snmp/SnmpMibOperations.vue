@@ -175,36 +175,19 @@
                 <div class="operation-result-scroll">
                     <nn-alert v-if="resultError" type="error" show-icon message="请求失败" :description="resultError" />
 
-                    <nn-descriptions
-                        v-else-if="varbindResult"
-                        :column="1"
-                        bordered
-                        size="small"
-                        class="operation-result-descriptions"
-                    >
-                        <nn-descriptions-item label="对象">
-                            {{ varbindResult.oidName || varbindResult.moduleQualifiedName || targetNodeName }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="OID">
-                            <nn-typography-text copyable>{{ varbindResult.oid || form.oid || '-' }}</nn-typography-text>
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="类型">
-                            {{ varbindResult.type || form.type || '-' }}
-                        </nn-descriptions-item>
-                        <nn-descriptions-item label="值">
-                            <nn-typography-text copyable>
-                                {{ displayVarbindValue(varbindResult) }}
-                            </nn-typography-text>
-                        </nn-descriptions-item>
-                    </nn-descriptions>
-
-                    <div v-else-if="walkRows.length" class="walk-result">
-                        <div class="walk-result-summary">
-                            <nn-tag color="blue">{{ walkRows.length }} 条</nn-tag>
+                    <div v-else-if="responseRows.length" class="operation-result">
+                        <div class="operation-result-summary">
+                            <nn-tag color="blue">{{ responseRows.length }} 条</nn-tag>
                             <nn-tag v-if="walkMeta?.limitReached" color="warning">达到上限</nn-tag>
                             <span v-else-if="walkMeta?.stoppedBy">停止原因：{{ walkMeta.stoppedBy }}</span>
                         </div>
-                        <textarea class="walk-result-output" readonly spellcheck="false" :value="walkOutputText" />
+                        <textarea
+                            class="operation-result-output"
+                            aria-label="SNMP 响应结果"
+                            readonly
+                            spellcheck="false"
+                            :value="responseOutputText"
+                        />
                     </div>
 
                     <nn-empty v-else :description="executing ? '正在等待设备响应' : '执行请求后在此查看响应'" />
@@ -350,15 +333,28 @@
         const value = varbind?.displayValue ?? varbind?.value;
         return value === undefined || value === null || value === '' ? '-' : String(value);
     };
-    const walkOutputText = computed(() =>
-        walkRows.value
+    const displayVarbindOidName = varbind =>
+        varbind?.oidPath || varbind?.pathName || varbind?.oidName || varbind?.moduleQualifiedName || '';
+    const varbindOidSuffix = varbind => varbind?.oidInstance || varbind?.instanceSuffix || '';
+    const varbindOidIsInstance = varbind => (varbind?.oidMacro || varbind?.macro) === 'OBJECT-TYPE';
+    const displayVarbindValueName = varbind => varbind?.valuePath || varbind?.valueName || '';
+    const responseRows = computed(() => (varbindResult.value ? [varbindResult.value] : walkRows.value));
+    const responseOutputText = computed(() =>
+        responseRows.value
             .map((row, index) =>
                 [
-                    `#${index + 1} ${row.oidName || row.moduleQualifiedName || row.oid || '-'}`,
+                    `#${index + 1}`,
                     `OID   : ${row.oid || '-'}`,
+                    displayVarbindOidName(row) && `        ${displayVarbindOidName(row)}`,
+                    varbindOidSuffix(row) &&
+                        `${varbindOidIsInstance(row) ? 'INDEX ' : 'SUFFIX'}: ${varbindOidSuffix(row)}`,
                     `TYPE  : ${row.type || '-'}`,
-                    `VALUE : ${displayVarbindValue(row)}`
-                ].join('\n')
+                    `VALUE : ${displayVarbindValue(row)}`,
+                    displayVarbindValueName(row) && `        ${displayVarbindValueName(row)}`,
+                    row.valueInstance && `VALUE SUFFIX : ${row.valueInstance}`
+                ]
+                    .filter(Boolean)
+                    .join('\n')
             )
             .join('\n\n')
     );
@@ -811,23 +807,14 @@
         background: var(--nn-color-primary);
     }
 
-    .operation-result-descriptions :deep(.nn-descriptions-item-label) {
-        width: 96px;
-    }
-
-    .operation-result-descriptions :deep(.nn-descriptions-item-content) {
-        min-width: 0;
-        overflow-wrap: anywhere;
-    }
-
-    .walk-result {
+    .operation-result {
         display: flex;
         height: 100%;
         min-height: 160px;
         flex-direction: column;
     }
 
-    .walk-result-summary {
+    .operation-result-summary {
         display: flex;
         flex: 0 0 auto;
         align-items: center;
@@ -837,7 +824,7 @@
         font-size: 11px;
     }
 
-    .walk-result-output {
+    .operation-result-output {
         width: 100%;
         min-height: 140px;
         flex: 1;
