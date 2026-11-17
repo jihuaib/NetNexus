@@ -7,6 +7,8 @@
 
 #include <libyang/libyang.h>
 #include <libyang/version.h>
+#include "tree_schema_internal.h"
+#include "tree_schema_free.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -17,7 +19,7 @@
 #include <stdlib.h>
 #include <string.h>
 
-#define EXPORT_SCHEMA_VERSION 4
+#define EXPORT_SCHEMA_VERSION 5
 #define ROOT_NODE_ID "yang-schema-root"
 #define MAX_EXPORT_NODES ((size_t)100000)
 #define MAX_EXPORT_DEPTH ((size_t)256)
@@ -1434,6 +1436,115 @@ serialize_tree(struct json_buffer *buffer, const struct export_tree *tree)
     return buffer->failed ? -1 : 0;
 }
 
+/* The private entry point is built into our pinned static libyang. */
+LY_ERR netnexus_yang_parse_metadata(struct ly_ctx *ctx, struct ly_in *in, struct lys_module **module);
+
+static void
+json_metadata(struct json_buffer *json, const struct lys_module *module)
+{
+    const struct lysp_module *parsed = module->parsed;
+    const struct lysp_submodule *sub = parsed->is_submod ? (const struct lysp_submodule *)parsed : NULL;
+    const char *revision = lysp_last_revision(parsed, parsed->revs);
+    LY_ARRAY_COUNT_TYPE index;
+
+    json_raw(json, "{");
+    json_key(json, "kind"); json_string(json, sub ? "submodule" : "module");
+    json_raw(json, ","); json_key(json, "name"); json_string(json, sub ? sub->name : module->name);
+    json_raw(json, ","); json_key(json, "yangVersion");
+    json_string(json, parsed->version == LYS_VERSION_1_1 ? "1.1" : "1");
+    json_raw(json, ","); json_key(json, "namespace"); json_string(json, module->ns);
+    json_raw(json, ","); json_key(json, "prefix"); json_string(json, sub ? NULL : module->prefix);
+    json_raw(json, ","); json_key(json, "belongsTo"); json_string(json, sub ? module->name : NULL);
+    json_raw(json, ","); json_key(json, "belongsToPrefix"); json_string(json, sub ? sub->prefix : NULL);
+    json_raw(json, ","); json_key(json, "organization"); json_string(json, sub ? sub->org : module->org);
+    json_raw(json, ","); json_key(json, "description"); json_string(json, sub ? sub->dsc : module->dsc);
+    json_raw(json, ","); json_key(json, "revision"); json_string(json, revision);
+    json_raw(json, ",\"revisions\":[");
+    LY_ARRAY_FOR(parsed->revs, index) {
+        if (index) json_raw(json, ",");
+        json_string(json, parsed->revs[index].date);
+    }
+    json_raw(json, "],\"imports\":[");
+    LY_ARRAY_FOR(parsed->imports, index) {
+        const struct lysp_import *import = &parsed->imports[index];
+        if (index) json_raw(json, ",");
+        json_raw(json, "{\"kind\":\"import\",");
+        json_key(json, "name"); json_string(json, import->name);
+        json_raw(json, ","); json_key(json, "revisionDate"); json_string(json, import->rev[0] ? import->rev : NULL);
+        json_raw(json, ","); json_key(json, "prefix"); json_string(json, import->prefix);
+        json_raw(json, ","); json_key(json, "description"); json_string(json, import->dsc);
+        json_raw(json, "}");
+    }
+    json_raw(json, "],\"includes\":[");
+    LY_ARRAY_FOR(parsed->includes, index) {
+        const struct lysp_include *include = &parsed->includes[index];
+        if (index) json_raw(json, ",");
+        json_raw(json, "{\"kind\":\"include\",");
+        json_key(json, "name"); json_string(json, include->name);
+        json_raw(json, ","); json_key(json, "revisionDate"); json_string(json, include->rev[0] ? include->rev : NULL);
+        json_raw(json, ","); json_key(json, "description"); json_string(json, include->dsc);
+        json_raw(json, "}");
+    }
+    json_raw(json, "],\"features\":[");
+    LY_ARRAY_FOR(parsed->features, index) {
+        if (index) json_raw(json, ",");
+        json_string(json, parsed->features[index].name);
+    }
+    json_raw(json, "],\"deviations\":[");
+    LY_ARRAY_FOR(parsed->deviations, index) {
+        if (index) json_raw(json, ",");
+        json_raw(json, "{"); json_key(json, "target"); json_string(json, parsed->deviations[index].nodeid);
+        json_raw(json, "}");
+    }
+    json_raw(json, "]}");
+}
+
+static int
+export_metadata(const char *path, const char *search_path)
+{
+    struct ly_ctx *ctx = NULL;
+    struct ly_in *in = NULL;
+    struct lys_module *module = NULL;
+    const struct ly_err_item *error;
+    struct json_buffer json = {0};
+    LY_ERR result;
+    int first = 1, exit_code = EXIT_FAILURE;
+
+    /* libyang 5 loads its own built-in modules from the runtime's module directory
+     * when creating a context. Only those modules are needed, never user imports. */
+    if (ly_ctx_new(search_path, LY_CTX_NO_YANGLIBRARY | LY_CTX_DISABLE_SEARCHDIR_CWD |
+            LY_CTX_EXPLICIT_COMPILE | LY_CTX_STATIC_PLUGINS_ONLY, &ctx)) goto cleanup;
+    ly_ctx_set_options(ctx, LY_CTX_DISABLE_SEARCHDIRS);
+    ly_log_options(LY_LOSTORE);
+    if (ly_in_new_filepath(path, 0, &in)) goto cleanup;
+    ly_err_clean(ctx, NULL);
+    result = netnexus_yang_parse_metadata(ctx, in, &module);
+    json_raw(&json, "{\"metadataVersion\":1,\"source\":\"libyang\",\"metadata\":");
+    if (!result && module) {
+        json_metadata(&json, module);
+    } else {
+        json_raw(&json, "null");
+    }
+    json_raw(&json, ",\"diagnostics\":[");
+    for (error = ly_err_first(ctx); error; error = error->next) {
+        if (!first) json_raw(&json, ",");
+        first = 0;
+        json_raw(&json, "{\"authoritative\":true,\"code\":\"LIBYANG\",");
+        json_key(&json, "severity"); json_string(&json, error->level == LY_LLERR ? "error" : "warning");
+        json_raw(&json, ","); json_key(&json, "message"); json_string(&json, error->msg);
+        json_raw(&json, ","); json_key(&json, "line"); json_size(&json, (size_t)error->line);
+        json_raw(&json, "}");
+    }
+    json_raw(&json, "]}\n");
+    if (!json.failed && (fwrite(json.data, 1, json.length, stdout) == json.length)) exit_code = EXIT_SUCCESS;
+cleanup:
+    free(json.data);
+    if (module) lys_module_free(ctx, module, 0);
+    ly_in_free(in, 0);
+    if (ctx) ly_ctx_destroy(ctx);
+    return exit_code;
+}
+
 static void
 print_usage(FILE *stream)
 {
@@ -1441,6 +1552,7 @@ print_usage(FILE *stream)
             "Usage: netnexus-libyang-schema [-p DIR]... [-F MODULE:FEATURES]... "
             "[-D DEVIATION.yang]... [--schema-list PATHS.list]... MODULE.yang...\n"
             "Schema path lists contain UTF-8 paths separated and terminated by NUL bytes.\n");
+    fprintf(stream, "       netnexus-libyang-schema --metadata [-p RUNTIME_MODULE_DIR] MODULE.yang\n");
 }
 
 static const char *
@@ -1468,7 +1580,7 @@ main(int argc, char **argv)
     char *directory = NULL, *initial_search_path = NULL;
     uint16_t context_options;
     size_t explicit_search_path_count = 0, index;
-    int argument, exit_code = EXIT_FAILURE;
+    int argument, metadata_only = 0, exit_code = EXIT_FAILURE;
 
 #ifdef _WIN32
     if (!setlocale(LC_CTYPE, ".UTF8")) {
@@ -1488,7 +1600,9 @@ main(int argc, char **argv)
             exit_code = EXIT_SUCCESS;
             goto cleanup;
         }
-        if (!strcmp(argv[argument], "-p") || !strcmp(argv[argument], "--path")) {
+        if (!strcmp(argv[argument], "--metadata")) {
+            metadata_only = 1;
+        } else if (!strcmp(argv[argument], "-p") || !strcmp(argv[argument], "--path")) {
             value = required_option_value(argc, argv, &argument, argv[argument]);
             if (!value || string_list_add(&search_paths, value, 1)) {
                 goto cleanup;
@@ -1519,6 +1633,15 @@ main(int argc, char **argv)
     if (!schema_paths.count) {
         fprintf(stderr, "At least one top-level YANG module is required.\n");
         print_usage(stderr);
+        goto cleanup;
+    }
+    if (metadata_only) {
+        if ((schema_paths.count != 1) || deviations.count || feature_specs.count) {
+            fprintf(stderr, "Metadata mode requires exactly one source and no compilation options.\n");
+            goto cleanup;
+        }
+        initial_search_path = join_search_paths(&search_paths);
+        exit_code = export_metadata(schema_paths.items[0], initial_search_path);
         goto cleanup;
     }
     explicit_search_path_count = search_paths.count;

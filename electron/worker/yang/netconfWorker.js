@@ -42,7 +42,7 @@ const {
     extractRpcMessageId,
     rpcReplyDataToConfig
 } = require('../../utils/netconf');
-const { parseYang } = require('../../utils/yang');
+const { parseYangMetadata } = require('../../utils/yang');
 const { NETCONF_REQ_TYPES, YANG_EVT_TYPES, NETCONF_CAPABILITIES, NETCONF_LIMITS } = require('../../const/yangConst');
 
 const MAX_PRIVATE_KEY_BYTES = 1024 * 1024;
@@ -2254,7 +2254,7 @@ class NetconfWorkerService {
             error.code = 'NETCONF_SCHEMA_TOO_LARGE';
             throw error;
         }
-        const parsed = parseYang(result.content, {
+        const parsed = parseYangMetadata(result.content, {
             sourceName: `${identifier}${result.version ? `@${result.version}` : ''}.yang`
         });
         const dependencies = [

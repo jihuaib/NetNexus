@@ -1,6 +1,6 @@
 const { YangRepository } = require('./yangRepository');
 const { YangCompiler, ROOT_NODE_ID } = require('./yangCompiler');
-const parser = require('./yangParser');
+const metadata = require('./yangMetadata');
 const libyangRuntime = require('./libyangRuntime');
 
 const YANG_REQ_TYPES = Object.freeze({
@@ -276,5 +276,5 @@ module.exports = {
     YANG_REQ_TYPES,
     YANG_EVT_TYPES,
     ...libyangRuntime,
-    ...parser
+    ...metadata
 };

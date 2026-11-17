@@ -189,6 +189,8 @@ function getBuildInputPaths(platform = process.platform) {
         ...PINNED_IANA_MODULE_FILES.map(file => path.join(IANA_MODULE_DIRECTORY_RELATIVE_PATH, file)),
         'scripts/libyang-runtime-config.js',
         'scripts/netnexus-libyang-schema.c',
+        'scripts/libyang-metadata-parser.c',
+        'scripts/prepare-libyang-metadata.js',
         'scripts/verify-libyang-iana-modules.js',
         'scripts/write-libyang-runtime-manifest.js'
     ];
@@ -382,9 +384,9 @@ function verifyRuntime(options = {}) {
             `Unable to read bundled libyang Schema helper version from: ${String(schemaExecution.stdout || '').trim()}`
         );
     }
-    if (schemaVersion.contractVersion !== 4) {
+    if (schemaVersion.contractVersion !== 5) {
         throw new Error(
-            `Bundled libyang Schema helper contract ${schemaVersion.contractVersion} does not match required contract 4`
+            `Bundled libyang Schema helper contract ${schemaVersion.contractVersion} does not match required contract 5`
         );
     }
     if (schemaVersion.libyangVersion !== expectedVersion) {

@@ -356,6 +356,99 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(settingsDialog.getByText(`libyang ${bundledLibyangVersion}`, { exact: false })).toBeVisible();
     });
 
+    test('shows file warning details before compilation and preserves failure severity', async ({ page }, testInfo) => {
+        const original = harness.controller.state.yang.modules.find(module => module.isLocal);
+        expect(original).toBeTruthy();
+        const firstWarning = {
+            severity: 'warning',
+            code: 'LIBYANG',
+            source: original.fileName,
+            line: 63,
+            column: 5,
+            message: `Duplicate revision 2026-07-09 in module "${original.name}".`
+        };
+        const secondWarning = {
+            ...firstWarning,
+            line: null,
+            column: null,
+            message: `Duplicate revision 2026-04-11 in module "${original.name}".`
+        };
+        const failed = {
+            ...original,
+            id: 'failed-model',
+            moduleId: 'failed-model',
+            name: 'failed-model',
+            fileName: 'failed-model.yang',
+            compileStatus: 'failed',
+            diagnostics: [{ ...secondWarning, source: 'failed-model.yang' }],
+            compileDiagnostic: {
+                severity: 'error',
+                source: 'failed-model.yang',
+                line: 12,
+                message: 'Referenced type "unknown-type" not found.'
+            }
+        };
+        const originalCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            if (method === 'yang.registry.listModules') {
+                return {
+                    status: 'success',
+                    data: {
+                        modules: [
+                            {
+                                ...original,
+                                compileStatus: 'pending',
+                                diagnostics: [firstWarning, secondWarning, firstWarning]
+                            },
+                            failed
+                        ]
+                    }
+                };
+            }
+            return originalCall(method, ...args);
+        };
+
+        await page.goto('/#/yang/yang-modules');
+        const warningTrigger = page.getByRole('button', { name: `查看 ${original.name} 的文件诊断（2 条）` });
+        await expect(warningTrigger).toContainText('有警告 · 2');
+        await warningTrigger.hover();
+        await expect(page.getByRole('tooltip').filter({ hasText: firstWarning.message })).toBeVisible();
+        await warningTrigger.focus();
+        await page.keyboard.press('Enter');
+        const details = page.getByTestId('yang-module-diagnostics');
+        await expect(details).toBeVisible();
+        await expect(details.locator('.module-diagnostic-item')).toHaveCount(2);
+        await expect(details).toContainText(firstWarning.message);
+        await expect(details).toContainText(secondWarning.message);
+        await expect(details).toContainText(`${original.fileName}:63:5`);
+        await expect(details).toContainText('警告 2');
+        await page.screenshot({ path: testInfo.outputPath('yang-file-warning-details.png') });
+
+        await details.getByRole('button', { name: '查看源码', exact: true }).click();
+        await expect(details).toBeHidden();
+        await expect(page.locator('.source-preview')).toContainText(`module ${original.name}`);
+        await page
+            .locator('.nn-drawer-content')
+            .filter({ has: page.locator('.source-preview') })
+            .getByRole('button', { name: '关闭', exact: true })
+            .click();
+
+        const failedTrigger = page.getByRole('button', { name: '查看 failed-model 的文件诊断（2 条）' });
+        await expect(failedTrigger).toContainText('失败 · 2');
+        await failedTrigger.click();
+        await expect(details).toContainText(failed.compileDiagnostic.message);
+        await expect(details).toContainText('错误 1');
+        await expect(details).toContainText('警告 1');
+        await page.setViewportSize({ width: 390, height: 844 });
+        await expect(details).toBeVisible();
+        const bounds = await details.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(0);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(391);
+        await page.screenshot({ path: testInfo.outputPath('yang-file-diagnostics-narrow.png') });
+        await page.goto('/#/yang/yang-connection');
+        await expect(details).toBeHidden();
+    });
+
     test('keeps hidden model tooltips off the global capture-scroll path at scale', async ({ page }) => {
         test.setTimeout(60_000);
 

@@ -146,6 +146,8 @@ YANG 的 import/include 依赖必须同时存在于本地仓库。建议下载�
 
 模型编译只从“模型列表 → 编译所选”发起，避免无意中编译整个本地仓库。所选模型能够解析到的 import/include 依赖会自动加入编译集合。编译在 Worker 中运行，不阻塞页面，进度会显示依赖准备、libyang 编译、Schema 索引和缓存阶段。
 
+文件状态存在诊断时，标签会显示诊断条数。悬停可查看摘要，点击标签可展开完整的警告和错误、文件名及可用的行列号，并可直接查看模型源码；无需先执行编译。
+
 模型列表底部的编译日志会实时显示编译阶段和逐文件状态，并保留最近一次编译的错误、警告和信息。新增导入或下载的模型保持“未编译”，不会清空仍然有效的旧编译结果；再次执行“编译所选”时会扩展现有编译上下文。需要查看源码时，使用模型表格对应行的“源码”按钮。
 
 ![YANG 模型与 libyang 编译日志](images/yang/yang-modules.png)
@@ -155,7 +157,8 @@ libyang 是唯一权威编译引擎：
 - YANG 1.0/1.1 的语法和语义是否合法，以 libyang 结果为准。
 - typedef、uses/refine、augment、deviation、feature、XPath must/when 和跨模块约束由 libyang 校验。
 - 只有固定合同版本的 `netnexus-libyang-schema` 成功完成 libyang 编译并返回通过结构校验的 effective Schema 时，模块和工作区才会标记为“已编译”。
-- JavaScript 解析仅用于导入时提取模块元数据、准备 import/include 依赖和界面索引，不构成编译成功，也不作为 libyang 不可用时的回退路径。
+- 下载、导入和索引阶段调用同一个 libyang helper 的 `--metadata` 模式，使用 libyang 原生解析器提取模块元数据和 import/include 依赖；该模式不加载依赖，也不执行语义编译，因此依赖尚未下载齐时仍可继续递归下载。JavaScript 只负责文件、任务和界面管理，不再包含另一套 YANG 解析器。
+- 下载或导入完成后，编译状态为“待编译”；只有实际编译结果才能标记“已编译”或“编译失败”。重复 revision 等问题的诊断级别统一由 libyang 决定。旧仓库记录会在读取时重新提取元数据，无需重新下载或修改设备原文。
 - 编译缓存同时绑定模型内容、feature/deviation 选项、libyang 版本、helper 合同和可执行文件身份；使用外部 deviation 文件或搜索目录时禁用结果缓存，避免外部依赖变化后复用旧树。
 
 Schema 工作区中的树直接来自 libyang 编译后的 effective schema。`uses`、`augment`、`deviation`、feature 选择以及继承后的 `config`、`mandatory`、`type`、`default` 等语义均由 libyang 解析；JavaScript 不再生成或回退到另一棵 Schema 树。运行时缺失、编译失败或导出结果无效时不会显示非权威预览。
@@ -164,7 +167,7 @@ Terminal leaf and leaf-list nodes expose libyang-derived type, enumeration, and 
 
 当前导出合同的范围是 core effective schema：datastore 数据节点，以及 RPC、action、notification、input 和 output。libyang 仍会编译并校验内置扩展插件，但由 `yang-data`、`structure`、schema-mount 等扩展产生的独立扩展树暂不并入普通 Schema 树；运行时能力中会明确返回 `extensionSchemaExport: false`。
 
-正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时和 `netnexus-libyang-schema` effective-schema 导出工具。“设置 → 运行时”会展示实际使用的引擎、版本和路径；任一内置程序缺失、损坏或与当前系统架构不兼容时，模型列表中的编译按钮会停用并给出修复提示。
+正式安装包应携带当前平台对应的 libyang/`yanglint` 运行时和 `netnexus-libyang-schema` 元数据及 effective-schema 导出工具。“设置 → 运行时”会展示实际使用的引擎、版本和路径；任一内置程序缺失、损坏或与当前系统架构不兼容时，模型列表中的编译按钮会停用并给出修复提示。元数据解析也依赖原生运行时，不使用 JavaScript 回退解析。
 
 打包运行时按平台和 CPU 架构隔离在应用资源目录的 `libyang/<platform>-<arch>/` 下，包括 `bin/yanglint`、`bin/netnexus-libyang-schema` 和配套的 libyang 内置模块。两个程序均静态链接同一个固定版本的 libyang；Worker 使用 Schema 导出工具一次完成权威编译和结构化 JSON 导出。
 
@@ -197,7 +200,7 @@ npm run libyang:build:windows
 
 应用打包前会强制验证平台、架构、执行权限和版本，验证失败则终止打包，避免生成不带权威编译器的安装包。
 
-源码开发或运行时联调可以同时覆盖内置 `yanglint` 和 Schema helper；两者的 libyang 版本必须完全一致，helper 合同必须为版本 4：
+源码开发或运行时联调可以同时覆盖内置 `yanglint` 和 Schema helper；两者的 libyang 版本必须完全一致，helper 合同必须为版本 5：
 
 ```bash
 NETNEXUS_YANGLINT_PATH=/absolute/path/to/yanglint \

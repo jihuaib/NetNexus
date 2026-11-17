@@ -337,6 +337,7 @@ function Assert-WindowsSystemDependencies {
 try {
     $Prerequisites = Assert-WindowsBuildPrerequisites
     $Cmake = $Prerequisites.Cmake
+    $env:Path = (Split-Path -Parent $Cmake) + [IO.Path]::PathSeparator + $env:Path
     $VisualStudioRoot = $Prerequisites.VisualStudioRoot
     $VcpkgLocation = Resolve-VcpkgLocation -VisualStudioRoot $VisualStudioRoot
     $VcpkgRoot = $VcpkgLocation.Path
@@ -390,6 +391,8 @@ try {
         https://github.com/CESNET/libyang.git $SourceDir
     if ($LASTEXITCODE -ne 0) { throw "Unable to clone libyang $($Release.tag)." }
     Assert-GitCommit $SourceDir ($Release.libyangCommit)
+    & node (Join-Path $ProjectRoot 'scripts/prepare-libyang-metadata.js') $SourceDir
+    if ($LASTEXITCODE -ne 0) { throw 'Unable to prepare the libyang metadata adapter.' }
 
     & git -c core.longpaths=true init $GetoptSourceDir
     if ($LASTEXITCODE -ne 0) { throw 'Unable to initialize the pinned getopt source checkout.' }
@@ -590,6 +593,9 @@ endif()
 
     $BinDir = Join-Path $RuntimeTarget 'bin'
     $ModuleDir = Join-Path $RuntimeTarget 'share/yang/modules/libyang'
+    if ([IO.Path]::GetFullPath($RuntimeTarget) -ne [IO.Path]::GetFullPath((Join-Path $ProjectRoot 'resources/libyang/win32-x64'))) {
+        throw "Refusing to replace unexpected runtime directory: $RuntimeTarget"
+    }
     if (Test-Path $RuntimeTarget) { Remove-Item $RuntimeTarget -Recurse -Force }
     New-Item -ItemType Directory -Force -Path $BinDir, $ModuleDir | Out-Null
     Copy-Item ($BuiltYanglint[0].FullName) (Join-Path $BinDir 'yanglint.exe') -Force
@@ -616,6 +622,12 @@ endif()
 }
 finally {
     if (Test-Path $BuildRoot) {
+        $ResolvedBuildRoot = [IO.Path]::GetFullPath($BuildRoot)
+        $ResolvedTempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+        if (-not $ResolvedBuildRoot.StartsWith($ResolvedTempRoot, [StringComparison]::OrdinalIgnoreCase) -or
+            [IO.Path]::GetFileName($ResolvedBuildRoot) -notmatch '^nn-ly-[a-f0-9]{12}$') {
+            throw "Refusing to remove unexpected build directory: $ResolvedBuildRoot"
+        }
         try { Remove-Item $BuildRoot -Recurse -Force }
         catch { Write-Warning "Unable to remove temporary libyang build directory ${BuildRoot}: $($_.Exception.Message)" }
     }

@@ -336,7 +336,6 @@ class YangRuntimeService {
         const metadata = entry?.metadata || {};
         const hash = entry?.hash || entry?.contentHash || entry?.id || '';
         const diagnostics = Array.isArray(entry?.diagnostics) ? entry.diagnostics : [];
-        const hasErrors = diagnostics.some(item => item.severity === 'error');
         const compileDiagnostic = fileResultsByHash.get(hash)?.diagnostic || null;
         return {
             ...entry,
@@ -357,12 +356,8 @@ class YangRuntimeService {
             isLocal: true,
             localPath: entry?.filePath || '',
             filePath: entry?.filePath || '',
-            status: hasErrors ? 'failed' : 'downloaded',
-            compileStatus: compiledHashes.has(hash)
-                ? 'compiled'
-                : failedHashes.has(hash) || hasErrors
-                  ? 'failed'
-                  : 'pending',
+            status: 'downloaded',
+            compileStatus: compiledHashes.has(hash) ? 'compiled' : failedHashes.has(hash) ? 'failed' : 'pending',
             compiled: compiledHashes.has(hash),
             diagnosticCount: diagnostics.length,
             compileDiagnostic,

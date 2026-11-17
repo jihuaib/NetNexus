@@ -410,7 +410,7 @@ function verifyScriptSyntax() {
     assert.match(schemaExporterSource, /--schema-list/);
     assert.match(
         schemaExporterSource,
-        /#define EXPORT_SCHEMA_VERSION 4/,
+        /#define EXPORT_SCHEMA_VERSION 5/,
         'empty-string schema metadata must advance the native helper compatibility contract'
     );
     assert.match(schemaExporterSource, /candidate->augmented_by/);
@@ -869,8 +869,8 @@ function testRuntimePathMapping() {
     assert.equal(parseYanglintVersion('yanglint 5.8.6'), '5.8.6');
     assert.equal(parseYanglintVersion('yanglint version v5.8.6\n'), '5.8.6');
     assert.equal(parseYanglintVersion('libyang 5.8.6'), null);
-    assert.deepEqual(parseSchemaHelperVersion('netnexus-libyang-schema 4 (libyang 5.8.6)\n'), {
-        contractVersion: 4,
+    assert.deepEqual(parseSchemaHelperVersion('netnexus-libyang-schema 5 (libyang 5.8.6)\n'), {
+        contractVersion: 5,
         libyangVersion: '5.8.6'
     });
     assert.equal(parseSchemaHelperVersion('yanglint 5.8.6'), null);
@@ -927,7 +927,7 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     assert.equal(generatedManifest.schemaVersion, 3);
     assert.equal(generatedManifest.executable, 'yanglint');
     assert.equal(generatedManifest.schemaExecutable, 'netnexus-libyang-schema');
-    assert.equal(generatedManifest.schemaContractVersion, 4);
+    assert.equal(generatedManifest.schemaContractVersion, 5);
     assert.match(generatedManifest.buildInputHash, /^[a-f0-9]{64}$/);
     assert.equal(
         generatedManifest.buildInputHash,
@@ -954,7 +954,7 @@ function testRuntimeVerifierWithoutNativeRuntime() {
             assert.equal(command, schemaExecutable);
             return {
                 status: 0,
-                stdout: 'netnexus-libyang-schema 4 (libyang 5.8.6)\n',
+                stdout: 'netnexus-libyang-schema 5 (libyang 5.8.6)\n',
                 stderr: ''
             };
         }
@@ -965,7 +965,7 @@ function testRuntimeVerifierWithoutNativeRuntime() {
     assert.equal(status.version, '5.8.6');
     assert.equal(status.source, 'bundled');
     assert.equal(status.schemaPath, schemaExecutable);
-    assert.equal(status.schemaContractVersion, 4);
+    assert.equal(status.schemaContractVersion, 5);
 
     const firstIanaRuntimeModule = path.join(runtimeModuleDirectory, PINNED_IANA_MODULE_FILES[0]);
     fs.appendFileSync(firstIanaRuntimeModule, '\n// corrupted test fixture\n', 'utf8');
@@ -1167,7 +1167,7 @@ async function testBeforePackHook() {
                     version: '5.8.6',
                     path: `/runtime/${options.arch}/yanglint`,
                     schemaPath: `/runtime/${options.arch}/netnexus-libyang-schema`,
-                    schemaContractVersion: 4
+                    schemaContractVersion: 5
                 };
             },
             write: message => messages.push(message)
@@ -1178,7 +1178,7 @@ async function testBeforePackHook() {
         { projectRoot: '/fixture/project', platform: 'darwin', arch: 'arm64' }
     ]);
     assert.equal(messages.length, 2);
-    assert.match(messages[0], /Verified bundled libyang 5\.8\.6 and effective Schema helper contract 4/);
+    assert.match(messages[0], /Verified bundled libyang 5\.8\.6 and effective Schema helper contract 5/);
 
     await assert.rejects(
         beforePack(

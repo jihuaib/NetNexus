@@ -2,7 +2,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { YangRegistry, parseYang } = require('../../electron/utils/yang');
+const { YangRegistry, parseYangMetadata } = require('../../electron/utils/yang');
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-yang-repository-'));
 const repositoryRoot = path.join(tempDir, 'repository');
@@ -16,19 +16,19 @@ try {
   prefix ld;
   // module commented-out { revision 1900-01-01; }
   /* import phantom { prefix p; } */
-  revision 2026-07-18;
   import common-types {
     prefix ct;
     revision-date 2025-01-02;
   }
   include lexical-extra { revision-date 2026-07-18; }
-  feature fast-mode;
-  deviation "/ld:obsolete" { deviate not-supported; }
   description "quoted // comment and { brace }" +
               ' concatenate safely';
+  revision 2026-07-18;
+  feature fast-mode;
+  deviation "/ld:obsolete" { deviate not-supported; }
   container root { leaf name { type string; } }
 }`;
-    const parsed = parseYang(lexicalSource, { sourceName: 'lexical-demo.yang' });
+    const parsed = parseYangMetadata(lexicalSource, { sourceName: 'lexical-demo.yang' });
     assert.equal(parsed.diagnostics.filter(item => item.severity === 'error').length, 0);
     assert.equal(parsed.metadata.kind, 'module');
     assert.equal(parsed.metadata.name, 'lexical-demo');
@@ -45,16 +45,15 @@ try {
         name: 'common-types',
         revisionDate: '2025-01-02',
         prefix: 'ct',
-        description: null,
-        line: 8,
-        column: 3
+        description: null
     });
     assert.equal(parsed.metadata.includes[0].name, 'lexical-extra');
     assert.equal(parsed.metadata.description, 'quoted // comment and { brace } concatenate safely');
 
-    const malformed = parseYang('module bad { namespace "urn:bad"; /* never closed', { sourceName: 'bad.yang' });
-    assert(malformed.diagnostics.some(item => item.code === 'UNTERMINATED_COMMENT'));
-    assert(malformed.diagnostics.some(item => item.code === 'UNCLOSED_BLOCK'));
+    const malformed = parseYangMetadata('module bad { namespace "urn:bad"; /* never closed', {
+        sourceName: 'bad.yang'
+    });
+    assert(malformed.diagnostics.some(item => item.code === 'LIBYANG' && item.severity === 'error'));
 
     fs.mkdirSync(nestedDirectory, { recursive: true });
     const lexicalPath = path.join(sourceDirectory, 'lexical-demo.yang');
@@ -201,7 +200,7 @@ try {
     visit(repositoryRoot);
     assert.deepEqual(temporaryFiles, [], 'atomic writes must not leave temporary files behind');
 
-    console.log('YANG repository and lexer tests passed');
+    console.log('YANG repository and libyang metadata tests passed');
 } finally {
     fs.rmSync(tempDir, { recursive: true, force: true });
 }

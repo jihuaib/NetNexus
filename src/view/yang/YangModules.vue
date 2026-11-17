@@ -168,8 +168,19 @@
                             </nn-tooltip>
                         </template>
                         <template v-else-if="column.key === 'status'">
-                            <nn-tooltip :title="record.message || record.error || ''">
-                                <nn-tag :color="getStatusMeta(record.status).color">
+                            <nn-tooltip :title="record.diagnosticSummary || record.message || record.error || ''">
+                                <button
+                                    v-if="record.fileDiagnostics.length"
+                                    type="button"
+                                    class="module-diagnostics-trigger"
+                                    :aria-label="`查看 ${record.name} 的文件诊断（${record.fileDiagnostics.length} 条）`"
+                                    @click="openModuleDiagnostics(record)"
+                                >
+                                    <nn-tag :color="getStatusMeta(record.status).color">
+                                        {{ getStatusMeta(record.status).text }} · {{ record.fileDiagnostics.length }}
+                                    </nn-tag>
+                                </button>
+                                <nn-tag v-else :color="getStatusMeta(record.status).color">
                                     <LoadingOutlined v-if="['downloading', 'compiling'].includes(record.status)" spin />
                                     {{ getStatusMeta(record.status).text }}
                                 </nn-tag>
@@ -452,6 +463,46 @@
             </template>
         </nn-modal>
 
+        <nn-drawer
+            v-model:open="moduleDiagnosticsOpen"
+            :title="moduleDiagnosticsTitle"
+            width="min(720px, 100vw)"
+            :z-index="1200"
+        >
+            <section class="module-diagnostics" aria-label="文件诊断详情" data-testid="yang-module-diagnostics">
+                <div class="module-diagnostics-header">
+                    <nn-space>
+                        <nn-tag v-if="moduleDiagnosticErrors" color="error">错误 {{ moduleDiagnosticErrors }}</nn-tag>
+                        <nn-tag v-if="moduleDiagnosticWarnings" color="warning">
+                            警告 {{ moduleDiagnosticWarnings }}
+                        </nn-tag>
+                    </nn-space>
+                    <nn-button
+                        size="small"
+                        :disabled="!runtimeRunning || !moduleDiagnosticRecord?.isLocal"
+                        @click="openDiagnosticSource"
+                    >
+                        查看源码
+                    </nn-button>
+                </div>
+                <ol class="module-diagnostic-list">
+                    <li
+                        v-for="(diagnostic, index) in moduleDiagnosticItems"
+                        :key="index"
+                        class="module-diagnostic-item"
+                    >
+                        <div class="module-diagnostic-heading">
+                            <nn-tag :color="diagnosticColor(diagnostic.severity)">
+                                {{ diagnosticLabel(diagnostic.severity) }}
+                            </nn-tag>
+                            <span class="compile-log-location">{{ formatDiagnosticLocation(diagnostic) }}</span>
+                        </div>
+                        <p class="module-diagnostic-message">{{ diagnostic.message }}</p>
+                    </li>
+                </ol>
+            </section>
+        </nn-drawer>
+
         <nn-drawer v-model:open="sourceDrawerOpen" :title="sourceDrawerTitle" width="720px" :z-index="1200">
             <nn-spin :spinning="sourceLoading">
                 <pre class="source-preview">{{ sourceText || '暂无源码' }}</pre>
@@ -569,6 +620,8 @@
     const sourceLoading = ref(false);
     const sourceText = ref('');
     const sourceModule = ref(null);
+    const moduleDiagnosticsOpen = ref(false);
+    const moduleDiagnosticKey = ref('');
     const diagnosticLoading = ref(false);
     const diagnostics = ref([]);
     const diagnosticFilter = ref('all');
@@ -638,9 +691,10 @@
         if (compileStatus === 'compiled') status = 'compiled';
         if (compileStatus === 'failed') status = 'failed';
         const id = module?.id || module?.moduleId || module?.hash || '';
-        const diagnostics = Array.isArray(module?.diagnostics) ? module.diagnostics : [];
-        if (diagnostics.some(diagnostic => diagnostic.severity === 'error')) status = 'failed';
-        else if (diagnostics.some(diagnostic => ['warning', 'warn'].includes(diagnostic.severity))) status = 'warning';
+        const fileDiagnostics = normalizeModuleDiagnostics(module);
+        if (compileStatus === 'failed' || fileDiagnostics.some(item => ['error', 'fatal'].includes(item.severity))) {
+            status = 'failed';
+        } else if (fileDiagnostics.some(item => ['warning', 'warn'].includes(item.severity))) status = 'warning';
         return {
             ...module,
             id,
@@ -665,15 +719,69 @@
             fileName: module?.fileName || fileBaseName(localPath),
             status,
             compileStatus,
+            fileDiagnostics,
+            diagnosticSummary: fileDiagnostics.length
+                ? `${fileDiagnostics[0].message}${fileDiagnostics.length > 1 ? `（共 ${fileDiagnostics.length} 条）` : ''}；点击查看详情`
+                : '',
             _key: `${name}@${revision || 'none'}`
         };
     };
 
     const normalizeDiagnostic = diagnostic => ({
         ...diagnostic,
+        message: String(diagnostic?.message || diagnostic?.msg || diagnostic?.rawMessage || ''),
         severity: String(diagnostic?.severity || diagnostic?.level || 'error').toLowerCase(),
         fileName: diagnostic?.fileName || fileBaseName(diagnostic?.file || diagnostic?.filePath || diagnostic?.source)
     });
+
+    const normalizeModuleDiagnostics = module => {
+        const items = [...(Array.isArray(module?.diagnostics) ? module.diagnostics : [])];
+        if (module?.compileDiagnostic) items.push(module.compileDiagnostic);
+        const fallbackMessage = module?.compileMessage || module?.message || module?.error;
+        if (!items.length && fallbackMessage && ['failed', 'warning', 'missing'].includes(module?.status)) {
+            items.push({ severity: module.status === 'failed' ? 'error' : 'warning', message: fallbackMessage });
+        }
+        const seen = new Set();
+        return items
+            .filter(item => item && typeof item === 'object')
+            .map(item => {
+                const diagnostic = normalizeDiagnostic(item);
+                if (!diagnostic.fileName) {
+                    diagnostic.fileName =
+                        module.fileName || fileBaseName(module.filePath || module.localPath) || module.name;
+                }
+                return diagnostic;
+            })
+            .filter(item => {
+                if (!item.message) return false;
+                const key = JSON.stringify([item.severity, item.message, item.fileName, item.line, item.column]);
+                if (seen.has(key)) return false;
+                seen.add(key);
+                return true;
+            });
+    };
+
+    const moduleDiagnosticRecord = computed(() =>
+        modules.value.find(module => module._key === moduleDiagnosticKey.value)
+    );
+    const moduleDiagnosticItems = computed(() => moduleDiagnosticRecord.value?.fileDiagnostics || []);
+    const moduleDiagnosticsTitle = computed(() => `${moduleDiagnosticRecord.value?.name || 'YANG 模型'} · 文件诊断`);
+    const moduleDiagnosticErrors = computed(
+        () => moduleDiagnosticItems.value.filter(item => ['error', 'fatal'].includes(item.severity)).length
+    );
+    const moduleDiagnosticWarnings = computed(
+        () => moduleDiagnosticItems.value.filter(item => ['warning', 'warn'].includes(item.severity)).length
+    );
+    const openModuleDiagnostics = module => {
+        moduleDiagnosticKey.value = module._key;
+        moduleDiagnosticsOpen.value = true;
+    };
+    const openDiagnosticSource = () => {
+        const module = moduleDiagnosticRecord.value;
+        if (!module) return;
+        moduleDiagnosticsOpen.value = false;
+        openSource(module);
+    };
 
     const mergeModules = nextModules => {
         const merged = new Map(modules.value.map(module => [module._key, module]));
@@ -1410,6 +1518,8 @@
         sourceLoading.value = false;
         sourceModule.value = null;
         sourceText.value = '';
+        moduleDiagnosticsOpen.value = false;
+        moduleDiagnosticKey.value = '';
     };
 
     const clearWorkspace = () => {
@@ -1784,6 +1894,8 @@
         sourceLoading.value = false;
         deviceModuleModalOpen.value = false;
         sourceDrawerOpen.value = false;
+        moduleDiagnosticsOpen.value = false;
+        moduleDiagnosticKey.value = '';
         sourceModule.value = null;
         sourceText.value = '';
     };
@@ -1846,6 +1958,8 @@
         sourceLoading.value = false;
         deviceModuleModalOpen.value = false;
         sourceDrawerOpen.value = false;
+        moduleDiagnosticsOpen.value = false;
+        moduleDiagnosticKey.value = '';
     });
 
     onBeforeUnmount(() => {
@@ -2027,6 +2141,61 @@
         min-width: 0;
         align-items: center;
         gap: 5px;
+    }
+
+    .module-diagnostics-trigger {
+        display: inline-flex;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        cursor: pointer;
+        font: inherit;
+    }
+
+    .module-diagnostics-trigger:hover {
+        text-decoration: underline;
+    }
+
+    .module-diagnostics-trigger:focus-visible {
+        outline: 2px solid var(--nn-color-primary);
+        outline-offset: 2px;
+    }
+
+    .module-diagnostics-header,
+    .module-diagnostic-heading {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+    }
+
+    .module-diagnostics-header {
+        justify-content: space-between;
+        margin-bottom: 16px;
+    }
+
+    .module-diagnostic-list {
+        margin: 0;
+        padding: 0;
+        list-style: none;
+    }
+
+    .module-diagnostic-item {
+        padding: 12px 0;
+        border-bottom: 1px solid var(--nn-color-border-light);
+    }
+
+    .module-diagnostic-heading,
+    .module-diagnostic-message {
+        overflow-wrap: anywhere;
+    }
+
+    .module-diagnostic-message {
+        margin: 8px 0 0;
+        color: var(--nn-color-text);
+        line-height: 1.6;
+        white-space: pre-wrap;
+        user-select: text;
     }
 
     .module-name,

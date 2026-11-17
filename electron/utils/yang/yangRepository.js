@@ -1,7 +1,7 @@
 const crypto = require('crypto');
 const fs = require('fs');
 const path = require('path');
-const { parseYang } = require('./yangParser');
+const { YangMetadataParser, METADATA_ENGINE } = require('./yangMetadata');
 
 const MANIFEST_SCHEMA_VERSION = 2;
 const DEFAULT_MAX_SOURCE_BYTES = 16 * 1024 * 1024;
@@ -90,6 +90,7 @@ class YangRepository {
         }
         this.rootDir = path.resolve(options.rootDir || path.join(options.userDataPath, 'yang'));
         this.maxSourceBytes = Number(options.maxSourceBytes) || DEFAULT_MAX_SOURCE_BYTES;
+        this.metadataParser = new YangMetadataParser(options);
         this.paths = {
             snapshots: path.join(this.rootDir, 'snapshots'),
             workspaces: path.join(this.rootDir, 'workspaces'),
@@ -171,7 +172,7 @@ class YangRepository {
         this.validateSource(buffer, sourceName);
         const hash = sha256(buffer);
         const text = buffer.toString('utf8');
-        const parsed = parseYang(text, { sourceName });
+        const parsed = this.parseMetadata(text, { sourceName });
         const diagnostics = [...parsed.diagnostics];
 
         if (options.expectedName && parsed.metadata?.name !== options.expectedName) {
@@ -180,9 +181,9 @@ class YangRepository {
                 code: 'MODULE_NAME_MISMATCH',
                 message: `Expected module ${options.expectedName}, received ${parsed.metadata?.name || 'an invalid YANG document'}`,
                 source: sourceName,
-                line: parsed.ast?.line || 1,
-                column: parsed.ast?.column || 1,
-                offset: parsed.ast?.offset || 0
+                line: 1,
+                column: 1,
+                offset: 0
             });
         }
         if (options.revision && parsed.metadata?.revision !== options.revision) {
@@ -191,9 +192,9 @@ class YangRepository {
                 code: 'MODULE_REVISION_MISMATCH',
                 message: `Expected revision ${options.revision}, received ${parsed.metadata?.revision || 'none'}`,
                 source: sourceName,
-                line: parsed.ast?.line || 1,
-                column: parsed.ast?.column || 1,
-                offset: parsed.ast?.offset || 0
+                line: 1,
+                column: 1,
+                offset: 0
             });
         }
 
@@ -207,6 +208,7 @@ class YangRepository {
             updatedAt: now,
             origins: [origin].filter(Boolean),
             metadata: parsed.metadata,
+            metadataEngine: parsed.metadataEngine,
             diagnostics,
             deduplicated: false
         };
@@ -417,6 +419,7 @@ class YangRepository {
             updatedAt: entry.updatedAt || null,
             origins: [...new Set((entry.origins || []).filter(Boolean))],
             metadata,
+            metadataEngine: entry.metadataEngine || null,
             diagnostics: Array.isArray(entry.diagnostics) ? entry.diagnostics : [],
             relativePath: `${MODULES_DIRECTORY_NAME}/${entry.hash}.yang`
         };
@@ -451,11 +454,30 @@ class YangRepository {
         return [...merged.values()];
     }
 
+    parseMetadata(source, options = {}) {
+        return this.metadataParser.parse(source, options);
+    }
+
     expandManifestModules(type, id, manifest) {
-        return (manifest?.modules || []).map(reference => ({
-            ...reference,
-            filePath: this.modulePath(type, id, reference.hash)
-        }));
+        return (manifest?.modules || []).map(reference => {
+            const entry = { ...reference, filePath: this.modulePath(type, id, reference.hash) };
+            if (reference.metadataEngine !== METADATA_ENGINE) {
+                const buffer = this.readEntryBuffer(entry);
+                this.validateSource(buffer, entry.fileName);
+                if (sha256(buffer) !== entry.hash)
+                    throw new Error(`YANG module integrity check failed for ${entry.hash}`);
+                const parsed = this.parseMetadata(buffer.toString('utf8'), { sourceName: entry.fileName });
+                entry.metadata = parsed.metadata;
+                entry.metadataEngine = parsed.metadataEngine;
+                entry.diagnostics = [
+                    ...parsed.diagnostics,
+                    ...(reference.diagnostics || []).filter(item =>
+                        ['MODULE_NAME_MISMATCH', 'MODULE_REVISION_MISMATCH'].includes(item.code)
+                    )
+                ];
+            }
+            return entry;
+        });
     }
 
     pruneModuleDirectory(type, id, hashes) {

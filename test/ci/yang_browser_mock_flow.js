@@ -151,7 +151,7 @@ async function verifyControllerFlow() {
     assert.equal(response.data.available, true);
     assert.equal(response.data.engine, 'libyang');
     assert.equal(response.data.version, getReleaseManifest().libyangVersion);
-    assert.equal(response.data.schemaContractVersion, 4);
+    assert.equal(response.data.schemaContractVersion, 5);
     assert.equal(response.data.source, 'bundled');
 
     response = await controller.call('yang.registry.compile', {});

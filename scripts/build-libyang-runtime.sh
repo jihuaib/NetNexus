@@ -114,6 +114,7 @@ cmake --install "${runtime_build_dir}/pcre2-build" --config Release
 
 git clone --depth 1 --branch "${libyang_tag}" https://github.com/CESNET/libyang.git "${runtime_build_dir}/source"
 assert_git_commit "${runtime_build_dir}/source" "${libyang_commit}"
+node "${project_root}/scripts/prepare-libyang-metadata.js" "${runtime_build_dir}/source"
 
 cmake_configure -S "${runtime_build_dir}/source" -B "${runtime_build_dir}/build" \
     -DCMAKE_BUILD_TYPE=Release \

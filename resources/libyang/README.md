@@ -2,10 +2,16 @@
 
 NetNexus packages platform-specific, non-interactive `yanglint` and
 `netnexus-libyang-schema` executables. The Schema helper is the application
-compiler/exporter and emits contract-v4, schema-v3 effective-schema JSON directly from
+compiler/exporter and emits contract-v5, schema-v3 effective-schema JSON directly from
 libyang's compiled tree. Runtime artifacts are generated from the official
 CESNET/libyang source during packaging and are intentionally not committed to
 Git.
+
+The same helper exposes `--metadata FILE.yang` (metadata-v1 JSON), using the pinned
+libyang statement parser without loading imports/includes or compiling the schema.
+Download dependency discovery and repository indexing use this mode; JavaScript
+does not implement a separate YANG parser. Both build scripts apply the private
+metadata adapter to the pinned libyang source before building the static runtime.
 
 Expected layout:
 

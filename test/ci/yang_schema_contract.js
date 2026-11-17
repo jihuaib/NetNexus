@@ -85,9 +85,9 @@ function assertInvalid(mutate, expectedMessage) {
     );
 }
 
-assert.equal(SCHEMA_HELPER_CONTRACT_VERSION, 4);
+assert.equal(SCHEMA_HELPER_CONTRACT_VERSION, 5);
 assert.equal(LIBYANG_SCHEMA_OUTPUT_VERSION, 3);
-assert.equal(COMPILE_CACHE_SCHEMA_VERSION, 8);
+assert.equal(COMPILE_CACHE_SCHEMA_VERSION, 9);
 
 const validTree = createSchemaTree();
 assert.strictEqual(validateAuthoritativeSchemaTree(validTree), validTree);

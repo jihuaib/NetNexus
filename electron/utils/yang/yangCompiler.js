@@ -2,7 +2,6 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { XMLParser } = require('fast-xml-parser');
-const { parseYang } = require('./yangParser');
 const { sha256, stableStringify, atomicWriteFile, atomicWriteJson } = require('./yangRepository');
 const { LibyangRuntime } = require('./libyangRuntime');
 const {
@@ -13,7 +12,7 @@ const {
     resolveRpcValidationTarget
 } = require('./yangRpcInstanceValidation');
 
-const COMPILE_CACHE_SCHEMA_VERSION = 8;
+const COMPILE_CACHE_SCHEMA_VERSION = 9;
 const LIBYANG_SCHEMA_OUTPUT_VERSION = 3;
 const DEFAULT_COMPILER_EXECUTABLE = 'yanglint';
 const DEFAULT_EXTERNAL_TIMEOUT = 60_000;
@@ -645,7 +644,7 @@ class YangCompiler {
             throw new Error(`YANG module integrity check failed for ${entry.hash}`);
         }
         const source = buffer.toString('utf8');
-        const parsed = parseYang(source, { sourceName: entry.fileName || entry.hash });
+        const parsed = this.repository.parseMetadata(source, { sourceName: entry.fileName || entry.hash });
         return {
             id: `${parsed.metadata?.kind || 'invalid'}:${parsed.metadata?.name || entry.hash}@${parsed.metadata?.revision || 'none'}#${entry.hash.slice(0, 12)}`,
             hash: entry.hash,
@@ -873,7 +872,8 @@ class YangCompiler {
                         const parsed = yinParser.parse(content.toString('utf8'));
                         name = (parsed.module || parsed.submodule)?.['@_name'];
                     } else {
-                        name = parseYang(content.toString('utf8'), { sourceName: relativePath }).metadata?.name;
+                        name = this.repository.parseMetadata(content.toString('utf8'), { sourceName: relativePath })
+                            .metadata?.name;
                     }
                 } catch (_error) {
                     // Leave malformed fallback sources for libyang to diagnose if they are imported.
@@ -930,7 +930,9 @@ class YangCompiler {
             const resolvedPath = path.resolve(deviationPath);
             if (knownPaths.has(normalizedPathKey(resolvedPath))) continue;
             const source = fs.readFileSync(resolvedPath);
-            const parsed = parseYang(source.toString('utf8'), { sourceName: path.basename(resolvedPath) });
+            const parsed = this.repository.parseMetadata(source.toString('utf8'), {
+                sourceName: path.basename(resolvedPath)
+            });
             descriptors.push({
                 hash: sha256(source),
                 path: resolvedPath,
@@ -1666,8 +1668,8 @@ class YangCompiler {
                 diagnostics.push(
                     ...module.diagnostics.map(diagnostic => ({
                         ...diagnostic,
-                        authoritative: false,
-                        origin: 'repository-index'
+                        authoritative: diagnostic.authoritative !== false,
+                        origin: diagnostic.origin || 'libyang-metadata'
                     }))
                 );
             } catch (error) {
@@ -2006,7 +2008,9 @@ class YangCompiler {
             inputs = this.dataValidationSchemaPaths(schemaCompiler).map(schemaPath => {
                 const source = fs.readFileSync(schemaPath);
                 const hash = sha256(source);
-                const parsed = parseYang(source.toString('utf8'), { sourceName: path.basename(schemaPath) });
+                const parsed = this.repository.parseMetadata(source.toString('utf8'), {
+                    sourceName: path.basename(schemaPath)
+                });
                 return {
                     hash,
                     path: schemaPath,

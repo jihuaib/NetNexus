@@ -574,8 +574,8 @@ async function run() {
   yang-version 1.1;
   namespace "urn:missing";
   prefix nm;
-  revision 2026-07-18;
   import absent-types { prefix at; revision-date 2020-01-01; }
+  revision 2026-07-18;
 }`;
         const duplicateOne = `module duplicate-demo {
   yang-version 1.1;
@@ -838,6 +838,30 @@ async function run() {
         assert.match(
             oldHelperProgress.find(event => event.phase === 'file-result')?.diagnostic?.message || '',
             /Unknown option '--schema-list'/u
+        );
+
+        const duplicateRevisionImport = registry.importContents(
+            [
+                {
+                    content: `module same-day-revision {
+                namespace "urn:same-day-revision";
+                prefix sdr;
+                revision 2026-07-09 { description "first change"; }
+                revision 2026-07-09 { description "second change"; }
+                leaf enabled { type boolean; }
+            }`
+                }
+            ],
+            { workspaceId: 'same-day-revision' }
+        );
+        assert.equal(duplicateRevisionImport.summary.invalid, 0);
+        const duplicateRevisionCompile = await registry.compile({ workspaceId: 'same-day-revision' });
+        assert.equal(duplicateRevisionCompile.success, true, JSON.stringify(duplicateRevisionCompile.diagnostics));
+        assert.equal(duplicateRevisionCompile.fileResults[0].status, 'compiled');
+        assert(
+            duplicateRevisionCompile.diagnostics.some(
+                item => item.severity === 'warning' && item.authoritative && /Duplicate revision/u.test(item.message)
+            )
         );
 
         const unavailableRegistry = new YangRegistry({
