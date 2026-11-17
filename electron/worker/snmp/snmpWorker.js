@@ -511,7 +511,8 @@ class SnmpWorker {
     getTrapOid(pdu) {
         if (pdu.type === snmp.PduType.Trap) {
             if (pdu.generic === 6 && pdu.enterprise && Number.isFinite(Number(pdu.specific))) {
-                return `${pdu.enterprise}.${pdu.specific}`;
+                // RFC 2576 section 3.1 maps enterprise-specific traps to enterprise.0.specific.
+                return `${pdu.enterprise}.0.${pdu.specific}`;
             }
             return GENERIC_TRAP_OIDS[pdu.generic] || pdu.enterprise || '';
         }

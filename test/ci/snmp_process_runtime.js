@@ -187,13 +187,13 @@ function closeAgent(agent) {
     });
 }
 
-function sendV2Trap(createSession, trapPort) {
+function sendTrap(createSession, trapPort, version = snmp.Version2c, typeOrOid = TEST_TRAP_OID) {
     return new Promise((resolve, reject) => {
         const session = Reflect.apply(createSession, snmp, [
             '127.0.0.1',
             'public',
             {
-                version: snmp.Version2c,
+                version,
                 transport: 'udp4',
                 trapPort,
                 retries: 0,
@@ -201,7 +201,7 @@ function sendV2Trap(createSession, trapPort) {
             }
         ]);
         session.trap(
-            TEST_TRAP_OID,
+            typeOrOid,
             [
                 {
                     oid: `${DEMO_AGENT_NAME_OID}.0`,
@@ -322,9 +322,9 @@ async function assertRuntimeStopped(snmpApp, sender, config) {
     }
 }
 
-async function exerciseMibRuntime(snmpApp, sender, expectedPid) {
+async function exerciseMibRuntime(snmpApp, sender, expectedPid, mibFiles) {
     const responses = [];
-    const compiled = await snmpApp.handleCompileMibs({ sender }, { filePaths: [DEMO_MIB_PATH], force: true });
+    const compiled = await snmpApp.handleCompileMibs({ sender }, { filePaths: mibFiles, force: true });
     const compileData = assertSuccess(compiled, 'compile demo MIB in nested worker');
     responses.push(compiled);
     assert(
@@ -506,12 +506,32 @@ async function main() {
     }
 
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-snmp-process-runtime-'));
+    const trapMibPath = path.join(tempDir, 'TEST-TRAPS-MIB.mib');
+    fs.writeFileSync(
+        trapMibPath,
+        `TEST-TRAPS-MIB DEFINITIONS ::= BEGIN
+IMPORTS
+    NOTIFICATION-TYPE FROM SNMPv2-SMI
+    netNexusDemoMIB FROM NETNEXUS-DEMO-MIB;
+
+demoTrapNotifications OBJECT IDENTIFIER ::= { netNexusDemoMIB 0 }
+
+demoEnterpriseTrap NOTIFICATION-TYPE
+    STATUS current
+    DESCRIPTION "An enterprise-specific trap."
+    ::= { demoTrapNotifications 1 }
+
+END
+`,
+        'utf8'
+    );
+    const mibFiles = [DEMO_MIB_PATH, trapMibPath];
     const [agentPort, trapPort] = await getDistinctUdpPorts();
     const config = {
         targetHost: '127.0.0.1',
         queryPort: agentPort,
         port: trapPort,
-        supportedVersions: ['v2c'],
+        supportedVersions: ['v1', 'v2c'],
         community: 'public',
         timeout: 2000,
         maxTrapHistory: 10
@@ -520,7 +540,7 @@ async function main() {
     const sender = createRendererTarget(rendererEvents);
     const store = new MemoryStore({
         'snmp-config': config,
-        'snmp-mib-files': [DEMO_MIB_PATH]
+        'snmp-mib-files': mibFiles
     });
     const snmpApp = new SnmpApp(new FakeIpcMain(), store);
     snmpApp.getMibCacheFilePath = () => path.join(tempDir, 'snmp-mib-cache.json');
@@ -561,7 +581,7 @@ async function main() {
         assert.equal(runningState.running, true);
         assert.equal(runningState.trapRunning, false);
 
-        await exerciseMibRuntime(snmpApp, sender, firstProcess.pid);
+        await exerciseMibRuntime(snmpApp, sender, firstProcess.pid, mibFiles);
         await exerciseManagerRequests(snmpApp, firstProcess.pid);
 
         const emptyTrapPage = assertSuccess(
@@ -579,7 +599,7 @@ async function main() {
         assert.equal(trapStarted.trapRunning, true);
         assert.equal(snmpApp.worker.pid, firstProcess.pid, 'starting Trap must not replace the SNMP Utility');
 
-        await sendV2Trap(originalCreateSession, trapPort);
+        await sendTrap(originalCreateSession, trapPort);
         const trapPage = await waitFor(async () => {
             const response = await snmpApp.handleGetTrapList(null, { page: 1, pageSize: 20 });
             if (response.status !== 'success' || response.data.total < 1) return null;
@@ -591,11 +611,54 @@ async function main() {
         assert.equal(trapPage.list[0].version, 'v2c');
         assert.equal(trapPage.list[0].community, 'public');
         assert.equal(trapPage.list[0].trapOid, TEST_TRAP_OID);
+        assert.equal(trapPage.list[0].trapName, 'TEST-TRAPS-MIB::demoEnterpriseTrap');
         assert(
             trapPage.list[0].varbinds.some(
                 varbind => varbind.oid === `${DEMO_AGENT_NAME_OID}.0` && varbind.value === 'utility-trap'
             )
         );
+
+        const v1Traps = [
+            {
+                typeOrOid: '1.3.6.1.4.1.55555.1',
+                enterpriseOid: '1.3.6.1.4.1.55555',
+                trapOid: TEST_TRAP_OID,
+                trapName: 'TEST-TRAPS-MIB::demoEnterpriseTrap',
+                genericType: 6
+            },
+            {
+                typeOrOid: '1.3.6.1.4.1.55555.0.2',
+                enterpriseOid: '1.3.6.1.4.1.55555.0',
+                trapOid: '1.3.6.1.4.1.55555.0.0.2',
+                genericType: 6
+            },
+            ...Array.from({ length: 6 }, (_value, generic) => ({
+                typeOrOid: generic,
+                enterpriseOid: '1.3.6.1.4.1',
+                trapOid: `1.3.6.1.6.3.1.1.5.${generic + 1}`,
+                genericType: generic
+            }))
+        ];
+        for (const [index, expectedTrap] of v1Traps.entries()) {
+            await sendTrap(originalCreateSession, trapPort, snmp.Version1, expectedTrap.typeOrOid);
+            const v1TrapPage = await waitFor(async () => {
+                const response = await snmpApp.handleGetTrapList(null, { page: 1, pageSize: 20 });
+                if (response.status !== 'success' || response.data.total < index + 2) return null;
+                return response.data;
+            }, `SNMPv1 Trap ${expectedTrap.typeOrOid} to appear in Utility-owned history`);
+            const receivedTrap = v1TrapPage.list[0];
+            assert.equal(receivedTrap.version, 'v1');
+            assert.equal(receivedTrap.enterpriseOid, expectedTrap.enterpriseOid);
+            assert.equal(receivedTrap.trapOid, expectedTrap.trapOid);
+            assert.equal(receivedTrap.genericType, expectedTrap.genericType);
+            if (expectedTrap.trapName) {
+                assert.equal(receivedTrap.trapName, expectedTrap.trapName);
+                assert.equal(
+                    receivedTrap.trapPath,
+                    'iso.org.dod.internet.private.enterprises.netNexusDemoMIB.demoTrapNotifications.demoEnterpriseTrap'
+                );
+            }
+        }
 
         const trapStopped = assertSuccess(
             await snmpApp.handleStopSnmpTrap(),
