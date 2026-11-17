@@ -18,22 +18,25 @@
             <check-circle-outlined v-else-if="updateDownloaded" class="notification-icon-success" />
         </template>
         <template #actions>
+            <nn-button v-if="updateInfo?.version" size="small" @click.stop="showReleaseNotes">更新内容</nn-button>
             <nn-button
                 v-if="updateAvailable && !isDownloading && !updateDownloaded"
                 type="primary"
                 size="small"
-                @click="downloadUpdate"
+                @click.stop="downloadUpdate"
             >
                 下载
             </nn-button>
-            <nn-button v-if="updateDownloaded" type="primary" size="small" @click="installUpdate">安装</nn-button>
+            <nn-button v-if="updateDownloaded" type="primary" size="small" @click.stop="installUpdate">安装</nn-button>
         </template>
     </nn-floating-notification>
+    <ChangelogDialog ref="releaseNotesDialog" />
 </template>
 
 <script setup>
     import { ref, computed, onMounted, onBeforeUnmount } from 'vue';
     import { notify } from '../utils/notify';
+    import ChangelogDialog from './ChangelogDialog.vue';
     import {
         CheckCircleOutlined,
         CloudDownloadOutlined,
@@ -49,12 +52,13 @@
         name: 'UpdateNotification'
     });
 
-    const ERROR_NOTIFICATION_DURATION_MS = 5000;
+    const NOTIFICATION_DURATION_MS = 5000;
     let notificationTimer = null;
 
     // 响应式数据
     const showNotification = ref(false);
     const updateInfo = ref(null);
+    const releaseNotesDialog = ref(null);
     const updateAvailable = ref(false);
     const updateDownloaded = ref(false);
     const isChecking = ref(false);
@@ -103,14 +107,18 @@
         errorMessage.value = '';
     };
 
-    const showError = message => {
+    const showTimedNotification = () => {
         clearNotificationTimer();
+        showNotification.value = true;
+        notificationTimer = setTimeout(closeNotification, NOTIFICATION_DURATION_MS);
+    };
+
+    const showError = message => {
         isChecking.value = false;
         isDownloading.value = false;
         hasError.value = true;
         errorMessage.value = message || '更新过程中发生错误';
-        showNotification.value = true;
-        notificationTimer = setTimeout(closeNotification, ERROR_NOTIFICATION_DURATION_MS);
+        showTimedNotification();
     };
 
     // 处理更新状态
@@ -133,12 +141,15 @@
                 updateAvailable.value = true;
                 updateDownloaded.value = false;
                 updateInfo.value = data;
-                showNotification.value = true;
+                showTimedNotification();
+                showReleaseNotes();
                 break;
             case 'update-not-available':
                 clearError();
                 isChecking.value = false;
                 updateAvailable.value = false;
+                updateInfo.value = null;
+                releaseNotesDialog.value?.close();
                 closeNotification();
                 break;
             case 'download-started':
@@ -157,7 +168,7 @@
                 isChecking.value = false;
                 isDownloading.value = false;
                 updateDownloaded.value = true;
-                showNotification.value = true;
+                showTimedNotification();
                 break;
             case 'update-error':
                 showError(data.error);
@@ -195,10 +206,14 @@
         }
     };
 
+    const showReleaseNotes = () => {
+        if (!updateInfo.value?.version) return;
+        void releaseNotesDialog.value?.openDialog(updateInfo.value.version, updateInfo.value);
+    };
+
     // 点击通知
     const handleNotificationClick = () => {
-        // 点击通知可以导航到更新设置页面
-        // 这里可以使用 router 进行导航
+        if (updateAvailable.value || isDownloading.value || updateDownloaded.value) showReleaseNotes();
     };
 
     // 关闭通知

@@ -33,43 +33,74 @@ test.describe('Notification lifecycle and layout', () => {
         await harness?.cleanup();
     });
 
-    test('automatically dismisses update failures and supports manual dismissal', async ({ page }) => {
+    test('dismisses available and downloaded notifications after five seconds', async ({ page }) => {
         const notification = page.locator('.update-notification');
-        await emitUpdate(page, 'checking-for-update');
-        await emitUpdate(page, 'update-error', { error: '更新服务器暂时不可用' });
-        await expect(notification).toHaveClass(/is-error/);
-        await expect(notification).toContainText('更新服务器暂时不可用');
-        await expect(notification).not.toBeVisible({ timeout: 7000 });
+        const releaseNotes = page.getByRole('dialog', { name: '新版本更新内容', exact: true });
+        const states = [
+            ['update-available', { version: '5.0.7', releaseNotes: '新版修复说明。' }, '发现新版本 5.0.7'],
+            ['update-downloaded', { version: '5.0.7' }, '更新已下载完成']
+        ];
 
+        for (const [type, data, text] of states) {
+            await emitUpdate(page, type, data);
+            await expect(notification).toContainText(text);
+            await page.waitForTimeout(4000);
+            await expect(notification).toBeVisible();
+            await expect(notification).not.toBeVisible({ timeout: 2000 });
+            if (type === 'update-available') {
+                await releaseNotes.getByRole('button', { name: '知道了', exact: true }).click();
+            }
+        }
         await emitUpdate(page, 'update-error', { error: '再次检查失败' });
         await expect(notification).toBeVisible();
         await notification.getByRole('button', { name: '关闭', exact: true }).click();
         await expect(notification).not.toBeVisible();
+        await emitUpdate(page, 'download-progress', { percent: 90 });
+        await expect(notification).not.toBeVisible();
     });
 
-    test('keeps a retried download visible after the previous failure timeout', async ({ page }) => {
+    test('keeps downloads visible beyond previous dismissal timers and respects manual closure', async ({ page }) => {
         const notification = page.locator('.update-notification');
         await emitUpdate(page, 'update-error', { error: '首次检查失败' });
         await expect(notification).toHaveClass(/is-error/);
-        await emitUpdate(page, 'checking-for-update');
-        await emitUpdate(page, 'update-available', { version: '5.0.6' });
-        await expect(notification).toContainText('发现新版本 5.0.6');
+        await page.waitForTimeout(3000);
         await emitUpdate(page, 'download-started');
-        await emitUpdate(page, 'download-progress', { percent: 42 });
         await expect(notification).toHaveClass(/is-loading/);
-        await expect(notification).toContainText('下载进度: 42%');
-
-        await page.waitForTimeout(5500);
+        await page.waitForTimeout(2500);
         await expect(notification).toBeVisible();
-        await emitUpdate(page, 'update-downloaded', { version: '5.0.6' });
-        await expect(notification).toHaveClass(/is-success/);
-        await expect(notification.getByRole('button', { name: '安装', exact: true })).toBeVisible();
-
-        await emitUpdate(page, 'update-error', { error: '新版本检查失败' });
+        await emitUpdate(page, 'update-error', { error: '重试检查失败' });
+        await emitUpdate(page, 'checking-for-update');
         await emitUpdate(page, 'update-available', { version: '5.0.7' });
         await expect(notification).toContainText('发现新版本 5.0.7');
-        await expect(notification.getByRole('button', { name: '下载', exact: true })).toBeVisible();
-        await expect(notification.getByRole('button', { name: '安装', exact: true })).toHaveCount(0);
+        await page
+            .getByRole('dialog', { name: '新版本更新内容', exact: true })
+            .getByRole('button', { name: '知道了', exact: true })
+            .click();
+        await page.waitForTimeout(2500);
+        await expect(notification).toBeVisible();
+        await emitUpdate(page, 'download-started');
+        await expect(notification).toHaveClass(/is-loading/);
+        for (const percent of [20, 40, 60]) {
+            await page.waitForTimeout(2000);
+            await emitUpdate(page, 'download-progress', { percent });
+            await expect(notification).toContainText(`下载进度: ${percent}%`);
+            await expect(notification).toBeVisible();
+        }
+        await notification.getByRole('button', { name: '关闭', exact: true }).click();
+        await expect(notification).not.toBeVisible();
+        await emitUpdate(page, 'download-progress', { percent: 80 });
+        await expect(notification).not.toBeVisible();
+
+        await emitUpdate(page, 'update-downloaded', { version: '5.0.7' });
+        await expect(notification).toHaveClass(/is-success/);
+        await expect(notification.getByRole('button', { name: '安装', exact: true })).toBeVisible();
+        await page.waitForTimeout(4000);
+        await expect(notification).toBeVisible();
+        await expect(notification).not.toBeVisible({ timeout: 2000 });
+        await emitUpdate(page, 'update-not-available');
+        await expect(notification).not.toBeVisible();
+        await emitUpdate(page, 'download-progress', { percent: 100 });
+        await expect(notification).not.toBeVisible();
     });
 
     test('restarts dismissal when another update failure arrives', async ({ page }) => {
