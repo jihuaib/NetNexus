@@ -63,6 +63,7 @@ class YangDownloadService {
             context
         );
         this.requireProfileId(id);
+        await this.runtimeHost?.runtime?.updateDeviceModels?.(id, inventory);
         return this.rememberInventory(id, inventory);
     }
 

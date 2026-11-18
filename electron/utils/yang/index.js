@@ -173,6 +173,16 @@ class YangRegistry {
 
     async compile(options = {}) {
         let compileOptions = this.normalizeWorkspaceOptions(options);
+        let previousCompileId = null;
+        let previousCompilation = null;
+        if (options.preserveSchemaOnFailure === true) {
+            try {
+                previousCompileId = this.resolveCompileId(compileOptions);
+                previousCompilation = this.compiler.results.get(previousCompileId);
+            } catch (_error) {
+                // There may be no usable compilation yet in this process.
+            }
+        }
         if (options.filePaths?.length) {
             const imported = this.repository.importPaths(options.filePaths, compileOptions);
             compileOptions = {
@@ -193,6 +203,15 @@ class YangRegistry {
             };
         }
         const result = await this.compiler.compile(compileOptions);
+        if (
+            previousCompileId &&
+            !result.schemaAvailable &&
+            previousCompilation?.tree &&
+            this.compiler.hasReusableSchema(previousCompilation.result)
+        ) {
+            this.compiler.installResult(previousCompilation.result, previousCompilation.tree);
+            return result;
+        }
         const scopeKey = this.compileScopeKey(compileOptions);
         const scopeContentHash = compileOptions.snapshotId
             ? this.repository.getSnapshot(compileOptions.snapshotId)?.contentHash

@@ -7,6 +7,11 @@ const { YANG_REQ_TYPES: WORKER_REQ_TYPES } = require('../../utils/yang');
 const { profileWorkspaceId } = require('../../utils/yang/yangWorkspaceIdentity');
 const { YANG_EVT_TYPES } = require('../../const/yangConst');
 const LocalYangCompilerClient = require('./localYangCompilerClient');
+const {
+    normalizeDeviceModels,
+    deviceModuleDescriptors,
+    matchesDeviceModule
+} = require('../../utils/yang/yangDeviceModels');
 
 const STATE_STORE_KEY = 'yang-profile-workspace-states';
 const STATE_SCHEMA_VERSION = 1;
@@ -146,8 +151,11 @@ class YangRuntimeService {
     }
 
     persistCompileState(workspaceId, result, workspace) {
+        const deviceModels = this.lastCompile.get(workspaceId)?.deviceModels;
         const state = result
             ? {
+                  deviceModels,
+                  failedCompile: result.failedCompile || null,
                   compileId: result.compileId,
                   contentHash: result.contentHash,
                   contextHash: result.contextHash,
@@ -181,7 +189,9 @@ class YangRuntimeService {
                   restoreOptions: result.restoreOptions || {},
                   workspaceContentHash: workspace?.contentHash || null
               }
-            : null;
+            : deviceModels
+              ? { deviceModels }
+              : null;
         if (state) this.lastCompile.set(workspaceId, state);
         else this.lastCompile.delete(workspaceId);
         this.writeStoredState();
@@ -384,12 +394,18 @@ class YangRuntimeService {
     compilationFileResults(workspaceId) {
         const result = this.compileResult.get(workspaceId);
         const stored = this.lastCompile.get(workspaceId);
+        if (stored?.schemaStale) return [];
         const compilation = result || stored;
         if (!compilation) return [];
         if (Array.isArray(compilation.fileResults)) {
-            return compilation.fileResults.filter(
-                fileResult => fileResult?.hash && ['compiled', 'failed'].includes(fileResult.status)
-            );
+            return [
+                ...new Map(
+                    [...compilation.fileResults, ...(stored?.failedCompile?.fileResults || [])].map(item => [
+                        item.hash,
+                        item
+                    ])
+                ).values()
+            ].filter(fileResult => fileResult?.hash && ['compiled', 'failed'].includes(fileResult.status));
         }
         const fallbackStatus = compilation.success === true ? 'compiled' : 'failed';
         return (compilation.moduleHashes || []).map(hash => ({ hash, status: fallbackStatus }));
@@ -497,6 +513,8 @@ class YangRuntimeService {
         const context = this.resolveProfileContext(options);
         this.assertWorkspaceAvailable(context.workspaceId);
         this.assertWorkspaceGeneration(context.workspaceId, options.workspaceGeneration);
+        const inventory = normalizeDeviceModels(options.inventory);
+        if (inventory) this.assertDeviceModelFingerprint(context.workspaceId, inventory.fingerprint);
         const pendingImport = this.send(event, WORKER_REQ_TYPES.IMPORT_CONTENTS, {
             contents,
             workspaceId: context.workspaceId,
@@ -521,7 +539,7 @@ class YangRuntimeService {
         }
     }
 
-    resolveCompileHashes(requested, modules) {
+    resolveCompileHashes(requested, modules, deviceModels = null) {
         if (!Array.isArray(requested) || requested.length === 0) return null;
         const findModule = identity => {
             const value = typeof identity === 'string' ? { id: identity, name: identity } : identity || {};
@@ -534,13 +552,21 @@ class YangRuntimeService {
             });
         };
         const selected = requested.map(findModule).filter(Boolean);
-        const byName = (kind, name, revision) =>
-            modules
+        const byName = (kind, name, revision) => {
+            const deviceCandidates = deviceModuleDescriptors(deviceModels, kind, name);
+            return modules
                 .filter(module => module.metadata?.kind === kind && module.metadata?.name === name)
                 .filter(module => !revision || module.metadata?.revision === revision)
+                .filter(
+                    module =>
+                        revision ||
+                        !deviceCandidates.length ||
+                        deviceCandidates.some(item => matchesDeviceModule(module, item))
+                )
                 .sort((left, right) =>
                     (right.metadata?.revision || '').localeCompare(left.metadata?.revision || '')
                 )[0];
+        };
         const hashes = new Set();
         const queue = [...selected];
         while (queue.length) {
@@ -564,6 +590,49 @@ class YangRuntimeService {
         return [...hashes];
     }
 
+    async updateDeviceModels(profileId, inventory, { isCurrent = () => true } = {}) {
+        const deviceModels = normalizeDeviceModels(inventory);
+        if (!deviceModels || this.closing || this.closed) return null;
+        const context = this.resolveProfileContext({ profileId });
+        this.assertWorkspaceAvailable(context.workspaceId);
+        const previous = this.lastCompile.get(context.workspaceId);
+        if (previous?.deviceModels?.fingerprint === deviceModels.fingerprint) return previous.deviceModels;
+        const generation = this.getWorkspaceGeneration(context);
+        const modules = await this.listRawModules(null, { workspaceId: context.workspaceId });
+        if (!isCurrent() || this.closing || this.closed) return null;
+        this.assertWorkspaceAvailable(context.workspaceId);
+        this.assertWorkspaceGeneration(context.workspaceId, generation);
+        const latest = this.lastCompile.get(context.workspaceId);
+        const advertised = modules.filter(module =>
+            deviceModuleDescriptors(deviceModels, module.metadata?.kind, module.metadata?.name).some(item =>
+                matchesDeviceModule(module, item)
+            )
+        );
+        const compatibleHashes = new Set(
+            advertised.length ? this.resolveCompileHashes(advertised, modules, deviceModels) : []
+        );
+        const schemaHashes = latest?.schemaModuleHashes?.length
+            ? latest.schemaModuleHashes
+            : latest?.moduleHashes || [];
+        const changed = Boolean(latest?.deviceModels && latest.deviceModels.fingerprint !== deviceModels.fingerprint);
+        const schemaStale = Boolean(
+            latest?.schemaStale ||
+                (latest?.compileId && (changed || !schemaHashes.every(hash => compatibleHashes.has(hash))))
+        );
+        this.lastCompile.set(context.workspaceId, { ...latest, deviceModels, schemaStale });
+        if (changed || schemaStale) {
+            this.abortCompilationRestores(context.workspaceId);
+            this.compileResult.delete(context.workspaceId);
+        }
+        this.writeStoredState();
+        return deviceModels;
+    }
+
+    assertDeviceModelFingerprint(workspaceId, fingerprint) {
+        if (this.lastCompile.get(workspaceId)?.deviceModels?.fingerprint === fingerprint) return;
+        throw this.lifecycleError('YANG_DEVICE_MODELS_CHANGED', '设备模型集已变化，请重新获取设备列表后重试');
+    }
+
     async handleCompile(event, options = {}) {
         try {
             this.setWebContents(event);
@@ -578,23 +647,53 @@ class YangRuntimeService {
             }
             const modules = await this.listRawModules(event, { workspaceId: context.workspaceId });
             if (!modules.length) return errorResponse('请先下载或导入YANG模型');
-            const requestedHashes = this.resolveCompileHashes(
-                options.hashes || options.moduleIds || options.modules,
-                modules
-            );
-            const availableHashes = new Set(modules.map(module => module.hash).filter(Boolean));
             const stored = this.lastCompile.get(context.workspaceId);
-            const storedModuleHashes = Array.isArray(stored?.moduleHashes)
-                ? stored.moduleHashes.filter(hash => availableHashes.has(hash))
+            const deviceModels = stored?.deviceModels;
+            const eligibleModules = deviceModels
+                ? modules.filter(module =>
+                      deviceModuleDescriptors(deviceModels, module.metadata?.kind, module.metadata?.name).some(item =>
+                          matchesDeviceModule(module, item)
+                      )
+                  )
+                : modules;
+            const requestedHashes = this.resolveCompileHashes(
+                options.hashes || options.moduleIds || options.modules || (deviceModels ? eligibleModules : null),
+                modules,
+                deviceModels
+            );
+            if (deviceModels) {
+                if (!requestedHashes?.length)
+                    return errorResponse('当前设备模型尚未下载，请获取设备列表并下载当前版本');
+                const eligibleHashes = new Set(
+                    eligibleModules.length ? this.resolveCompileHashes(eligibleModules, modules, deviceModels) : []
+                );
+                if (requestedHashes.some(hash => !eligibleHashes.has(hash))) {
+                    return errorResponse('所选模型与当前设备模型集不匹配，请获取设备列表并下载当前版本');
+                }
+            }
+            const availableHashes = new Set(modules.map(module => module.hash).filter(Boolean));
+            const storedHashes = stored?.schemaModuleHashes?.length
+                ? this.resolveCompileHashes(
+                      stored.schemaModuleHashes.filter(hash => availableHashes.has(hash)),
+                      modules,
+                      deviceModels
+                  ) || []
+                : stored?.moduleHashes || [];
+            const storedModuleHashes = Array.isArray(storedHashes)
+                ? storedHashes.filter(hash => availableHashes.has(hash))
                 : [];
             const canExtendStoredCompilation =
                 requestedHashes &&
                 options.replaceContext !== true &&
+                !stored?.schemaStale &&
+                (stored?.success === true || stored?.schemaAvailable === true) &&
+                (stored?.moduleHashes || []).every(hash => availableHashes.has(hash)) &&
                 storedModuleHashes.length > 0 &&
-                storedModuleHashes.length === stored.moduleHashes.length;
+                storedModuleHashes.length === storedHashes.length;
             const hashes = canExtendStoredCompilation
                 ? [...new Set([...storedModuleHashes, ...requestedHashes])]
                 : requestedHashes;
+            const workspaceGeneration = this.getWorkspaceGeneration(context);
             const task = this.taskManager.start(
                 'compile',
                 async ({ taskId, signal, report }) => {
@@ -607,6 +706,7 @@ class YangRuntimeService {
                             WORKER_REQ_TYPES.COMPILE,
                             {
                                 ...options,
+                                preserveSchemaOnFailure: !stored?.schemaStale,
                                 workspaceId: context.workspaceId,
                                 hashes: hashes || undefined,
                                 progressId: taskId
@@ -616,9 +716,13 @@ class YangRuntimeService {
                         if (signal.aborted) {
                             throw this.lifecycleError('WORKER_CANCELLED', 'YANG编译已取消');
                         }
+                        this.assertWorkspaceGeneration(context.workspaceId, workspaceGeneration);
+                        this.assertDeviceModelFingerprint(context.workspaceId, deviceModels?.fingerprint);
                         const workspace = await this.send(event, WORKER_REQ_TYPES.GET_WORKSPACE, {
                             workspaceId: context.workspaceId
                         });
+                        this.assertWorkspaceGeneration(context.workspaceId, workspaceGeneration);
+                        this.assertDeviceModelFingerprint(context.workspaceId, deviceModels?.fingerprint);
                         if (signal.aborted) {
                             throw this.lifecycleError('WORKER_CANCELLED', 'YANG编译已取消');
                         }
@@ -646,8 +750,26 @@ class YangRuntimeService {
                                     : undefined
                             }
                         };
-                        this.compileResult.set(context.workspaceId, compileResult);
-                        this.persistCompileState(context.workspaceId, compileResult, workspace);
+                        if (
+                            !result.schemaAvailable &&
+                            this.isStoredCompilationCurrent(context.workspaceId, workspace) &&
+                            (stored?.success === true || stored?.schemaAvailable === true)
+                        ) {
+                            this.lastCompile.set(context.workspaceId, {
+                                ...this.lastCompile.get(context.workspaceId),
+                                failedCompile: {
+                                    compileId: result.compileId,
+                                    compiledAt: result.compiledAt,
+                                    summary: result.summary,
+                                    fileResults: result.fileResults,
+                                    diagnostics: result.diagnostics?.slice(0, MAX_PERSISTED_DIAGNOSTICS) || []
+                                }
+                            });
+                            this.writeStoredState();
+                        } else {
+                            this.compileResult.set(context.workspaceId, compileResult);
+                            this.persistCompileState(context.workspaceId, compileResult, workspace);
+                        }
                         if (!result.success) {
                             const diagnostic = result.diagnostics?.find(
                                 item => item.severity === 'error' && item.authoritative !== false
@@ -671,6 +793,7 @@ class YangRuntimeService {
 
     isStoredCompilationCurrent(workspaceId, workspace) {
         const stored = this.lastCompile.get(workspaceId);
+        if (stored?.schemaStale) return false;
         if (!stored?.compileId || !workspace) return false;
         const storedModuleHashes = Array.isArray(stored.moduleHashes) ? stored.moduleHashes.filter(Boolean) : [];
         if (storedModuleHashes.length > 0 && Array.isArray(workspace.modules)) {
@@ -682,6 +805,7 @@ class YangRuntimeService {
 
     reconcileCompilationFreshness(workspaceId, workspace) {
         const stored = this.lastCompile.get(workspaceId);
+        if (stored?.schemaStale || !stored?.compileId) return false;
         if (stored && !this.isStoredCompilationCurrent(workspaceId, workspace)) {
             this.invalidateCompilation(workspaceId);
             return false;
@@ -803,6 +927,7 @@ class YangRuntimeService {
 
             const compileResult = {
                 ...restored,
+                failedCompile: stored.failedCompile,
                 moduleHashes: restoredModuleHashes.length ? restoredModuleHashes : stored.moduleHashes || [],
                 restoreOptions
             };
@@ -836,6 +961,7 @@ class YangRuntimeService {
             : null;
         const workspaceResult = this.compileResult.get(context.workspaceId);
         const result = workspaceResult?.compileId === current?.compileId ? workspaceResult : null;
+        const failedCompile = current?.failedCompile;
         const fileResults = this.compilationFileResults(context.workspaceId);
         const compiled = new Set(
             fileResults.filter(fileResult => fileResult.status === 'compiled').map(fileResult => fileResult.hash)
@@ -860,22 +986,31 @@ class YangRuntimeService {
             contentHash: workspace?.contentHash || null,
             compileId: current?.compileId || '',
             compiledAt: current?.compiledAt || null,
-            success: current?.success ?? null,
+            success: failedCompile ? false : (current?.success ?? null),
+            schemaRetained: Boolean(failedCompile && schemaAvailable),
             schemaAvailable,
             partialSchema,
+            deviceModelSet: this.lastCompile.get(context.workspaceId)?.deviceModels
+                ? {
+                      source: this.lastCompile.get(context.workspaceId).deviceModels.source,
+                      contentId: this.lastCompile.get(context.workspaceId).deviceModels.contentId,
+                      moduleSetId: this.lastCompile.get(context.workspaceId).deviceModels.moduleSetId,
+                      schemaStale: Boolean(this.lastCompile.get(context.workspaceId).schemaStale)
+                  }
+                : null,
             schemaModuleHashes: result?.schemaModuleHashes || current?.schemaModuleHashes || [],
             excludedModuleHashes: result?.excludedModuleHashes || current?.excludedModuleHashes || [],
             compiler,
             modules,
             fileResults,
-            diagnostics: result?.diagnostics || current?.diagnostics || [],
+            diagnostics: failedCompile?.diagnostics || result?.diagnostics || current?.diagnostics || [],
             diagnosticsTruncated: Boolean(current?.diagnosticsTruncated),
             summary: {
                 moduleCount: modules.length,
                 nodeCount: result?.schemaTree?.nodeCount || current?.summary?.schemaNodes || 0,
                 cacheHit: Boolean(result?.cacheHit || current?.cacheHit),
-                errors: current?.summary?.errors || 0,
-                warnings: current?.summary?.warnings || 0,
+                errors: failedCompile?.summary?.errors || current?.summary?.errors || 0,
+                warnings: failedCompile?.summary?.warnings || current?.summary?.warnings || 0,
                 compiledFiles: fileResults.filter(fileResult => fileResult.status === 'compiled').length,
                 failedFiles: fileResults.filter(fileResult => fileResult.status === 'failed').length
             },
@@ -1048,6 +1183,10 @@ class YangRuntimeService {
         try {
             const payload = request && typeof request === 'object' && !Array.isArray(request) ? request : {};
             const context = await this.ensureCompilationLoaded(event, payload);
+            if (operation === WORKER_REQ_TYPES.GET_DIAGNOSTICS) {
+                const failure = this.lastCompile.get(context.workspaceId)?.failedCompile;
+                if (failure) return successResponse(failure.diagnostics);
+            }
             return successResponse(await this.send(event, operation, { ...payload, ...context }));
         } catch (error) {
             return errorResponse(`${errorPrefix}: ${error.message}`);
@@ -1102,6 +1241,8 @@ class YangRuntimeService {
                 workspaceId: context.workspaceId
             });
             this.invalidateCompilation(context.workspaceId);
+            this.lastCompile.delete(context.workspaceId);
+            this.writeStoredState();
             this.advanceWorkspaceGeneration(context.workspaceId);
             return Boolean(deleted);
         } finally {

@@ -134,6 +134,10 @@ Mock 默认只监听 `127.0.0.1`。默认账号、密码以及仓库中的固定
 3. RFC 6022 `ietf-netconf-monitoring/schemas`。
 4. 从服务端 `hello` Capability 中提取 `module`、`revision`、`features` 和 `deviations`。
 
+每次连接和自动重连后，程序也会在后台检查设备模型集。模型缓存按 Profile 隔离，比较内容包括 YANG Library 的 `content-id` / `module-set-id`、模块 revision、feature、deviation 和 datastore/schema 映射；没有模型集标识的 RFC 6022 设备按模块清单比较。查询失败、返回空清单或只能读取到 hello Capability 时，不会据此停用已有 Schema。
+
+检测到设备模型集变化后，页面会提示“设备模型集已变化，旧 Schema 已停用”。本地 YANG 文件保留，但旧树不能用于当前设备的节点操作和 RPC 校验；请获取设备列表，下载当前版本后重新编译。编译会优先使用设备公布的依赖 revision，不会把本地缓存中的新旧版本一起编译。SSH Host Key 变化仍须先确认新指纹，确认连接后再检查模型集；密钥变化本身不会删除模型。
+
 选择模型后点击“下载所选”。下载通过设备的 `get-schema` RPC 完成，成功内容会直接导入本地 YANG 仓库。设备必须声明并实际实现 `ietf-netconf-monitoring:get-schema`；仅在 Capability 中列出模块但不支持 `get-schema` 时，需要从厂商软件包手工导入文件。
 
 部分华为设备允许初始密码账号建立 SSH/NETCONF 会话和读取模型清单，但会拒绝 `get-schema`，返回 `No permission ... due to the initial password`。遇到该错误时，应先通过 STelnet 或 Console 完成首次密码修改，再更新连接 Profile 中的密码并重试。下载器会把它视为会话级错误并立即停止后续请求；此前已经成功获取的源码仍会写入本地仓库并显示为“部分完成”，如果错误发生在第一个模型，则设备实际没有返回任何可保存的 YANG 内容。
@@ -149,6 +153,8 @@ YANG 的 import/include 依赖必须同时存在于本地仓库。建议下载�
 文件状态存在诊断时，标签会显示诊断条数。悬停可查看摘要，点击标签可展开完整的警告和错误、文件名及可用的行列号，并可直接查看模型源码；无需先执行编译。
 
 模型列表底部的编译日志会实时显示编译阶段和逐文件状态，并保留最近一次编译的错误、警告和信息。新增导入或下载的模型保持“未编译”，不会清空仍然有效的旧编译结果；再次执行“编译所选”时会扩展现有编译上下文。需要查看源码时，使用模型表格对应行的“源码”按钮。
+
+扩展编译失败且无法生成有效 Schema 时，会保留当前模型集上一次可用的树，并显示“本次编译失败，保留上次 Schema”及具体错误；失败模型不会自动加入后续编译。设备模型集已经变化时，不会恢复已过期的旧树。上述状态在重启后仍然有效。
 
 ![YANG 模型与 libyang 编译日志](images/yang/yang-modules.png)
 
@@ -252,6 +258,10 @@ Schema 数据节点的右键操作会预填 subtree/config XML 草稿。`get`、
 YANG-Push 修改默认使用“保持当前过滤器/策略”，对应 RFC 8641 的 omission 语义：未出现在 `modify-subscription` 中的参数必须保持不变。标准没有用 omission 清除既有过滤器或 stop-time 的语义，需要清除时应删除并重新建立订阅；event-stream 修改受 mandatory target choice 约束，必须显式提供一种 stream filter。结构化操作支持内联 subtree/XPath、已配置过滤器引用、默认 XML 命名空间以及厂商派生 datastore identityref；厂商 identityref 的前缀必须同时提供对应 XML namespace binding。
 
 需要补全参数的操作会保留在工作区右侧。右键“操作参数树”的节点可以修改值、添加可选节点或移除节点；每次修改都会同步更新中间的 RPC XML：
+
+容器草稿中的“在此补充配置”表示需要添加子节点。右键该容器选择“添加子节点”，会按需加载其 libyang Schema 并列出可添加节点；添加 list 时会自动生成全部 key。添加成功后会移除容器的通用占位注释，仍须填写的叶子或 key 保留各自的提示。
+
+编辑、格式化或重新生成请求 XML，以及修改参数树时，会保留上一次响应及其状态，便于对照；执行新请求、主动清空或切换上下文时再重置结果。在请求 XML 编辑器中按 `Ctrl+/`（macOS 也支持 `Command+/`）可注释或取消注释当前行、选中的多行，支持原生撤销和重做；光标位于多行 XML 注释内部时会取消该段注释。
 
 ![YANG 操作参数树右侧编辑](images/yang/yang-operation-parameter-edit.png)
 

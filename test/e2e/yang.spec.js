@@ -870,6 +870,68 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(schemaTreeItems(page)).toHaveCount(0);
     });
 
+    test('rechecks a stopped model tab when the connected workspace still has its Schema', async ({ page }) => {
+        const profileId = 'e2e-netconf-profile';
+        const originalCall = harness.controller.call.bind(harness.controller);
+        const originalEmit = harness.controller.emitEvent.bind(harness.controller);
+        await originalCall('yang.netconf.disconnect', profileId);
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
+        // A cached page must recover even when it missed both startup notifications.
+        harness.controller.emitEvent = (event, ...args) => {
+            if (!['yang:runtimeChanged', 'netconf:sessionEvent'].includes(event)) originalEmit(event, ...args);
+        };
+        try {
+            const connected = await originalCall('yang.netconf.connect', profileId);
+            expect(connected.data.connected).toBe(true);
+        } finally {
+            harness.controller.emitEvent = originalEmit;
+        }
+
+        await page.getByRole('tab', { name: 'Schema 工作区', exact: true }).click();
+        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+        await page.getByRole('tab', { name: '模型列表', exact: true }).click();
+        await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeEnabled();
+    });
+
+    test('recovers stopped model data on connection events using the actual runtime state', async ({ page }) => {
+        const profileId = 'e2e-netconf-profile';
+        const originalEmit = harness.controller.emitEvent.bind(harness.controller);
+        const originalCall = harness.controller.call.bind(harness.controller);
+        let runtimeReads = 0;
+        harness.controller.call = async (method, ...args) => {
+            const result = await originalCall(method, ...args);
+            if (method === 'yang.registry.getRuntimeState') runtimeReads++;
+            return result;
+        };
+        await originalCall('yang.netconf.disconnect', profileId);
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+        harness.controller.emitEvent = (event, ...args) => {
+            if (event !== 'yang:runtimeChanged') originalEmit(event, ...args);
+        };
+        try {
+            await originalCall('yang.netconf.connect', profileId);
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toBeVisible();
+            await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeEnabled();
+            await originalCall('yang.netconf.disconnect', profileId);
+            await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+            const stoppedRuntimeReads = runtimeReads;
+            originalEmit('netconf:sessionEvent', {
+                status: 'success',
+                data: { profileId, status: 'connected', connected: true }
+            });
+            await expect.poll(() => runtimeReads).toBeGreaterThan(stoppedRuntimeReads);
+            await expect(page.getByText('YANG进程未启动', { exact: true })).toBeVisible();
+            await expect(page.getByText('ietf-interfaces', { exact: true })).toHaveCount(0);
+            await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeDisabled();
+        } finally {
+            harness.controller.emitEvent = originalEmit;
+        }
+    });
+
     test('clears runtime data and ignores stale reads after the YANG process stops', async ({ page }) => {
         const profileId = 'e2e-netconf-profile';
         const originalControllerCall = harness.controller.call.bind(harness.controller);
@@ -1410,6 +1472,71 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect.poll(() => rootReads).toBeGreaterThan(0);
         await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
         expect(workspaceReads).toBe(1);
+    });
+
+    test('explains an expired device model set while keeping cached model files visible', async ({
+        page
+    }, testInfo) => {
+        let rootReads = 0;
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method === 'yang.registry.getSchemaRoots') rootReads += 1;
+            if (method !== 'yang.registry.getWorkspace' || response.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    compileId: '',
+                    success: null,
+                    schemaAvailable: false,
+                    schemaTree: null,
+                    deviceModelSet: { source: 'rfc8525', contentId: 'older-firmware', schemaStale: true }
+                }
+            };
+        };
+        await page.goto('/#/yang/yang-workspace');
+        await expect(page.getByText('Schema 已过期', { exact: true })).toBeVisible();
+        await expect(page.getByTestId('yang-model-set-changed')).toContainText('本地文件已保留');
+        await expect(schemaTreeItems(page)).toHaveCount(0);
+        expect(rootReads).toBe(0);
+        await page.screenshot({ path: testInfo.outputPath('yang-device-model-set-expired.png') });
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByTestId('yang-model-set-changed')).toBeVisible();
+        await expect(page.getByRole('row').filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+        await expect(page.getByRole('button', { name: '获取设备列表', exact: true })).toBeEnabled();
+    });
+
+    test('shows a retained Schema after compilation fails without hiding the failure', async ({ page }) => {
+        const originalControllerCall = harness.controller.call.bind(harness.controller);
+        const diagnostic = {
+            severity: 'error',
+            code: 'LIBYANG',
+            message: 'Two different modules have the same namespace'
+        };
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalControllerCall(method, ...args);
+            if (method === 'yang.registry.getDiagnostics') return { ...response, data: [diagnostic] };
+            if (method !== 'yang.registry.getWorkspace' || response.status !== 'success') return response;
+            return {
+                ...response,
+                data: {
+                    ...response.data,
+                    success: false,
+                    schemaAvailable: true,
+                    schemaRetained: true,
+                    diagnostics: [diagnostic]
+                }
+            };
+        };
+        await page.goto('/#/yang/yang-workspace');
+        await expect(page.getByText('本次编译失败，保留上次 Schema', { exact: true })).toBeVisible();
+        await expect(schemaTreeItems(page).filter({ hasText: 'ietf-interfaces' }).first()).toBeVisible();
+        await page.goto('/#/yang/yang-modules');
+        await expect(page.getByTestId('yang-schema-retained')).toBeVisible();
+        await expect(
+            page.getByText('Two different modules have the same namespace', { exact: false }).first()
+        ).toBeVisible();
     });
 
     test('restores a partial Schema when one model fails compilation', async ({ page }) => {
@@ -2999,6 +3126,90 @@ test.describe('NETCONF/YANG workbench', () => {
         await expect(requestEditor.locator('[data-xml-diagnostics-content]')).toHaveCount(0);
     });
 
+    test('keeps the last reply while editing, formatting, and regenerating the request', async ({ page }) => {
+        await page.goto('/#/yang/yang-workspace');
+        const panel = page.locator('.workspace-operation-panel');
+        await panel.getByRole('button', { name: '执行 get', exact: true }).click();
+        const reply = panel.getByRole('textbox', { name: 'RPC 响应 XML' });
+        await expect.poll(() => reply.inputValue()).toContain('<rpc-reply');
+        const originalReply = await reply.inputValue();
+        const originalSummary = await panel.locator('.result-summary').textContent();
+        const input = panel.getByRole('textbox', { name: 'RPC 请求 XML' });
+        await input.fill('<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="edited"><get/></rpc>');
+        await expect(reply).toHaveValue(originalReply);
+        await panel.getByRole('button', { name: '格式化', exact: true }).click();
+        await expect.poll(() => input.inputValue()).toContain('\n');
+        await expect(reply).toHaveValue(originalReply);
+        await panel.getByRole('button', { name: '参数生成', exact: true }).click();
+        await expect(reply).toHaveValue(originalReply);
+        const parameters = panel.getByRole('complementary', { name: '操作参数' });
+        const menu = (await openParameterContextMenu(page, parameters, '/rpc/get/filter')).menu;
+        await menu.getByRole('menuitem', { name: '修改值', exact: true }).click();
+        const dialog = page.getByRole('dialog', { name: '修改值 · filter' });
+        await dialog.getByRole('combobox', { name: '节点值' }).click();
+        await page.getByRole('option', { name: 'xpath', exact: true }).click();
+        await dialog.getByRole('button', { name: '确认', exact: true }).click();
+        const xpathMenu = (await openParameterContextMenu(page, parameters, '/rpc/get/filter/@select')).menu;
+        await xpathMenu.getByRole('menuitem', { name: '修改值', exact: true }).click();
+        const xpathDialog = page.getByRole('dialog', { name: '修改值 · @select' });
+        await xpathDialog.getByRole('textbox', { name: '节点值' }).fill('/interfaces');
+        await xpathDialog.getByRole('button', { name: '确认', exact: true }).click();
+        await expect.poll(() => input.inputValue()).toContain('select="/interfaces"');
+        await expect(reply).toHaveValue(originalReply);
+        await expect(panel.locator('.result-summary')).toHaveText(originalSummary);
+        await panel.locator('.operation-result-card').getByRole('button', { name: '清空', exact: true }).click();
+        await expect(reply).toHaveCount(0);
+    });
+
+    test('toggles XML line comments with Ctrl+/ while preserving the reply and native undo', async ({ page }) => {
+        await page.goto('/#/yang/yang-workspace');
+        const panel = page.locator('.workspace-operation-panel');
+        await panel.getByRole('button', { name: '执行 get', exact: true }).click();
+        const reply = panel.getByRole('textbox', { name: 'RPC 响应 XML' });
+        await expect.poll(() => reply.inputValue()).toContain('<rpc-reply');
+        const originalReply = await reply.inputValue();
+        const input = panel.getByRole('textbox', { name: 'RPC 请求 XML' });
+        const source =
+            '<rpc xmlns="urn:ietf:params:xml:ns:netconf:base:1.0" message-id="comment-test">\n  <get>\n    <filter type="subtree">\n      <interfaces xmlns="urn:ietf:params:xml:ns:yang:ietf-interfaces"/>\n    </filter>\n  </get>\n</rpc>';
+        await input.fill(source);
+        const caret = source.indexOf('<filter') + 3;
+        await input.evaluate((element, position) => {
+            element.focus();
+            element.setSelectionRange(position, position);
+        }, caret);
+        await input.press('Control+/');
+        const commented = source.replace('    <filter type="subtree">', '    <!-- <filter type="subtree"> -->');
+        await expect(input).toHaveValue(commented);
+        await expect(reply).toHaveValue(originalReply);
+        await input.press('Control+z');
+        await expect(input).toHaveValue(source);
+        await input.press('Control+y');
+        await expect(input).toHaveValue(commented);
+        await input.press('Control+/');
+        await expect(input).toHaveValue(source);
+        await input.evaluate(element => {
+            element.focus();
+            element.setSelectionRange(element.value.indexOf('    <filter'), element.value.indexOf('  </get>'));
+        });
+        await input.press('Control+/');
+        await expect.poll(() => input.inputValue()).toContain('      <!-- <interfaces');
+        expect((await input.inputValue()).match(/<!--/gu)).toHaveLength(3);
+        await input.press('Control+/');
+        await expect(input).toHaveValue(source);
+        await input.fill('<!-- -->');
+        await input.evaluate(element => element.setSelectionRange(5, 5));
+        await input.press('Control+/');
+        await expect(input).toHaveValue('');
+        await input.fill('<!--\n  <get/>\n-->');
+        await input.evaluate(element => element.setSelectionRange(8, 8));
+        await input.press('Control+/');
+        await expect.poll(() => input.inputValue()).not.toContain('<!--');
+        await expect.poll(() => input.inputValue()).toContain('<get/>');
+        await expect(reply).toHaveValue(originalReply);
+        await reply.press('Control+/');
+        await expect(reply).toHaveValue(originalReply);
+    });
+
     test('validates, marks, and sends an edited complete RPC', async ({ page }) => {
         const rawRequests = [];
         let forcedValidationError = '';
@@ -3991,6 +4202,100 @@ test.describe('NETCONF/YANG workbench', () => {
         }, request.config);
         expect(sentOperations).toEqual({ parent: null, leaf: 'delete' });
     });
+
+    for (const existingRow of [false, true]) {
+        test(`adds BGP locator children from ${existingRow ? 'an unloaded list Schema' : 'a generated container placeholder'}`, async ({
+            page
+        }) => {
+            const namespace = 'http://www.h3c.com/netconf/config:1.0-BGP';
+            const yang = harness.controller.state.yang;
+            yang.moduleSources['ietf-interfaces'] = `module ietf-interfaces {
+                yang-version 1.1;
+                namespace "${namespace}";
+                prefix bgp;
+                revision 2018-02-20;
+                container BGP {
+                    container AdvertiseLocators {
+                        list AdvertiseLocator {
+                            key "Name Family AdvLocatorName";
+                            leaf Name { type string { length "0..31"; } }
+                            leaf Family { type string { length "1..31"; } }
+                            leaf AdvLocatorName { type string { length "1..31"; } }
+                            leaf RtPolicyName { type string { length "1..63"; } }
+                        }
+                    }
+                }
+            }`;
+            yang.modules.find(module => module.name === 'ietf-interfaces').namespace = namespace;
+            await harness.controller.call('yang.registry.compile', {
+                profileId: yang.session.profileId,
+                moduleIds: [{ name: 'ietf-interfaces' }]
+            });
+            const capturedRequests = [];
+            const childReads = [];
+            const originalControllerCall = harness.controller.call.bind(harness.controller);
+            harness.controller.call = async (method, ...args) => {
+                if (method === 'yang.registry.getSchemaChildren') childReads.push(args[0].parentId);
+                if (method === 'yang.netconf.executeOperation') {
+                    capturedRequests.push(args[0]);
+                    if (args[0].operation === 'get-config') {
+                        if (!existingRow) return { status: 'error', msg: 'mock locator readback unavailable' };
+                        return {
+                            status: 'success',
+                            data: {
+                                configXml: `<BGP xmlns="${namespace}"><AdvertiseLocators><AdvertiseLocator><Name/><Family>ipv6-unicast</Family><AdvLocatorName>LOCATOR-1</AdvLocatorName></AdvertiseLocator></AdvertiseLocators></BGP>`
+                            }
+                        };
+                    }
+                }
+                return originalControllerCall(method, ...args);
+            };
+            const context = netconfEditContext(harness, '/ietf-interfaces:BGP/AdvertiseLocators', 'running');
+            const { operationPanel } = await gotoNetconfEditMonitor(page, context);
+            const parameters = operationPanel.getByRole('complementary', { name: '操作参数' });
+            const containerPath = '/rpc/edit-config/config/BGP[1]/AdvertiseLocators[1]';
+            const listPath = `${containerPath}/AdvertiseLocator[1]`;
+            const requestEditor = operationPanel.getByRole('textbox', { name: 'RPC 请求 XML' });
+            if (!existingRow) {
+                await expect.poll(() => requestEditor.inputValue()).toContain('NETNEXUS_REQUIRED: 在此补充配置');
+                const menu = (await openParameterContextMenu(page, parameters, containerPath)).menu;
+                await expect(menu.getByRole('menuitem', { name: '添加子节点', exact: true })).toBeEnabled();
+                await menu.getByRole('menuitem', { name: '添加子节点', exact: true }).click();
+                const dialog = page.getByRole('dialog', { name: '添加子节点 · AdvertiseLocators' });
+                await expect(dialog.getByRole('combobox', { name: 'Schema 节点' })).toContainText('AdvertiseLocator');
+                await dialog.getByRole('button', { name: '确认', exact: true }).click();
+                await expect.poll(() => requestEditor.inputValue()).not.toContain('在此补充配置');
+                for (const [name, value] of [
+                    ['Family', 'ipv6-unicast'],
+                    ['AdvLocatorName', 'LOCATOR-1']
+                ]) {
+                    const keyMenu = (await openParameterContextMenu(page, parameters, `${listPath}/${name}[1]`)).menu;
+                    await keyMenu.getByRole('menuitem', { name: '修改值', exact: true }).click();
+                    const editDialog = page.getByRole('dialog', { name: `修改值 · ${name}` });
+                    await editDialog.getByRole('textbox', { name: '节点值' }).fill(value);
+                    await editDialog.getByRole('button', { name: '确认', exact: true }).click();
+                }
+            } else {
+                await expect(parameterNode(parameters, `${listPath}/AdvLocatorName[1]`)).toBeVisible();
+            }
+            const listSchema = Object.values(yang.schemaTree.nodes).find(node => node.name === 'AdvertiseLocator');
+            if (existingRow) expect(childReads).not.toContain(listSchema.id);
+            const menu = (await openParameterContextMenu(page, parameters, listPath)).menu;
+            await menu.getByRole('menuitem', { name: '添加子节点', exact: true }).click();
+            const dialog = page.getByRole('dialog', { name: '添加子节点 · AdvertiseLocator' });
+            await expect(dialog.getByRole('combobox', { name: 'Schema 节点' })).toContainText('RtPolicyName');
+            expect(childReads).toContain(listSchema.id);
+            await dialog.getByRole('textbox', { name: '节点初始值' }).fill('POLICY-1');
+            await dialog.getByRole('button', { name: '确认', exact: true }).click();
+            await expect(parameterNode(parameters, `${listPath}/RtPolicyName[1]`)).toBeVisible();
+            const rpc = await requestEditor.inputValue();
+            expect(rpc).toContain('<RtPolicyName>POLICY-1</RtPolicyName>');
+            expect(rpc).toContain('<Family>ipv6-unicast</Family>');
+            expect(rpc).toContain('<AdvLocatorName>LOCATOR-1</AdvLocatorName>');
+            expect(rpc).not.toContain('NETNEXUS_REQUIRED');
+            expect(capturedRequests.map(request => request.operation)).toEqual(['get-config']);
+        });
+    }
 
     test('uses compiled enumeration metadata for YANG leaf value editing', async ({ page }) => {
         const capturedRequests = [];

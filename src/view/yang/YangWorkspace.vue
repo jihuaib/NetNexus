@@ -7,7 +7,9 @@
         <nn-card title="Schema 与设备操作" class="workspace-card">
             <template #extra>
                 <nn-space>
-                    <nn-tag v-if="schemaStatus === 'ready'" color="success">Schema 已就绪</nn-tag>
+                    <nn-tag v-if="schemaRetained" color="warning">本次编译失败，保留上次 Schema</nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'ready'" color="success">Schema 已就绪</nn-tag>
+                    <nn-tag v-else-if="schemaStatus === 'stale'" color="warning">Schema 已过期</nn-tag>
                     <nn-tag v-else-if="schemaStatus === 'partial'" color="warning" :title="schemaStatusMessage">
                         Schema 部分可用
                     </nn-tag>
@@ -65,6 +67,14 @@
                 </div>
             </div>
 
+            <nn-alert
+                v-if="schemaStatus === 'stale'"
+                type="warning"
+                show-icon
+                message="设备模型集已变化，旧 Schema 已停用"
+                description="本地文件已保留。请到模型列表获取设备当前版本，下载后重新编译。"
+                data-testid="yang-model-set-changed"
+            />
             <div
                 ref="workspaceLayoutRef"
                 class="workspace-layout"
@@ -332,6 +342,7 @@
     const treeLoading = ref(false);
     const compileId = ref('');
     const schemaStatus = ref('none');
+    const schemaRetained = ref(false);
     const schemaStatusMessage = ref('');
     const schemaPartial = ref(false);
     const workspaceSummary = ref({ moduleCount: 0, nodeCount: 0, cacheHit: false });
@@ -549,6 +560,7 @@
     };
     const applyWorkspace = (data, { preserveTree = false } = {}) => {
         const workspace = data?.workspace || data || {};
+        schemaRetained.value = workspace.schemaRetained === true;
         const nextCompileId = workspace.compileId || '';
         if (nextCompileId !== compileId.value) {
             schemaRestoreFailedCompileId = '';
@@ -566,7 +578,10 @@
             workspace.partialSchema === true || schemaTree.partial === true || (authoritativeSchema && workspaceFailed)
         );
         schemaPartial.value = partialSchema;
-        if (!compileId.value) {
+        if (workspace.deviceModelSet?.schemaStale) {
+            schemaStatus.value = 'stale';
+            schemaStatusMessage.value = '';
+        } else if (!compileId.value) {
             schemaStatus.value = 'none';
             schemaStatusMessage.value = '';
         } else if (authoritativeSchema && partialSchema) {
@@ -1978,6 +1993,7 @@
     };
 
     const resetProfileWorkspace = () => {
+        schemaRetained.value = false;
         profileRequestRevision += 1;
         workspaceRequestRevision += 1;
         detailRequestRevision += 1;

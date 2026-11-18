@@ -190,6 +190,7 @@
                         aria-label="RPC 请求 XML"
                         :aria-invalid="requestValidation.status === 'error' ? 'true' : 'false'"
                         @update:value="handleRequestEditorInput"
+                        @keydown.capture="handleRequestEditorKeydown"
                     />
                     <nn-form
                         v-else
@@ -1241,6 +1242,7 @@
     } from './yangUiUtils';
     import { beginNetconfExecution, completeNetconfExecution } from './useNetconfExecutionHistory';
     import { usePaneResize } from './usePaneResize';
+    import { toggleXmlComments } from './yangXmlComments';
 
     defineOptions({ name: 'YangOperations' });
 
@@ -1759,6 +1761,7 @@
     };
 
     const xmlMetadataSegment = element => `{${element.namespaceURI || ''}}${element.localName || element.nodeName}`;
+    const isContainerPlaceholder = value => /NETNEXUS_REQUIRED:\s*在此补充配置/u.test(String(value || ''));
 
     const collectRequiredXmlMetadata = (value, expectedRootName) => {
         const parsed = parseXmlFragment(value);
@@ -1767,7 +1770,7 @@
             const requiredComment = Array.from(element.childNodes || []).find(
                 node => node.nodeType === 8 && String(node.nodeValue || '').includes('NETNEXUS_REQUIRED')
             );
-            if (requiredComment) {
+            if (requiredComment && !isContainerPlaceholder(requiredComment.nodeValue)) {
                 const placeholder = String(requiredComment.nodeValue || '').trim();
                 metadata.set(metadataPath.join('/'), {
                     placeholder,
@@ -1810,6 +1813,8 @@
         const directText = requiredComment ? directTextValue.trim() : directTextValue;
         const schemaMetadata = requiredMetadata.get(metadataPath.join('/')) || {};
         const requiredPlaceholder = String(requiredComment?.nodeValue || schemaMetadata.placeholder || '').trim();
+        const structuralPlaceholder = isContainerPlaceholder(requiredPlaceholder);
+        const schemaBranch = ['container', 'list'].includes(parameterSchemaKeyword(valueSchemaMetadata.schemaNode));
         const elementChildren = Array.from(element.children || []);
         const attributes = Array.from(element.attributes || []).map(attribute => ({
             key: `parameter:xml:${xmlField}:${elementPath.join('.')}:@${attribute.name}`,
@@ -1840,8 +1845,7 @@
             );
         });
         const presenceRequired = Boolean(
-            requiredComment ||
-                schemaMetadata.placeholder ||
+            (!structuralPlaceholder && (requiredComment || schemaMetadata.placeholder)) ||
                 valueSchemaMetadata.isListKey ||
                 valueSchemaMetadata.schemaNode?.mandatory === true
         );
@@ -1849,7 +1853,10 @@
         const hasRequiredDescendant = childNodes.some(child => child.required || child.hasRequiredDescendant);
         const isListNode = childNodes.some(child => child.kind === 'key');
         const hasEditableValue =
-            elementChildren.length === 0 && Boolean(directText || presenceRequired || valueSchemaMetadata.isTerminal);
+            !structuralPlaceholder &&
+            !schemaBranch &&
+            elementChildren.length === 0 &&
+            Boolean(directText || presenceRequired || valueSchemaMetadata.isTerminal);
         const booleanValue =
             /^(?:true|false)$/iu.test(directText) || schemaMetadata.boolean || /boolean/iu.test(requiredPlaceholder);
         const children = [...attributes, ...childNodes];
@@ -1866,6 +1873,7 @@
             options: booleanValue ? booleanValueOptions : undefined,
             value: directText,
             placeholder: requiredPlaceholder,
+            structuralPlaceholder,
             presenceRequired,
             acceptsEmptyString: valueSchemaMetadata.acceptsEmptyString,
             required,
@@ -2595,6 +2603,7 @@
         if (node?.kind === 'key') return 'key';
         if (node?.kind === 'error') return 'fallback';
         if (node?.kind === 'list') return 'list';
+        if (node?.structuralPlaceholder) return 'container';
         const schemaNode = findParameterSchemaNode(node);
         const schemaKeyword = parameterSchemaKeyword(schemaNode);
         if (schemaNode?.isListKey) return 'key';
@@ -2953,7 +2962,7 @@
             const contextRoot = findContextRootSchemaNode();
             candidates = contextRoot ? [contextRoot] : [];
         } else {
-            schemaParent = mode === 'add-sibling' ? findParameterSchemaNode(parent) : findParameterSchemaNode(node);
+            schemaParent = await resolveParameterSchemaNode(mode === 'add-sibling' ? parent : node);
             if (schemaParent) {
                 candidates = await flattenAddableParameterSchemaChildren(
                     await loadDirectParameterSchemaChildren(schemaParent)
@@ -3141,6 +3150,9 @@
                     element.appendChild(parsed.documentNode.createTextNode(value));
                 }
             }
+            Array.from(targetParent.childNodes || []).forEach(child => {
+                if (child.nodeType === 8 && isContainerPlaceholder(child.nodeValue)) targetParent.removeChild(child);
+            });
             targetParent.appendChild(element);
         }
         restoreGeneratedRequest({ silent: true });
@@ -3815,7 +3827,41 @@
         requestDraft.value = String(value ?? '');
         requestOverrideActive.value = true;
         clearRequestValidation();
-        if (result.request) clearResult();
+    };
+    const handleRequestEditorKeydown = async event => {
+        if (
+            !(event.ctrlKey || event.metaKey) ||
+            event.altKey ||
+            event.shiftKey ||
+            event.isComposing ||
+            (event.key !== '/' && event.code !== 'Slash') ||
+            executing.value ||
+            editConfigLoading.value
+        )
+            return;
+        const input = event.target;
+        if (!(input instanceof HTMLTextAreaElement) || input.disabled || input.readOnly) return;
+        event.preventDefault();
+        event.stopPropagation();
+        const edit = toggleXmlComments(input.value, input.selectionStart, input.selectionEnd);
+        if (!edit) return;
+        if (edit.error) {
+            notify.warning(edit.error);
+            return;
+        }
+        const direction = input.selectionDirection;
+        const scrollTop = input.scrollTop;
+        const scrollLeft = input.scrollLeft;
+        input.setSelectionRange(edit.start, edit.end);
+        // Native insertion keeps Ctrl+Z/Ctrl+Y in the textarea's undo history.
+        if (!document.execCommand('insertText', false, edit.text)) {
+            input.setRangeText(edit.text, edit.start, edit.end, 'end');
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+        await nextTick();
+        input.setSelectionRange(edit.selectionStart, edit.selectionEnd, direction);
+        input.scrollTop = scrollTop;
+        input.scrollLeft = scrollLeft;
     };
     const restoreGeneratedRequest = (options = {}) => {
         const silent = options?.silent === true;
@@ -3823,7 +3869,7 @@
         requestOverrideActive.value = false;
         requestDraft.value = '';
         clearRequestValidation();
-        if (result.request) clearResult();
+        result.request = '';
         if (!silent && wasOverridden) notify.info('已恢复为参数树自动生成的 RPC');
     };
     const applyRequestValidation = (validation, { notifyResult = false } = {}) => {
@@ -3989,7 +4035,6 @@
             notify.info('当前 RPC 已是格式化状态');
             return;
         }
-        if (result.request) clearResult();
         requestDraft.value = formatted;
         requestOverrideActive.value = true;
         clearRequestValidation();
@@ -4763,7 +4808,7 @@
     watch(
         form,
         () => {
-            if (!executing.value && result.request) clearResult();
+            if (!executing.value) result.request = '';
             if (!requestOverrideActive.value) clearRequestValidation();
         },
         { deep: true }

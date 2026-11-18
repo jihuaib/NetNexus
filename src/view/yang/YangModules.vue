@@ -25,7 +25,7 @@
                                 <nn-button
                                     class="module-action-button module-action-device"
                                     :loading="discovering"
-                                    :disabled="!connected || clearingWorkspace"
+                                    :disabled="!runtimeRunning || !connected || clearingWorkspace"
                                     @click="openDeviceModules"
                                 >
                                     <template #icon><SearchOutlined /></template>
@@ -82,7 +82,7 @@
                             class="module-action-button module-refresh-action"
                             :loading="loading"
                             :disabled="!runtimeRunning || clearingWorkspace"
-                            @click="loadModules"
+                            @click="reloadCurrentProfile"
                         >
                             <template #icon><ReloadOutlined /></template>
                             刷新
@@ -91,6 +91,22 @@
                 </div>
             </div>
 
+            <nn-alert
+                v-if="compileContext.deviceModelSet?.schemaStale"
+                type="warning"
+                show-icon
+                message="设备模型集已变化，旧 Schema 已停用"
+                description="本地文件已保留。请获取设备列表，下载当前版本后重新编译。"
+                data-testid="yang-model-set-changed"
+            />
+            <nn-alert
+                v-else-if="compileContext.schemaRetained"
+                type="warning"
+                show-icon
+                message="本次编译失败，保留上次 Schema"
+                description="请查看编译日志中的错误，修复后重新编译。"
+                data-testid="yang-schema-retained"
+            />
             <div class="selection-row">
                 <nn-checkbox
                     :checked="allVisibleSelected"
@@ -512,7 +528,7 @@
 </template>
 
 <script setup>
-    import { computed, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
+    import { computed, onActivated, onBeforeUnmount, onDeactivated, onMounted, ref, watch } from 'vue';
     import {
         NETCONF_SESSION_STATUS,
         YANG_EVENT,
@@ -1126,7 +1142,9 @@
             modules: Array.isArray(workspace.modules) ? workspace.modules.map(normalizeModule) : [],
             diagnostics: Array.isArray(workspace.diagnostics) ? workspace.diagnostics.map(normalizeDiagnostic) : null,
             diagnosticsTruncated: workspace.diagnosticsTruncated === true,
-            restoreError: workspace.restoreError || ''
+            restoreError: workspace.restoreError || '',
+            deviceModelSet: workspace.deviceModelSet || null,
+            schemaRetained: workspace.schemaRetained === true
         };
     };
 
@@ -1321,7 +1339,7 @@
     };
 
     const openDeviceModules = () => {
-        if (!connected.value || !selectedProfileId.value) return;
+        if (!runtimeRunning.value || !connected.value || !selectedProfileId.value) return;
         deviceModuleModalOpen.value = true;
         deviceModuleQuery.value = '';
         deviceModulePage.value = 1;
@@ -1832,7 +1850,10 @@
             void refreshCompilerStatus({ force: true });
             return;
         }
-        if (!runtimeRunning.value) return;
+        if (!runtimeRunning.value) {
+            if (isConnected && profileContextReady) void reloadCurrentProfile();
+            return;
+        }
         connected.value = isConnected;
         if (isConnected && profileContextReady) void Promise.all([loadModules(), loadDiagnostics({ quiet: true })]);
     };
@@ -1852,7 +1873,6 @@
     };
 
     const handleProfileDataRefresh = payload => {
-        if (!runtimeRunning.value) return;
         const profileId = String(payload?.profileId || '');
         if (!profileId) return;
         if (profileId !== selectedProfileId.value) return;
@@ -1946,6 +1966,10 @@
         await refreshProfiles();
         profileContextReady = true;
         await Promise.all([reloadCurrentProfile(), refreshCompilerStatus()]);
+    });
+
+    onActivated(async () => {
+        if (profileContextReady && !runtimeRunning.value) await reloadCurrentProfile();
     });
 
     onDeactivated(() => {

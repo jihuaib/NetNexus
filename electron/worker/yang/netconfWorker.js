@@ -723,6 +723,7 @@ class NetconfWorkerService {
     constructor(port = parentEndpoint, options = {}) {
         this.port = port;
         this.clientFactory = options.clientFactory || (clientOptions => new NetconfClient(clientOptions));
+        this.onSchemaInventory = options.onSchemaInventory || null;
         this.sessions = new Map();
         this.subscriptions = new Map();
         this.subscriptionStopTimers = new Map();
@@ -1926,6 +1927,8 @@ class NetconfWorkerService {
         entry.status = reconnecting ? 'reconnecting' : 'connecting';
         entry.lastError = null;
         entry.observed = {};
+        entry.schemaInventory = null;
+        entry.schemaDiscoveryPromise = null;
         this.emitState(entry);
         const runtime = this.prepareProfile(entry.profile, entry.observed);
         const client = this.clientFactory({
@@ -2003,7 +2006,11 @@ class NetconfWorkerService {
                 timeout,
                 capabilities: client.sessionInfo?.().capabilities || []
             })
-            .then(inventory => {
+            .then(async inventory => {
+                if (entry.client !== client || !client.connected || entry.status !== 'connected') return null;
+                await this.onSchemaInventory?.(entry.profileId, inventory, {
+                    isCurrent: () => entry.client === client && client.connected && entry.status === 'connected'
+                });
                 if (entry.client !== client || !client.connected || entry.status !== 'connected') return null;
                 entry.schemaInventory = inventory;
                 entry.schemaDiscoveryError = null;
@@ -2030,7 +2037,7 @@ class NetconfWorkerService {
             String(capability || '').includes('urn:ietf:params:netconf:capability:yang-library:')
         );
         if (
-            !advertisesYangLibrary ||
+            (!advertisesYangLibrary && !this.onSchemaInventory) ||
             typeof entry.client?.discoverSchemas !== 'function' ||
             entry.schemaInventory ||
             entry.schemaDiscoveryPromise

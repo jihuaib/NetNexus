@@ -52,6 +52,11 @@ class YangProcessService {
             runtimeHost: this.runtime,
             validateProfile: profileId => this.assertProfileAvailable(profileId)
         });
+        this.netconf.onSchemaInventory = async (profileId, inventory, options) => {
+            this.assertProfileAvailable(profileId);
+            await this.runtime.runtime.updateDeviceModels(profileId, inventory, options);
+            if (options.isCurrent()) this.downloads.rememberInventory(profileId, inventory);
+        };
         for (const profileId of data.pendingWorkspaceDeletions || []) {
             this.deletedProfiles.add(String(profileId));
             await this.runtime.deleteProfileWorkspace(profileId);
