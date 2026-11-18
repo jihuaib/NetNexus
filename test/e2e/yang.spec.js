@@ -435,15 +435,28 @@ test.describe('NETCONF/YANG workbench', () => {
 
         const failedTrigger = page.getByRole('button', { name: '查看 failed-model 的文件诊断（2 条）' });
         await expect(failedTrigger).toContainText('失败 · 2');
+        // Keep the slide-in active long enough to exercise the geometry wait on fast runners.
+        await page.addStyleTag({
+            content:
+                '.nn-drawer-content-wrapper, .nn-drawer-motion-enter-active { transition-duration: 2s !important; }'
+        });
         await failedTrigger.click();
         await expect(details).toContainText(failed.compileDiagnostic.message);
         await expect(details).toContainText('错误 1');
         await expect(details).toContainText('警告 1');
         await page.setViewportSize({ width: 390, height: 844 });
         await expect(details).toBeVisible();
-        const bounds = await details.boundingBox();
-        expect(bounds.x).toBeGreaterThanOrEqual(0);
-        expect(bounds.x + bounds.width).toBeLessThanOrEqual(391);
+        await expect.poll(() => page.evaluate(() => window.innerWidth)).toBe(390);
+        const drawer = page.locator('.nn-drawer-content-wrapper').filter({ has: details });
+        await expect
+            .poll(
+                async () => {
+                    const bounds = await drawer.boundingBox();
+                    return bounds ? Math.max(-bounds.x, bounds.x + bounds.width - 390) : Infinity;
+                },
+                { message: 'file diagnostics drawer fits the narrow viewport after sliding in' }
+            )
+            .toBeLessThanOrEqual(1);
         await page.screenshot({ path: testInfo.outputPath('yang-file-diagnostics-narrow.png') });
         await page.goto('/#/yang/yang-connection');
         await expect(details).toBeHidden();
