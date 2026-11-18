@@ -326,11 +326,19 @@ function decodeBmpTlv(tlv, context) {
         (context === 'route-monitoring' || context === 'route-mirroring') &&
         decoded.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE
     ) {
-        const bgpHeader = decodeBgpPacketHeader(decoded.value);
+        const bgpHeaders = [];
+        let position = 0;
+        do {
+            const bgpHeader = decodeBgpPacketHeader(decoded.value.subarray(position));
+            bgpHeaders.push({ ...bgpHeader, offset: position });
+            if (!bgpHeader.valid) break;
+            position += bgpHeader.length;
+        } while (position < decoded.value.length);
         decoded.decoded = {
             ...(decoded.decoded || {}),
-            bgpHeader,
-            bgpSummary: bgpHeader.summary
+            bgpHeader: bgpHeaders[0],
+            bgpHeaders,
+            bgpSummary: bgpHeaders.map(header => header.summary).join('\n')
         };
     }
 

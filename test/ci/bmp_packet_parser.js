@@ -292,6 +292,59 @@ assert.ok(
     'BMP tree should expand UPDATE NLRI routes'
 );
 
+const batchUpdate = bgpUpdate();
+const batchMonitoring = bmpMessage(
+    BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+    Buffer.concat([
+        peerHeader(),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, Buffer.concat([batchUpdate, batchUpdate])),
+        indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, batchUpdate)
+    ])
+);
+const parsedBatch = parseBmpPacket(batchMonitoring);
+assert.deepEqual(
+    parsedBatch.payload.tlvs.map(item => item.decoded.bgpHeaders.length),
+    [2, 1]
+);
+assert.deepEqual(
+    parsedBatch.payload.tlvs[0].decoded.bgpHeaders.map(header => header.offset),
+    [0, batchUpdate.length]
+);
+assert.equal(getBmpPacketSummary(parsedBatch).split('BGP UPDATE Message').length - 1, 3);
+assert.ok(!getBmpPacketSummary(parsedBatch).includes('Path Attributes:'), 'batch summary remains context-free');
+const batchTree = { children: [] };
+assert.equal(parseBmpTreePacket(batchMonitoring, batchTree).valid, true);
+const bgpNodes = collectNodes(batchTree, node => node.name === 'BGP Message');
+assert.equal(bgpNodes.length, 3, 'tree must expand every UPDATE in every BGP Message TLV');
+assert.deepEqual(
+    bgpNodes.map(node => node.length),
+    Array(3).fill(batchUpdate.length)
+);
+assert.deepEqual(
+    bgpNodes.map(node => node.offset),
+    [54, 54 + batchUpdate.length, 60 + 2 * batchUpdate.length]
+);
+
+for (const value of [batchUpdate.subarray(0, batchUpdate.length - 1), Buffer.alloc(19)]) {
+    const malformed = bmpMessage(
+        BmpConst.BMP_MSG_TYPE.ROUTE_MONITORING,
+        Buffer.concat([
+            peerHeader(),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, value),
+            indexedTlv(BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE, 0, batchUpdate)
+        ])
+    );
+    const headers = parseBmpPacket(malformed).payload.tlvs.map(item => item.decoded.bgpHeaders);
+    assert.equal(headers[0][0].valid, false);
+    assert.equal(headers[1][0].valid, true);
+    const malformedTree = { children: [] };
+    assert.equal(parseBmpTreePacket(malformed, malformedTree).valid, true);
+    const nodes = collectNodes(malformedTree, node => node.name === 'BGP Message');
+    assert.equal(nodes.length, 2);
+    assert.ok(nodes[0].value.includes('Incomplete packet') || nodes[0].value.includes('Invalid BGP length'));
+    assert.equal(nodes[1].offset, 60 + value.length, 'malformed BGP must not consume bytes from the next TLV');
+}
+
 registry.registerParser('bmp', 1790, parseBmpTreePacket, true);
 try {
     const tcpTree = {

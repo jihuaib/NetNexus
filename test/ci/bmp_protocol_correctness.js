@@ -17,6 +17,7 @@ const families = [
 ];
 const packet = (type, body = Buffer.alloc(0)) =>
     Buffer.concat([Buffer.alloc(16, 255), u16(19 + body.length), Buffer.from([type]), body]);
+const indexedTlv = (type, index, value) => Buffer.concat([u16(type), u16(value.length), u16(index), value]);
 const attr = (type, value, flags = 0x40) => Buffer.concat([Buffer.from([flags, type, value.length]), value]);
 const update = (attrs, nlri = Buffer.from([24, 203, 0, 113])) => {
     const bytes = Buffer.concat(attrs);
@@ -79,14 +80,14 @@ function peerUp(kind = 'peer', sentMode = 1, receivedMode = 2, version = 3) {
     );
 }
 
-function harness(kind = 'peer', sentMode = 3, receivedMode = 3) {
+function harness(kind = 'peer', sentMode = 3, receivedMode = 3, draft = BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20) {
     const mutations = [],
         failures = [],
         routeUpdates = [];
     const session = new BmpSession(
         { sendEvent() {} },
         {
-            bmpConfigData: { bmpV4TlvDraft: BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20 },
+            bmpConfigData: { bmpV4TlvDraft: draft },
             persistence: {},
             enqueuePersistenceMutation(mutation) {
                 mutations.push(mutation);
@@ -283,6 +284,226 @@ for (const kind of ['peer', 'loc-rib']) {
     invalidPeerUp[6 + 42 + 20 + 18] = 4; // A KEEPALIVE cannot replace the Sent OPEN.
     h.session.processMessage(invalidPeerUp);
     assert.equal(h.mutations.length, beforePeerUp, 'invalid Peer Up does not advance scopes/epochs');
+}
+
+// Devices may batch complete UPDATEs under one BMPv3 per-peer header or BMPv4 TLV.
+// Each UPDATE keeps its own attributes, NLRI encoding and EOR semantics.
+for (const [kind, version] of [
+    ['peer', 3],
+    ['loc-rib', 3],
+    ['peer', 4],
+    ['loc-rib', 4]
+]) {
+    const h = harness(kind, 0, 0);
+    const send = bgp => h.send(bgp, 0, version);
+    const first = builders.ipv4Update(['203.0.113.0'], {
+        nextHop: '192.0.2.11',
+        localPref: 111,
+        // Sixteen FF bytes inside an attribute are not a packet boundary.
+        communities: Array(4).fill('65535:65535')
+    });
+    const second = builders.ipv4Update(['203.0.114.0'], { nextHop: '192.0.2.22', localPref: 222 });
+    const ipv6 = builders.multiprotocolUpdate(2, 1, Buffer.from([32, 0x20, 0x01, 0x0d, 0xb8]), {
+        nextHop: Buffer.from('20010db8000000000000000000000001', 'hex')
+    });
+    const routes = send(Buffer.concat([first, second, ipv6]));
+    assert.deepEqual(
+        routes.map(item => item.route.prefix),
+        ['203.0.113.0', '203.0.114.0', '2001:db8::']
+    );
+    assert.deepEqual(
+        routes.map(item => item.route.afi),
+        [1, 1, 2]
+    );
+    assert.deepEqual(
+        routes.slice(0, 2).map(item => JSON.parse(item.route.attrJson).nextHop),
+        ['192.0.2.11', '192.0.2.22']
+    );
+    assert.deepEqual(
+        routes.slice(0, 2).map(item => JSON.parse(item.route.attrJson).localPref),
+        [111, 222]
+    );
+    assert.ok(routes.every(item => item.sourceTimestampMs === 1719811200123));
+    assert.ok(!h.mutations.some(item => item.eventType === 'scope_eor'), 'announcements are not EOR');
+
+    const withdraw = packet(2, Buffer.concat([u16(4), Buffer.from([24, 203, 0, 113]), u16(0)]));
+    send(Buffer.concat([first, withdraw, second, builders.endOfRibUpdate(), builders.endOfRibUpdate(2, 1)]));
+    assert.deepEqual(
+        h.mutations.filter(item => item.route || item.eventType === 'scope_eor').map(item => item.eventType),
+        ['upsert', 'withdraw', 'upsert', 'scope_eor', 'scope_eor'],
+        'announcements, withdrawals and EOR must be persisted in wire order'
+    );
+    assert.deepEqual(
+        h.mutations.filter(item => item.eventType === 'scope_eor').map(item => item.scope.afi),
+        [1, 2]
+    );
+
+    const addPath = harness(kind);
+    const addPathRoutes = addPath.send(
+        Buffer.concat([
+            builders.ipv4Update(['203.0.113.0'], { addPath: true, pathIdStart: 101 }),
+            builders.ipv4Update(['203.0.113.0'], { addPath: true, pathIdStart: 202 })
+        ]),
+        0,
+        version
+    );
+    assert.deepEqual(
+        addPathRoutes.map(item => item.route.pathId),
+        [101, 202]
+    );
+
+    const corruptMarker = Buffer.from(second);
+    corruptMarker[0] = 0;
+    const zeroLength = Buffer.from(second);
+    zeroLength.writeUInt16BE(0, 16);
+    const shortLength = Buffer.from(second);
+    shortLength.writeUInt16BE(18, 16);
+    const oversized = Buffer.from(second);
+    oversized.writeUInt16BE(second.length + 1, 16);
+    for (const invalid of [
+        Buffer.alloc(0),
+        Buffer.from([0]),
+        corruptMarker,
+        zeroLength,
+        shortLength,
+        oversized,
+        second.subarray(0, 18),
+        second.subarray(0, second.length - 1),
+        packet(4),
+        invalidOrigin,
+        Buffer.concat([Buffer.from([0]), second])
+    ]) {
+        // No partial writes or EOR acknowledgements if a later packet is bad.
+        const malformed = invalid.length === 0 ? invalid : Buffer.concat([first, builders.endOfRibUpdate(), invalid]);
+        assert.equal(send(malformed).length, 0);
+        assert.equal(h.mutations.length, 0, 'reject malformed batches before writing any route or EOR');
+        assert.equal(h.routeUpdates.length, 0);
+    }
+    assert.equal(send(second).length, 1, 'a rejected batch does not prevent later valid BMP messages');
+
+    // TCP boundaries and BMP boundaries are independent of embedded BGP boundaries.
+    for (const fragmented of [false, true]) {
+        const tcp = harness(kind, 0, 0);
+        tcp.mutations.length = 0;
+        const frame = updates => {
+            const bgp = Buffer.concat(updates);
+            return builders.bmpMessage(
+                0,
+                Buffer.concat([peerHeader(kind), version === 3 ? bgp : indexedTlv(7, 0, bgp)]),
+                version
+            );
+        };
+        const batch = frame([first, second]);
+        const wire = Buffer.concat([batch, frame([ipv6])]);
+        if (fragmented) {
+            const cuts = [3, 6 + 42 + first.length + 8, batch.length - 1, batch.length + 4, wire.length];
+            let offset = 0;
+            for (const end of cuts) {
+                tcp.session.recvMsg(wire.subarray(offset, end));
+                offset = end;
+            }
+        } else {
+            tcp.session.recvMsg(wire);
+        }
+        assert.deepEqual(
+            tcp.mutations.filter(item => item.route).map(item => item.route.prefix),
+            ['203.0.113.0', '203.0.114.0', '2001:db8::'],
+            'all batched UPDATEs and the following BMP frame must be consumed exactly once'
+        );
+        assert.deepEqual(tcp.failures, []);
+    }
+}
+
+// BMPv4 supports both packed TLV values and repeated BGP Message TLVs in
+// compatibility mode. Indexed metadata uses one NLRI space for the whole BMP.
+for (const draft of [BmpConst.BMP_V4_TLV_DRAFT.DRAFT_19, BmpConst.BMP_V4_TLV_DRAFT.DRAFT_20]) {
+    const types = draft === 19 ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE_LEGACY : BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE;
+    for (const kind of ['peer', 'loc-rib']) {
+        const h = harness(kind, 0, 0, draft);
+        const bgpTlv = bgp => indexedTlv(types.BGP_MESSAGE, 0, bgp);
+        const frame = tlvs => builders.bmpMessage(0, Buffer.concat([peerHeader(kind), ...tlvs]), 4);
+        const send = tlvs => {
+            h.mutations.length = 0;
+            h.routeUpdates.length = 0;
+            h.session.processMessage(frame(tlvs));
+            assert.deepEqual(h.failures, []);
+            return h.mutations.filter(item => item.route);
+        };
+        const first = builders.ipv4Update(['203.0.113.0', '203.0.114.0'], { localPref: 111 });
+        const second = builders.ipv4Update(['203.0.115.0'], { localPref: 222 });
+        const ipv6 = builders.multiprotocolUpdate(2, 1, Buffer.from([32, 0x20, 0x01, 0x0d, 0xb8]), {
+            nextHop: Buffer.from('20010db8000000000000000000000001', 'hex')
+        });
+        const metadata = [
+            indexedTlv(types.GROUP, 0x8001, Buffer.concat([u16(2), u16(3)])),
+            indexedTlv(types.PATH_MARKING, 0x8001, u32(BmpConst.BMP_PATH_STATUS.BEST)),
+            indexedTlv(types.PATH_MARKING, 4, u32(BmpConst.BMP_PATH_STATUS.BACKUP)),
+            indexedTlv(100, 3, Buffer.from('third-nlri')),
+            indexedTlv(101, 0, Buffer.from('all-nlri')),
+            indexedTlv(types.VRF_TABLE_NAME, 0, Buffer.from('batch-vrf'))
+        ];
+        for (const values of [[Buffer.concat([first, second, ipv6])], [first, second, ipv6]]) {
+            const routes = send([...metadata, ...values.map(bgpTlv)]);
+            assert.deepEqual(
+                routes.map(item => item.route.prefix),
+                ['203.0.113.0', '203.0.114.0', '203.0.115.0', '2001:db8::']
+            );
+            assert.deepEqual(
+                routes.slice(0, 3).map(item => JSON.parse(item.route.attrJson).localPref),
+                [111, 111, 222]
+            );
+            const details = routes.map(item => JSON.parse(item.route.routeJson));
+            assert.deepEqual(
+                details.map(item => item.pathStatus || 0),
+                [0, 2, 2, 16]
+            );
+            assert.deepEqual(
+                details.map(item => item.routeTlvs.filter(tlv => tlv.type === 100).map(tlv => tlv.appliedNlriIndex)),
+                [[], [], [3], []],
+                'index 3 must match the first NLRI in the second UPDATE, never restart at index 1'
+            );
+            assert.ok(details.every(item => item.routeTlvs.some(tlv => tlv.type === 101)));
+            assert.ok(details.every(item => !item.routeTlvs.some(tlv => tlv.type === types.BGP_MESSAGE)));
+            const owner =
+                kind === 'peer' ? [...h.session.bgpSessionMap.values()][0] : [...h.session.bgpInstanceMap.values()][0];
+            assert.ok(owner.vrfTableNames.includes('batch-vrf'));
+        }
+
+        const withdraw = packet(2, Buffer.concat([u16(4), Buffer.from([24, 203, 0, 115]), u16(0)]));
+        send([bgpTlv(second), bgpTlv(withdraw), bgpTlv(builders.endOfRibUpdate()), bgpTlv(second)]);
+        assert.deepEqual(
+            h.mutations.filter(item => item.route || item.eventType === 'scope_eor').map(item => item.eventType),
+            ['upsert', 'withdraw', 'scope_eor', 'upsert']
+        );
+
+        // No packet may read beyond its own TLV or silently skip a bad TLV.
+        const badMarker = Buffer.from(second);
+        badMarker[0] = 0;
+        const tooLong = Buffer.from(second);
+        tooLong.writeUInt16BE(second.length + 1, 16);
+        for (const bad of [Buffer.alloc(0), Buffer.from([0]), badMarker, tooLong, invalidOrigin, packet(4)]) {
+            send([bgpTlv(first), bgpTlv(builders.endOfRibUpdate()), bgpTlv(bad), bgpTlv(second)]);
+            assert.equal(h.mutations.length, 0);
+            assert.equal(h.routeUpdates.length, 0);
+        }
+        send([
+            bgpTlv(first),
+            bgpTlv(second.subarray(0, second.length - 1)),
+            bgpTlv(second.subarray(second.length - 1))
+        ]);
+        assert.equal(h.mutations.length, 0, 'the next TLV must not fill a truncated UPDATE');
+        send([bgpTlv(first), Buffer.from([0])]);
+        assert.equal(h.mutations.length, 0, 'truncated TLV headers must reject the entire batch');
+        assert.equal(send([bgpTlv(second)]).length, 1);
+
+        // The next BMP frame cannot fill a truncated BGP Message TLV either.
+        h.mutations.length = 0;
+        h.session.recvMsg(Buffer.concat([frame([bgpTlv(tooLong)]), frame([bgpTlv(second)])]));
+        assert.deepEqual(
+            h.mutations.filter(item => item.route).map(item => item.route.prefix),
+            ['203.0.115.0']
+        );
+    }
 }
 
 const failedWriter = harness('peer', 0, 0);

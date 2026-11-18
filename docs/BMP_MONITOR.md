@@ -19,6 +19,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 ## 已实现能力
 
 - BMP v3 / v4 报文接收。
+- 兼容 BMPv3 Route Monitoring 在同一 Per-Peer Header 后连续封装多个完整 BGP UPDATE，按各自 Length 顺序处理公告、撤销和 EOR；后续报文损坏或截断时拒绝整条消息。
 - BMPv4 TLV draft-19 / draft-20 可配置。
 - Linux 6.7+ 上的 TCP-AO 双向认证，可同时选择多个对端 Profile 并按 IPv4/IPv6 CIDR 匹配密钥。
 - Linux 上的 TCP MD5 兼容认证，支持 1–32 个互不重叠的对端 Profile。
@@ -78,6 +79,8 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - `draft-20` 的 Route Monitoring `BGP Message TLV` 类型为 `7`。
 - `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
 - 如果发送端的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
+- 批量兼容：draft-19 / draft-20 均支持一个 BGP Message TLV 内连续封装多个完整 UPDATE，也支持同一 BMP 中多个 BGP Message TLV。每条 UPDATE 必须完整位于自己的 TLV 内，公告、撤销和 EOR 按封装顺序处理。
+- 批量报文的索引匹配约定：按 UPDATE 顺序对公告 NLRI 连续编号，跨 UPDATE / TLV 不重置；索引 `0` 匹配全部公告 NLRI，Group 和 Path Marking 使用同一编号。任一 UPDATE 或 TLV 损坏时拒绝整条 BMP 消息。
 
 #### TCP-AO 认证
 

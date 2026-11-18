@@ -147,10 +147,14 @@ function addBgpPacketNode(buffer, parent, offset, endOffset, name) {
     }
 
     const length = buffer.readUInt16BE(offset + BgpConst.BGP_MARKER_LEN);
+    if (length < BgpConst.BGP_HEAD_LEN) {
+        parent.children.push(createTreeNode(name, offset, endOffset - offset, `Invalid BGP length ${length}`));
+        return endOffset;
+    }
     const boundedLength = Math.min(length, endOffset - offset);
     const wrapper = createTreeNode(name, offset, boundedLength, '', []);
     parent.children.push(wrapper);
-    const result = parseBgpPacket(buffer, wrapper, offset);
+    const result = parseBgpPacket(buffer.subarray(0, endOffset), wrapper, offset);
     if (!result.valid) {
         wrapper.value = result.error;
     }
@@ -338,7 +342,10 @@ function addTlvNodes(buffer, parent, offset, endOffset, context, options = {}) {
             (context === 'route-monitoring' || context === 'route-mirroring') &&
             type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.BGP_MESSAGE
         ) {
-            addBgpPacketNode(buffer, tlvNode, valueOffset, rawValueEnd, 'BGP Message');
+            let bgpOffset = valueOffset;
+            do {
+                bgpOffset = addBgpPacketNode(buffer, tlvNode, bgpOffset, rawValueEnd, 'BGP Message');
+            } while (bgpOffset < rawValueEnd);
         } else if (context === 'statistics' && type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS) {
             addStatsNodes(buffer, tlvNode, valueOffset, rawValueEnd);
         } else if (

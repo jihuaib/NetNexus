@@ -846,6 +846,9 @@ class BmpSession {
     }
 
     getRouteMonitoringNlriList(parsedBgpUpdate) {
+        if (Array.isArray(parsedBgpUpdate)) {
+            return parsedBgpUpdate.flatMap(update => this.getRouteMonitoringNlriList(update));
+        }
         const nlriList = [];
         if (!parsedBgpUpdate) {
             return nlriList;
@@ -1161,7 +1164,7 @@ class BmpSession {
         };
     }
 
-    parseRouteMonitoringBgpUpdate(message, position, version, context, peerFlags = 0, peerType = null) {
+    parseRouteMonitoringBgpUpdates(message, position, version, context, peerFlags = 0, peerType = null) {
         if (version === BmpConst.BMP_VERSION.V4) {
             const tlvResult = parseBmpTlvs(message, position, { indexed: true });
             this.logTlvWarnings('Route Monitoring TLV', tlvResult.warnings);
@@ -1169,16 +1172,15 @@ class BmpSession {
                 return { error: 'BMPv4 Route Monitoring TLV is truncated', routeTlvs: tlvResult.tlvs };
 
             const routeTlvs = tlvResult.tlvs;
-            const bgpMessageTlv = routeTlvs.find(tlv => this.isRouteMonitoringBgpMessageTlv(tlv));
+            const bgpMessageTlvs = routeTlvs.filter(tlv => this.isRouteMonitoringBgpMessageTlv(tlv));
 
-            if (!bgpMessageTlv) {
+            if (bgpMessageTlvs.length === 0) {
                 return {
                     error: 'BMPv4 Route Monitoring message does not contain mandatory BGP Message TLV',
                     routeTlvs
                 };
             }
 
-            bgpMessageTlv.name = 'BGP Message';
             const effectivePeerFlags = this.isBmpV4TlvDraft20()
                 ? getEffectivePeerFlags(peerFlags, routeTlvs)
                 : peerFlags;
@@ -1192,17 +1194,32 @@ class BmpSession {
                       ? 2
                       : 4
             );
-            const parsed = parseBgpPacket(bgpMessageTlv.value, bgpContext);
-            parsed.asnSize = bgpContext.asnSize;
-            if (!parsed.valid) {
-                logger.error(`Received BMPv4 BGP Update message is invalid: ${parsed.error}`);
+            const updates = [];
+            for (const [index, tlv] of bgpMessageTlvs.entries()) {
+                tlv.name = 'BGP Message';
+                // Bound each sequence to its TLV value; a later TLV cannot
+                // complete an UPDATE truncated in an earlier TLV.
+                const result = this.parseRouteMonitoringBgpPackets(
+                    tlv.value,
+                    0,
+                    bgpContext,
+                    `BMPv4 BGP Message TLV ${index + 1} at offset ${tlv.offset}`,
+                    routeTlvs
+                );
+                if (result.error) return { error: result.error, routeTlvs };
+                for (const update of result.updates) updates.push(update);
             }
 
-            return {
-                parsedBgpUpdate: parsed,
-                bgpUpdate: bgpMessageTlv.value,
-                routeTlvs
-            };
+            // Batched compatibility encoding uses one message-wide NLRI index
+            // space, including across BGP Message TLVs. Never restart at 1.
+            const parsedUpdates = updates.map(update => update.parsedBgpUpdate);
+            const pathMarkingAssignments = this.buildPathMarkingAssignments(parsedUpdates, routeTlvs);
+            const routeTlvAssignments = this.buildRouteTlvAssignments(parsedUpdates, routeTlvs);
+            for (const update of updates) {
+                update.pathMarkingAssignments = pathMarkingAssignments;
+                update.routeTlvAssignments = routeTlvAssignments;
+            }
+            return { updates };
         }
 
         const bgpContext = this.createBgpParsingContext(
@@ -1215,20 +1232,30 @@ class BmpSession {
                   ? 2
                   : 4
         );
-        const embedded = this.parseEmbeddedBgpPacket(message, position, bgpContext, 'BGP Update message');
-        if (embedded.error) {
-            return embedded;
-        }
-        if (position + embedded.length !== message.length) {
-            return { error: 'BMPv3 Route Monitoring contains bytes after its BGP Update' };
-        }
-        embedded.parsed.asnSize = bgpContext.asnSize;
+        return this.parseRouteMonitoringBgpPackets(message, position, bgpContext, 'BMPv3');
+    }
 
-        return {
-            parsedBgpUpdate: embedded.parsed,
-            bgpUpdate: embedded.packet,
-            routeTlvs: []
-        };
+    parseRouteMonitoringBgpPackets(message, position, bgpContext, source, routeTlvs = []) {
+        // Some senders batch complete UPDATEs after a shared per-peer header
+        // or inside a BMPv4 BGP Message TLV.
+        // Validate the entire BMP payload before applying any of its updates.
+        const updates = [];
+        do {
+            const label = `${source} BGP Update message ${updates.length + 1} at offset ${position}`;
+            const embedded = this.parseEmbeddedBgpPacket(message, position, bgpContext, label);
+            if (embedded.error) return embedded;
+            if (!embedded.parsed.valid) {
+                return { error: `${label} is invalid: ${embedded.parsed.error}` };
+            }
+            if (embedded.type !== BgpConst.BGP_PACKET_TYPE.UPDATE) {
+                return { error: `${label} contains non-UPDATE BGP message type: ${embedded.type}` };
+            }
+            embedded.parsed.asnSize = bgpContext.asnSize;
+            updates.push({ parsedBgpUpdate: embedded.parsed, bgpUpdate: embedded.packet, routeTlvs });
+            position += embedded.length;
+        } while (position < message.length);
+
+        return { updates };
     }
 
     parsePeerDownPayload(message, position, reason, version) {
@@ -1523,8 +1550,7 @@ class BmpSession {
                 peerRd: sessionRd,
                 peerRdRaw: sessionRdRaw,
                 peerAddress: sessionAddress,
-                peerAs: sessionAs,
-                peerTimestampMs: sourceTimestampMs
+                peerAs: sessionAs
             } = peerHeader.peer;
 
             const bgpSessionKey = BmpBgpSession.makeKey(
@@ -1540,7 +1566,7 @@ class BmpSession {
                 return;
             }
 
-            const routePayload = this.parseRouteMonitoringBgpUpdate(
+            const routePayload = this.parseRouteMonitoringBgpUpdates(
                 message,
                 position,
                 version,
@@ -1552,9 +1578,24 @@ class BmpSession {
                 logger.error(routePayload.error);
                 return;
             }
+            for (const update of routePayload.updates) {
+                this.processRouteMonitoringGlobalUpdate(peerHeader.peer, bgpSession, update, version);
+            }
+        } catch (err) {
+            logger.error(`Error processing route monitoring:`, err);
+        }
+    }
+
+    processRouteMonitoringGlobalUpdate(peer, bgpSession, routePayload, version) {
+        try {
+            const { peerFlags: sessionFlags, peerTimestampMs: sourceTimestampMs } = peer;
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
-            const pathMarkingAssignments = this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
-            const routeTlvAssignments = this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const pathMarkingAssignments =
+                routePayload.pathMarkingAssignments ||
+                this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const routeTlvAssignments =
+                routePayload.routeTlvAssignments ||
+                this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
             const effectiveSessionFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(sessionFlags, routePayload.routeTlvs)
@@ -1582,7 +1623,7 @@ class BmpSession {
                 logger.error(`Received BGP Update message from unknown rib type: ${effectiveSessionFlags}`);
                 return;
             }
-            this.logContextualRouteMonitoringDetail(peerHeader.peer, parsedBgpUpdate, {
+            this.logContextualRouteMonitoringDetail(peer, parsedBgpUpdate, {
                 scope: 'session',
                 rawFlags: sessionFlags,
                 effectiveFlags: effectiveSessionFlags,
@@ -1807,9 +1848,7 @@ class BmpSession {
             }
             position = peerHeader.offset;
             const locRibPeer = peerHeader.peer;
-            const sourceTimestampMs = locRibPeer.peerTimestampMs;
-
-            const routePayload = this.parseRouteMonitoringBgpUpdate(
+            const routePayload = this.parseRouteMonitoringBgpUpdates(
                 message,
                 position,
                 version,
@@ -1821,9 +1860,24 @@ class BmpSession {
                 logger.error(routePayload.error);
                 return;
             }
+            for (const update of routePayload.updates) {
+                this.processRouteMonitoringLocalRibUpdate(locRibPeer, update, version);
+            }
+        } catch (err) {
+            logger.error(`Error processing route monitoring:`, err);
+        }
+    }
+
+    processRouteMonitoringLocalRibUpdate(locRibPeer, routePayload, version) {
+        try {
+            const sourceTimestampMs = locRibPeer.peerTimestampMs;
             const parsedBgpUpdate = routePayload.parsedBgpUpdate;
-            const pathMarkingAssignments = this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
-            const routeTlvAssignments = this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const pathMarkingAssignments =
+                routePayload.pathMarkingAssignments ||
+                this.buildPathMarkingAssignments(parsedBgpUpdate, routePayload.routeTlvs);
+            const routeTlvAssignments =
+                routePayload.routeTlvAssignments ||
+                this.buildRouteTlvAssignments(parsedBgpUpdate, routePayload.routeTlvs);
             const effectiveLocRibFlags =
                 version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
                     ? getEffectivePeerFlags(locRibPeer.peerFlags, routePayload.routeTlvs)
