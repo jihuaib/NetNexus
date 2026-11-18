@@ -29,6 +29,7 @@ function prepareWorkspace(sourceRoot = projectRoot) {
     copyDirectory(path.join(sourceRoot, '.github', 'workflows'), path.join(tempRoot, '.github', 'workflows'));
     copyDirectory(path.join(sourceRoot, 'docs'), path.join(tempRoot, 'docs'));
     copyDirectory(path.join(sourceRoot, 'resources', 'grpc'), path.join(tempRoot, 'resources', 'grpc'));
+    copyDirectory(path.join(sourceRoot, 'resources', 'libyang'), path.join(tempRoot, 'resources', 'libyang'));
     fs.copyFileSync(path.join(sourceRoot, 'package.json'), path.join(tempRoot, 'package.json'));
     fs.copyFileSync(path.join(sourceRoot, 'package-lock.json'), path.join(tempRoot, 'package-lock.json'));
     fs.copyFileSync(path.join(sourceRoot, 'README.md'), path.join(tempRoot, 'README.md'));

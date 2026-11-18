@@ -5,6 +5,14 @@ const path = require('node:path');
 const { prepareWorkspace } = require('../../scripts/run-ci-tests-on-minified-electron');
 
 const sourceRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'netnexus-minified-workspace-fixture-'));
+const runtimeRoot = `resources/libyang/${process.platform}-${process.arch}`;
+const runtimeFiles = [
+    `${runtimeRoot}/bin/${process.platform === 'win32' ? 'yanglint.exe' : 'yanglint'}`,
+    `${runtimeRoot}/bin/${process.platform === 'win32' ? 'netnexus-libyang-schema.exe' : 'netnexus-libyang-schema'}`,
+    `${runtimeRoot}/share/yang/modules/libyang/ietf-yang-types.yang`,
+    `${runtimeRoot}/runtime.json`,
+    'resources/libyang/manifest.json'
+];
 let workspace;
 try {
     for (const directory of [
@@ -24,6 +32,10 @@ try {
     for (const file of ['package.json', 'package-lock.json']) fs.writeFileSync(path.join(sourceRoot, file), '{}');
     fs.writeFileSync(path.join(sourceRoot, 'README.md'), 'workspace fixture');
     fs.writeFileSync(path.join(sourceRoot, 'vite.config.js'), 'module.exports = {};');
+    for (const file of runtimeFiles) {
+        fs.mkdirSync(path.dirname(path.join(sourceRoot, file)), { recursive: true });
+        fs.writeFileSync(path.join(sourceRoot, file), `runtime fixture: ${file}`, { mode: 0o755 });
+    }
     fs.writeFileSync(path.join(sourceRoot, 'shared/bgpAttributes.json'), JSON.stringify({ name: 'shared-fixture' }));
     fs.writeFileSync(
         path.join(sourceRoot, 'shared/bgpExtendedCommunities.js'),
@@ -47,6 +59,21 @@ try {
     );
 
     workspace = prepareWorkspace(sourceRoot);
+    assert.equal(fs.lstatSync(path.join(workspace, 'resources/libyang')).isSymbolicLink(), false);
+    for (const file of runtimeFiles) {
+        const copied = path.join(workspace, file);
+        assert.equal(fs.readFileSync(copied, 'utf8'), `runtime fixture: ${file}`);
+        assert.equal(fs.lstatSync(copied).isSymbolicLink(), false);
+        if (process.platform !== 'win32' && file.includes('/bin/')) {
+            fs.accessSync(copied, fs.constants.X_OK);
+        }
+        fs.writeFileSync(copied, 'workspace runtime changed');
+        assert.equal(
+            fs.readFileSync(path.join(sourceRoot, file), 'utf8'),
+            `runtime fixture: ${file}`,
+            'runtime changes in minified CI must not affect the source runtime'
+        );
+    }
     assert.equal(fs.lstatSync(path.join(workspace, 'shared')).isDirectory(), true);
     assert.equal(
         fs.lstatSync(path.join(workspace, 'shared')).isSymbolicLink(),
@@ -81,7 +108,9 @@ try {
         { name: 'shared-fixture' },
         'workspace edits must not affect the source project'
     );
-    console.log('Minified CI workspace shared JSON/JS, src-model and test-fixture isolation tests passed');
+    console.log(
+        'Minified CI workspace native runtime, shared JSON/JS, src-model and test-fixture isolation tests passed'
+    );
 } finally {
     if (workspace) fs.rmSync(workspace, { recursive: true, force: true });
     fs.rmSync(sourceRoot, { recursive: true, force: true });
