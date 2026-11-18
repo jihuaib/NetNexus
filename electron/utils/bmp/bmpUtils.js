@@ -114,8 +114,20 @@ function parsePeerHeader(buffer, offset = 0) {
     };
 }
 
+function isBmpTlvIndexed(rawType, options = {}) {
+    return (
+        options.indexed === true ||
+        (options.commonIndexed === true &&
+            (rawType & 0x8000) === 0 &&
+            [
+                BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER,
+                BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS,
+                BmpConst.BMP_TLV_TYPE.TIMESTAMP
+            ].includes(rawType))
+    );
+}
+
 function parseBmpTlvs(buffer, offset = 0, options = {}) {
-    const indexed = options.indexed === true;
     const tlvs = [];
     const warnings = [];
     let position = offset;
@@ -128,6 +140,7 @@ function parseBmpTlvs(buffer, offset = 0, options = {}) {
         }
 
         const rawType = buffer.readUInt16BE(position);
+        const indexed = isBmpTlvIndexed(rawType, options);
         position += 2;
         const enterprise = (rawType & 0x8000) !== 0;
         const type = rawType & 0x7fff;
@@ -187,6 +200,46 @@ function parseBmpTlvs(buffer, offset = 0, options = {}) {
     }
 
     return { tlvs, warnings, offset: position };
+}
+
+function parseBmpPeerUpTlvs(buffer, offset = 0, options = {}) {
+    const plain = parseBmpTlvs(buffer, offset);
+    if (!options.allowCommonIndexed || plain.warnings.length === 0 || offset + 6 > buffer.length) return plain;
+    // The captured v4 encoding starts with a 64-bit Sequence Number at global
+    // index 0. Only common TLVs carry indexes; VRF and vendor TLVs do not.
+    if (
+        buffer.readUInt16BE(offset) !== BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER ||
+        buffer.readUInt16BE(offset + 2) !== 8 ||
+        buffer.readUInt16BE(offset + 4) !== 0
+    )
+        return plain;
+    const mixed = parseBmpTlvs(buffer, offset, { commonIndexed: true });
+    if (mixed.warnings.length > 0 || mixed.offset !== buffer.length) return plain;
+    for (const tlv of mixed.tlvs) {
+        if (tlv.rawIndex === null) continue;
+        if (tlv.rawIndex !== 0) return plain;
+        if (tlv.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER && tlv.value.length !== 8) return plain;
+        if (tlv.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS && tlv.value.length === 0) return plain;
+        if (tlv.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP && ![8, 9, 10].includes(tlv.value.length)) return plain;
+    }
+    return { ...mixed, commonIndexed: true, tlvs: mixed.tlvs.map(tlv => ({ ...tlv, commonIndexed: true })) };
+}
+
+function decodeSequenceNumberTlvValue(value) {
+    if (value.length === 4) return value.readUInt32BE(0);
+    if (value.length !== 8) return null;
+    const number = value.readBigUInt64BE(0);
+    return number <= BigInt(Number.MAX_SAFE_INTEGER) ? Number(number) : number.toString();
+}
+
+function decodeTimestampTlvValue(value) {
+    if (![8, 9, 10].includes(value.length)) return null;
+    const typeLength = value.length - 8;
+    return {
+        ...(typeLength ? { timestampType: typeLength === 1 ? value[0] : value.readUInt16BE(0) } : {}),
+        seconds: value.readUInt32BE(typeLength),
+        microseconds: value.readUInt32BE(typeLength + 4)
+    };
 }
 
 function toSerializableTlvs(tlvs) {
@@ -337,7 +390,11 @@ module.exports = {
     toUnixTimestampMs,
     parseCommonHeader,
     parsePeerHeader,
+    isBmpTlvIndexed,
     parseBmpTlvs,
+    parseBmpPeerUpTlvs,
+    decodeSequenceNumberTlvValue,
+    decodeTimestampTlvValue,
     toSerializableTlvs,
     decodeExtendedPeerFlagsValue,
     getEffectivePeerFlags,

@@ -10,6 +10,7 @@ const {
 } = require('../utils/bmp/bmpPacketParser');
 const { getBgpAfiName, getBgpSafiName, getBgpAddPathTypeName } = require('../utils/bgp/bgpUtils');
 const { parseBgpPacket } = require('./bgpPacketParser');
+const { parseBmpPeerUpTlvs, isBmpTlvIndexed } = require('../utils/bmp/bmpUtils');
 
 function createTreeNode(name, offset, length, value = '', children = []) {
     return {
@@ -272,7 +273,6 @@ function addPathMarkingNode(buffer, parent, valueOffset, valueEnd) {
 }
 
 function addTlvNodes(buffer, parent, offset, endOffset, context, options = {}) {
-    const indexed = options.indexed === true;
     const tlvsNode = createTreeNode('TLVs', offset, Math.max(0, endOffset - offset), '', []);
     parent.children.push(tlvsNode);
 
@@ -286,6 +286,7 @@ function addTlvNodes(buffer, parent, offset, endOffset, context, options = {}) {
         }
 
         const rawType = buffer.readUInt16BE(position);
+        const indexed = isBmpTlvIndexed(rawType, options);
         const enterprise = (rawType & 0x8000) !== 0;
         const type = rawType & 0x7fff;
         position += 2;
@@ -314,7 +315,7 @@ function addTlvNodes(buffer, parent, offset, endOffset, context, options = {}) {
         }
 
         const tlvNode = createTreeNode(
-            `TLV ${tlvIndex + 1}: ${getBmpTlvName(type, context)}`,
+            `TLV ${tlvIndex + 1}: ${getBmpTlvName(type, context, options)}`,
             tlvStart,
             rawValueEnd - tlvStart,
             '',
@@ -322,7 +323,7 @@ function addTlvNodes(buffer, parent, offset, endOffset, context, options = {}) {
         );
         tlvsNode.children.push(tlvNode);
         addLeafNode(tlvNode, 'Raw Type', tlvStart, 2, `0x${rawType.toString(16).padStart(4, '0')}`);
-        addLeafNode(tlvNode, 'Type', tlvStart, 2, `${type} (${getBmpTlvName(type, context)})`);
+        addLeafNode(tlvNode, 'Type', tlvStart, 2, `${type} (${getBmpTlvName(type, context, options)})`);
         addLeafNode(tlvNode, 'Length', tlvStart + 2, 2, length);
         if (indexed) {
             addLeafNode(
@@ -417,7 +418,8 @@ function addPeerUpNodes(buffer, parent, offset, endOffset) {
 
     position = addBgpPacketNode(buffer, parent, position, endOffset, 'Sent BGP OPEN');
     position = addBgpPacketNode(buffer, parent, position, endOffset, 'Received BGP OPEN');
-    return addTlvNodes(buffer, parent, position, endOffset, 'peer-up');
+    const tlvs = parseBmpPeerUpTlvs(buffer.subarray(0, endOffset), position, { allowCommonIndexed: true });
+    return addTlvNodes(buffer, parent, position, endOffset, 'peer-up', { commonIndexed: tlvs.commonIndexed === true });
 }
 
 function addPeerDownNodes(buffer, parent, offset, endOffset) {

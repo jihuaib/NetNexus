@@ -5,6 +5,9 @@ const {
     parseCommonHeader,
     parsePeerHeader,
     parseBmpTlvs,
+    parseBmpPeerUpTlvs,
+    decodeSequenceNumberTlvValue,
+    decodeTimestampTlvValue,
     decodeExtendedPeerFlagsValue,
     parseStatsRecords
 } = require('./bmpUtils');
@@ -50,7 +53,7 @@ function getBmpPeerDownReasonName(reason) {
     }
 }
 
-function getBmpTlvName(type, context = 'common') {
+function getBmpTlvName(type, context = 'common', options = {}) {
     if (context === 'initiation') {
         if (type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME) {
             return 'VRF/Table Name';
@@ -60,7 +63,10 @@ function getBmpTlvName(type, context = 'common') {
 
     if (
         (context === 'peer-up' || context === 'peer-down') &&
-        type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME
+        type ===
+            (options.commonIndexed
+                ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME
+                : BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME)
     ) {
         return 'VRF/Table Name';
     }
@@ -277,7 +283,7 @@ function decodeGroupTlv(tlv) {
 function decodeBmpTlv(tlv, context) {
     const decoded = {
         ...tlv,
-        name: getBmpTlvName(tlv.type, context)
+        name: getBmpTlvName(tlv.type, context, { commonIndexed: tlv.commonIndexed })
     };
 
     if (
@@ -287,7 +293,10 @@ function decodeBmpTlv(tlv, context) {
                 decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.SYS_DESC ||
                 decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME)) ||
         ((context === 'peer-up' || context === 'peer-down' || context === 'termination') &&
-            decoded.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME) ||
+            decoded.type ===
+                (tlv.commonIndexed
+                    ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME
+                    : BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME)) ||
         ((context === 'route-monitoring' || context === 'route-mirroring') &&
             decoded.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME)
     ) {
@@ -296,15 +305,20 @@ function decodeBmpTlv(tlv, context) {
 
     if (context === 'statistics' && decoded.type === BmpConst.BMP_STATS_REPORT_TLV_TYPE.STATS) {
         decoded.decoded = { statistics: parseStatsRecords(decoded.value).statistics };
-    } else if (decoded.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER && decoded.value.length === 4) {
-        decoded.decoded = { sequenceNumber: decoded.value.readUInt32BE(0) };
+    } else if (
+        decoded.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER &&
+        [4, 8].includes(decoded.value.length) &&
+        decoded.valueText === undefined
+    ) {
+        decoded.decoded = { sequenceNumber: decodeSequenceNumberTlvValue(decoded.value) };
     } else if (decoded.type === BmpConst.BMP_TLV_TYPE.EXTENDED_FLAGS && decoded.value.length > 0) {
         decoded.decoded = { flags: decodeExtendedPeerFlagsValue(decoded.value) };
-    } else if (decoded.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP && decoded.value.length >= 8) {
-        decoded.decoded = {
-            seconds: decoded.value.readUInt32BE(0),
-            microseconds: decoded.value.readUInt32BE(4)
-        };
+    } else if (
+        decoded.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP &&
+        [8, 9, 10].includes(decoded.value.length) &&
+        decoded.valueText === undefined
+    ) {
+        decoded.decoded = decodeTimestampTlvValue(decoded.value);
     } else if (
         (context === 'route-monitoring' || context === 'route-mirroring') &&
         decoded.type === BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.STATELESS_PARSING
@@ -346,7 +360,10 @@ function decodeBmpTlv(tlv, context) {
 }
 
 function parseTlvs(buffer, offset, context, options = {}) {
-    const result = parseBmpTlvs(buffer, offset, options);
+    const result =
+        context === 'peer-up'
+            ? parseBmpPeerUpTlvs(buffer, offset, { allowCommonIndexed: true })
+            : parseBmpTlvs(buffer, offset, options);
     return {
         tlvs: result.tlvs.map(tlv => decodeBmpTlv(tlv, context)),
         warnings: result.warnings,
@@ -647,6 +664,9 @@ function formatTlvSummary(tlv, prefix = '  ') {
         line += ` value=${tlv.decoded.sequenceNumber}`;
     } else if (tlv.decoded?.flags !== undefined) {
         line += ` flags=0x${tlv.decoded.flags.toString(16)}`;
+    } else if (tlv.decoded?.seconds !== undefined) {
+        if (tlv.decoded.timestampType !== undefined) line += ` timestampType=${tlv.decoded.timestampType}`;
+        line += ` seconds=${tlv.decoded.seconds} microseconds=${tlv.decoded.microseconds}`;
     } else if (tlv.decoded?.status !== undefined) {
         line += ` status=${tlv.decoded.statusNames.join('|') || tlv.decoded.status}`;
         if (tlv.decoded.reasonName) {

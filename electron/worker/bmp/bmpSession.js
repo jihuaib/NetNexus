@@ -6,6 +6,9 @@ const {
     parseCommonHeader,
     parsePeerHeader,
     parseBmpTlvs,
+    parseBmpPeerUpTlvs,
+    decodeSequenceNumberTlvValue,
+    decodeTimestampTlvValue,
     toSerializableTlvs,
     decodeExtendedPeerFlagsValue,
     getEffectivePeerFlags,
@@ -479,7 +482,10 @@ class BmpSession {
             return tlv.type === this.getRouteMonitoringTlvTypes().VRF_TABLE_NAME && this.isTextTlvValue(tlv.value);
         }
 
-        return tlv.type === BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME && this.isTextTlvValue(tlv.value);
+        const type = tlv.commonIndexed
+            ? BmpConst.BMP_ROUTE_MONITORING_TLV_TYPE.VRF_TABLE_NAME
+            : BmpConst.BMP_INITIATION_TLV_TYPE.VRF_TABLE_NAME;
+        return tlv.type === type && this.isTextTlvValue(tlv.value);
     }
 
     decodeStatelessParsingTlvs(tlvs) {
@@ -939,11 +945,11 @@ class BmpSession {
             this.isBmpV4TlvDraft20() &&
             !tlv.enterprise &&
             tlv.type === BmpConst.BMP_TLV_TYPE.SEQUENCE_NUMBER &&
-            tlv.value.length === 4
+            [4, 8].includes(tlv.value.length)
         ) {
             tlv.name = 'Sequence Number';
             tlv.decoded = {
-                sequenceNumber: tlv.value.readUInt32BE(0)
+                sequenceNumber: decodeSequenceNumberTlvValue(tlv.value)
             };
             return;
         }
@@ -952,13 +958,10 @@ class BmpSession {
             this.isBmpV4TlvDraft20() &&
             !tlv.enterprise &&
             tlv.type === BmpConst.BMP_TLV_TYPE.TIMESTAMP &&
-            tlv.value.length >= 8
+            [8, 9, 10].includes(tlv.value.length)
         ) {
             tlv.name = 'Timestamp';
-            tlv.decoded = {
-                seconds: tlv.value.readUInt32BE(0),
-                microseconds: tlv.value.readUInt32BE(4)
-            };
+            tlv.decoded = decodeTimestampTlvValue(tlv.value);
             return;
         }
 
@@ -2916,7 +2919,9 @@ class BmpSession {
             const { parsedRecvBgpOpen, parsedSendBgpOpen } = opens;
             position = opens.position;
 
-            const peerUpTlvResult = parseBmpTlvs(message, position);
+            const peerUpTlvResult = parseBmpPeerUpTlvs(message, position, {
+                allowCommonIndexed: version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+            });
             this.logTlvWarnings('Peer Up TLV', peerUpTlvResult.warnings);
             if (peerUpTlvResult.warnings.length > 0) return;
             const peerUpTlvs = peerUpTlvResult.tlvs;
@@ -3187,7 +3192,9 @@ class BmpSession {
             const { parsedRecvBgpOpen, parsedSendBgpOpen } = opens;
             position = opens.position;
 
-            const peerUpTlvResult = parseBmpTlvs(message, position);
+            const peerUpTlvResult = parseBmpPeerUpTlvs(message, position, {
+                allowCommonIndexed: version === BmpConst.BMP_VERSION.V4 && this.isBmpV4TlvDraft20()
+            });
             this.logTlvWarnings('Peer Up Local-RIB TLV', peerUpTlvResult.warnings);
             if (peerUpTlvResult.warnings.length > 0) return;
             const peerUpTlvs = peerUpTlvResult.tlvs;

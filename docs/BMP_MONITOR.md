@@ -79,6 +79,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - `draft-20` 的 Route Monitoring `BGP Message TLV` 类型为 `7`。
 - `draft-19` 的 Route Monitoring `BGP Message TLV` 类型为 `4`。
 - 如果发送端的 draft 与页面配置不一致，日志可能出现 `does not contain mandatory BGP Message TLV`。
+- Peer Up 兼容部分设备的混合 TLV 编码：Sequence Number、Extended Flags、Timestamp 带全局 Index `0`，VRF/Table Name（类型 `5`）不带 Index；支持 64 位序号及包含时间戳类型的 9/10 字节 Timestamp。仅在普通编码解析失败且整段混合编码完整合法时采用此格式，截断报文仍会被拒绝。
 - 批量兼容：draft-19 / draft-20 均支持一个 BGP Message TLV 内连续封装多个完整 UPDATE，也支持同一 BMP 中多个 BGP Message TLV。每条 UPDATE 必须完整位于自己的 TLV 内，公告、撤销和 EOR 按封装顺序处理。
 - 批量报文的索引匹配约定：按 UPDATE 顺序对公告 NLRI 连续编号，跨 UPDATE / TLV 不重置；索引 `0` 匹配全部公告 NLRI，Group 和 Path Marking 使用同一编号。任一 UPDATE 或 TLV 损坏时拒绝整条 BMP 消息。
 
