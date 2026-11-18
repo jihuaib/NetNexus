@@ -1,7 +1,7 @@
 {
     "name": "net-nexus",
     "private": true,
-    "version": "5.0.6",
+    "version": "5.0.7",
     "engines": {
         "node": ">=16.20.2"
     },
