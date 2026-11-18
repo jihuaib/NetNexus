@@ -13,6 +13,11 @@ const { PROTOCOL_PROCESS_SERVICES } = require('../../electron/worker/core/protoc
 const { getAddrFamilyType } = require('../../electron/utils/bgp/bgpUtils');
 const { buildScenario, parseArgs } = require('../../scripts/mockBmpClient');
 
+// The default mock scenario with --routes 1 has 55 distinct persisted routes.
+// Keep this an explicit fixture expectation: a partially committed snapshot
+// must never become the baseline for the restart/offline assertions.
+const EXPECTED_SCENARIO_ROUTE_COUNT = 55;
+
 function getFreePort() {
     return new Promise((resolve, reject) => {
         const server = net.createServer();
@@ -87,20 +92,32 @@ function sendScenario(port, messages, options = {}) {
     });
 }
 
-async function waitForRoutes(request, minimum = 1, predicate = () => true, query = {}) {
+async function waitForScenarioRoutes(request, predicate = () => true, query = {}) {
     const deadline = Date.now() + 10000;
+    let lastTotal = 0;
     while (Date.now() < deadline) {
         const response = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
             routeState: 'all',
             pageSize: 5000,
             ...query
         });
-        if (response.data.total >= minimum && predicate(response.data.list)) {
+        lastTotal = response.data.total;
+        assert.ok(
+            lastTotal <= EXPECTED_SCENARIO_ROUTE_COUNT,
+            `expected exactly ${EXPECTED_SCENARIO_ROUTE_COUNT} persisted BMP routes, got ${lastTotal}`
+        );
+        if (
+            lastTotal === EXPECTED_SCENARIO_ROUTE_COUNT &&
+            response.data.list.length === EXPECTED_SCENARIO_ROUTE_COUNT &&
+            predicate(response.data.list)
+        ) {
             return response;
         }
         await new Promise(resolve => setTimeout(resolve, 25));
     }
-    throw new Error(`timed out waiting for ${minimum} persisted BMP routes`);
+    throw new Error(
+        `timed out waiting for ${EXPECTED_SCENARIO_ROUTE_COUNT} persisted BMP routes in the expected state; got ${lastTotal}`
+    );
 }
 
 function withTimeout(promise, timeoutMs, message) {
@@ -168,18 +185,17 @@ async function main(testOptions = {}) {
         const liveStatus = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTENCE_STATUS);
         assert.equal(liveStatus.data.ready, true);
         assert.equal(liveStatus.data.journalMode, 'wal');
-        const liveRoutes = await waitForRoutes(
+        const liveRoutes = await waitForScenarioRoutes(
             request,
-            10,
             routes =>
                 routes.some(route => route.scopeKind === 'peer') && routes.some(route => route.scopeKind === 'loc-rib')
         );
-        assert.ok(liveRoutes.data.total > 10, `expected persisted routes, got ${liveRoutes.data.total}`);
         assert.equal(
             liveRoutes.data.list.every(route => route.persistentRouteId.length === 64),
             true
         );
         const persistedTotal = liveRoutes.data.total;
+        const persistedRouteIds = liveRoutes.data.list.map(route => route.persistentRouteId).sort();
 
         const clients = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST);
         assert.equal(clients.data.length, 1);
@@ -269,16 +285,10 @@ async function main(testOptions = {}) {
         });
         assert.ok(instanceRoutes.data.total > 0);
 
-        let minimumActiveRoutes = 0;
         let previousConnectionId = client.persistentConnectionId || client.connectionId;
         if (rounds > 1) {
             assert.ok(previousConnectionId, 'restart regression must retain the first connection identity');
-            const active = await request(BmpConst.BMP_REQ_TYPES.GET_PERSISTED_ROUTES, {
-                routeState: 'active',
-                pageSize: 5000
-            });
-            minimumActiveRoutes = active.data.total;
-            assert.ok(minimumActiveRoutes > 0);
+            await waitForScenarioRoutes(request, () => true, { routeState: 'active' });
         }
 
         const bmpSocketClosed = new Promise(resolve => bmpSocket.once('close', resolve));
@@ -294,9 +304,8 @@ async function main(testOptions = {}) {
         for (let round = 1; round < rounds; round += 1) {
             await request(BmpConst.BMP_REQ_TYPES.START_BMP, startConfiguration);
             bmpSocket = await sendScenario(port, buildScenario(options), { keepOpen: true });
-            const refreshed = await waitForRoutes(
+            const refreshed = await waitForScenarioRoutes(
                 request,
-                minimumActiveRoutes,
                 routes => routes.every(route => route.persistentConnectionId !== previousConnectionId),
                 { routeState: 'active' }
             );
@@ -304,6 +313,11 @@ async function main(testOptions = {}) {
                 refreshed.data.list.every(route => route.routeState === 'active'),
                 true,
                 'a restart must wait for newly refreshed routes, not satisfy its check from the previous stale RIB'
+            );
+            assert.deepEqual(
+                refreshed.data.list.map(route => route.persistentRouteId).sort(),
+                persistedRouteIds,
+                'a restart must preserve every scenario route identity'
             );
             const refreshedClients = await request(BmpConst.BMP_REQ_TYPES.GET_CLIENT_LIST);
             assert.equal(refreshedClients.data.length, 1);
@@ -347,6 +361,11 @@ async function main(testOptions = {}) {
         await offlineClient.open();
         const offlineRoutes = await offlineClient.queryRoutes({ routeState: 'all', pageSize: 5000 });
         assert.equal(offlineRoutes.total, persistedTotal);
+        assert.deepEqual(
+            offlineRoutes.list.map(route => route.persistentRouteId).sort(),
+            persistedRouteIds,
+            'offline storage must contain exactly the completed live snapshot'
+        );
         await offlineClient.close();
         offlineClient = null;
 
@@ -369,3 +388,4 @@ if (require.main === module) {
 }
 
 module.exports = main;
+module.exports.waitForScenarioRoutes = waitForScenarioRoutes;
