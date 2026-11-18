@@ -990,6 +990,14 @@
                     <template #icon><CodeOutlined /></template>
                     添加属性
                 </nn-menu-item>
+                <nn-menu-item
+                    v-if="isEditOperationNode(parameterContextMenu.node)"
+                    key="set-operation"
+                    :disabled="!parameterContextCapabilities.setOperation"
+                >
+                    <template #icon><EditOutlined /></template>
+                    设置操作（nc:operation）
+                </nn-menu-item>
                 <nn-menu-divider />
                 <nn-menu-item key="edit-value" :disabled="!parameterContextCapabilities.edit">
                     <template #icon><EditOutlined /></template>
@@ -1055,6 +1063,15 @@
                                         : undefined
                                 "
                                 @update:value="value => (parameterAction.value = value)"
+                            />
+                        </nn-form-item>
+                    </template>
+                    <template v-else-if="parameterAction.mode === 'set-operation'">
+                        <nn-form-item label="节点操作">
+                            <nn-select
+                                v-model:value="parameterAction.value"
+                                :options="editOperationOptions"
+                                aria-label="节点操作"
                             />
                         </nn-form-item>
                     </template>
@@ -1473,6 +1490,14 @@
         { label: 'merge', value: 'merge' },
         { label: 'replace', value: 'replace' },
         { label: 'none', value: 'none' }
+    ];
+    const editOperationOptions = [
+        { label: '继承上级 / 默认操作', value: '' },
+        { label: 'merge（合并）', value: 'merge' },
+        { label: 'create（创建）', value: 'create' },
+        { label: 'replace（替换）', value: 'replace' },
+        { label: 'delete（删除，节点须存在）', value: 'delete' },
+        { label: 'remove（删除，忽略不存在）', value: 'remove' }
     ];
     const testOptionOptions = [
         { label: 'test-then-set', value: 'test-then-set' },
@@ -2730,6 +2755,14 @@
         parameterContextMenu.visible = false;
     };
 
+    const isEditOperationNode = node =>
+        activeOperation.value === 'edit-config' &&
+        node?.xmlField === 'config' &&
+        !node.attributeName &&
+        Array.isArray(node.xmlPath) &&
+        parameterDataPathSegments(node).length > 0 &&
+        findParameterSchemaNode(node)?.config !== false;
+
     const parameterContextCapabilities = computed(() => {
         const node = parameterContextMenu.node;
         const busy = executing.value || editConfigLoading.value;
@@ -2740,6 +2773,7 @@
             addChild: !busy && Boolean(node?.xmlContainerField || (concreteElement && !node?.editor && !schemaLeaf)),
             addSibling: !busy && concreteElement && node?.xmlPath?.length > 0,
             addAttribute: !busy && concreteElement,
+            setOperation: !busy && isEditOperationNode(node),
             edit: !busy && Boolean(node?.editor || schemaLeaf) && !node?.disabled,
             remove: !busy && Boolean(node?.deletable)
         };
@@ -3027,6 +3061,7 @@
     };
     const parameterActionTitle = computed(() => {
         const name = parameterAction.node?.title || '节点';
+        if (parameterAction.mode === 'set-operation') return `设置操作 · ${name}`;
         if (parameterAction.mode === 'edit-value') return `修改值 · ${name}`;
         if (parameterAction.mode === 'add-attribute') return `添加属性 · ${name}`;
         if (parameterAction.mode === 'add-sibling') return `添加同级节点 · ${name}`;
@@ -3111,6 +3146,34 @@
         restoreGeneratedRequest({ silent: true });
         form[xmlField] = serializeXmlFragment(parsed);
     };
+    const openParameterOperationAction = node => {
+        if (!isEditOperationNode(node) || executing.value || editConfigLoading.value) return;
+        const parsed = parseXmlFragment(form.config);
+        const element = parsed.wrapper && xmlElementAtPath(parsed.wrapper, node.xmlPath);
+        if (!element || parsed.error) return;
+        resetParameterAction('set-operation', node);
+        parameterAction.value = element.getAttributeNS(NETCONF_BASE_NAMESPACE, 'operation') || '';
+        parameterActionOpen.value = true;
+    };
+    const applyParameterOperationAction = () => {
+        const node = parameterAction.node;
+        if (!isEditOperationNode(node) || executing.value || editConfigLoading.value) {
+            throw new Error('当前节点暂时不能设置操作，请重新选择参数节点');
+        }
+        const value = String(parameterAction.value ?? '');
+        if (!editOperationOptions.some(option => option.value === value)) throw new Error('请选择有效的节点操作');
+        const parsed = parseXmlFragment(form.config);
+        const element = parsed.wrapper && xmlElementAtPath(parsed.wrapper, node.xmlPath);
+        if (!element || parsed.error) throw new Error(parsed.error || '无法定位配置节点');
+        if (value) {
+            const attribute = element.getAttributeNodeNS(NETCONF_BASE_NAMESPACE, 'operation');
+            element.setAttributeNS(NETCONF_BASE_NAMESPACE, attribute?.name || 'nc:operation', value);
+        } else {
+            element.removeAttributeNS(NETCONF_BASE_NAMESPACE, 'operation');
+        }
+        restoreGeneratedRequest({ silent: true });
+        form.config = serializeXmlFragment(parsed);
+    };
     const confirmParameterAction = () => {
         if (
             parameterAction.contextRevision !== props.contextRevision ||
@@ -3121,7 +3184,9 @@
             return;
         }
         try {
-            if (parameterAction.mode === 'edit-value') {
+            if (parameterAction.mode === 'set-operation') {
+                applyParameterOperationAction();
+            } else if (parameterAction.mode === 'edit-value') {
                 updateParameterNode(parameterAction.node, parameterAction.value);
             } else {
                 if (parameterAction.schemaRestricted && !parameterAction.schemaNode) {
@@ -3141,6 +3206,7 @@
         const parent = parameterContextMenu.parent;
         hideParameterContextMenu();
         if (key === 'edit-value') await openParameterEditAction(node);
+        else if (key === 'set-operation') openParameterOperationAction(node);
         else if (key === 'remove-node') removeParameterXmlNode(node);
         else if (['add-child', 'add-sibling', 'add-attribute'].includes(key)) {
             await openParameterAddAction(key, node, parent);

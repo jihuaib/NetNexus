@@ -265,6 +265,8 @@ Content Editor 的 URL 只携带 `profileId`、`compileId`、`nodeId` 和初始 
 
 从 config 数据节点选择 `edit-config → Candidate/Running` 后，独立 Content Editor 会恢复节点上下文、生成配置草稿，并在同一窗口完成参数编辑、YANG 校验、自动回读和执行：
 
+在操作参数树中右键配置数据节点，选择“设置操作（nc:operation）”，即可从下拉框选择 `merge`、`create`、`replace`、`delete` 或 `remove`，无需手写属性名或命名空间。再次打开会显示该节点当前设置；选择“继承上级 / 默认操作”会清除该节点的显式操作。确认后 RPC XML 立即同步，仍需点击“执行 edit-config”才会下发。按 [RFC 6241 §7.2](https://www.rfc-editor.org/rfc/rfc6241.html#section-7.2)，`delete` 要求设备上的节点存在，`remove` 会忽略不存在的节点；“移除节点”仅从本地请求草稿中移除该节点。
+
 ![NETCONF edit-config 独立 Content Editor](images/yang/yang-edit-config-editor.png)
 
 若主窗口重新编译或清空了当前 Profile 的 Schema，已经打开的 Editor 会保留尚未复制的 XML 草稿，但禁用执行，要求从主窗口按新编译上下文重新打开。关闭正在等待 RPC 的 Editor 只终止该窗口的本地等待，不会断开或破坏共享 NETCONF Session。

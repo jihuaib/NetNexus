@@ -3868,6 +3868,130 @@ test.describe('NETCONF/YANG workbench', () => {
         await executionHistoryDrawer.getByRole('button', { name: '关闭', exact: true }).click();
     });
 
+    test('selects NETCONF node operations without manually adding XML attributes', async ({ page }, testInfo) => {
+        const namespace = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+        const capturedRequests = [];
+        const originalCall = harness.controller.call.bind(harness.controller);
+        harness.controller.call = async (method, ...args) => {
+            const response = await originalCall(method, ...args);
+            if (method === 'yang.netconf.executeOperation') {
+                capturedRequests.push(JSON.parse(JSON.stringify(args[0])));
+                if (args[0]?.operation === 'get-config' && response.data?.configXml) {
+                    response.data.configXml = response.data.configXml.replace(
+                        '<interface>',
+                        `<interface xmlns:edit="${namespace}" edit:operation="merge">`
+                    );
+                }
+            }
+            return response;
+        };
+        await page.goto('/#/yang/yang-workspace');
+        const context = netconfEditContext(harness, '/ietf-interfaces:interfaces', 'candidate');
+        const { operationPanel } = await gotoNetconfEditMonitor(page, context);
+        await expect(operationPanel.getByText('已载入', { exact: true })).toBeVisible();
+        const parameters = operationPanel.getByRole('complementary', { name: '操作参数' });
+        const interfacePath = '/rpc/edit-config/config/interfaces[1]/interface[1]';
+        const requestEditor = operationPanel.locator('textarea[aria-label="RPC 请求 XML"]');
+        const inspectInterface = () =>
+            requestEditor.evaluate(input => {
+                const document = new DOMParser().parseFromString(input.value, 'application/xml');
+                const element = document.getElementsByTagNameNS(
+                    'urn:ietf:params:xml:ns:yang:ietf-interfaces',
+                    'interface'
+                )[0];
+                const attributes = Array.from(element.attributes).filter(
+                    attribute =>
+                        attribute.localName === 'operation' &&
+                        attribute.namespaceURI === 'urn:ietf:params:xml:ns:netconf:base:1.0'
+                );
+                return {
+                    parseErrors: document.getElementsByTagName('parsererror').length,
+                    operations: attributes.map(attribute => ({ name: attribute.name, value: attribute.value })),
+                    name: element.getElementsByTagName('name')[0]?.textContent,
+                    enabled: element.getElementsByTagName('enabled')[0]?.textContent,
+                    enabledOperation: element
+                        .getElementsByTagName('enabled')[0]
+                        ?.getAttributeNS('urn:ietf:params:xml:ns:netconf:base:1.0', 'operation')
+                };
+            });
+        const openOperation = async path => {
+            const { menu } = await openParameterContextMenu(page, parameters, path);
+            await menu.getByRole('menuitem', { name: '设置操作（nc:operation）', exact: true }).click();
+            const dialog = page.getByRole('dialog', { name: /^设置操作 · /u });
+            await expect(dialog).toBeVisible();
+            return dialog;
+        };
+        const chooseOperation = async (dialog, label) => {
+            await dialog.getByRole('combobox', { name: '节点操作' }).click();
+            await page.getByRole('option', { name: label, exact: true }).click();
+        };
+
+        for (const path of ['/rpc/edit-config/config', `${interfacePath}/@edit:operation`]) {
+            const { menu } = await openParameterContextMenu(page, parameters, path);
+            await expect(menu.getByRole('menuitem', { name: '设置操作（nc:operation）', exact: true })).toHaveCount(0);
+            await page.keyboard.press('Escape');
+        }
+        let previousLabel = 'merge（合并）';
+        for (const [value, label] of [
+            ['create', 'create（创建）'],
+            ['merge', 'merge（合并）'],
+            ['replace', 'replace（替换）'],
+            ['delete', 'delete（删除，节点须存在）'],
+            ['remove', 'remove（删除，忽略不存在）']
+        ]) {
+            const dialog = await openOperation(interfacePath);
+            await expect(dialog.getByRole('combobox', { name: '节点操作' })).toContainText(previousLabel);
+            await expect(dialog.getByRole('textbox', { name: '节点名称' })).toHaveCount(0);
+            await chooseOperation(dialog, label);
+            await dialog.getByRole('button', { name: '确认', exact: true }).click();
+            await expect.poll(inspectInterface).toEqual({
+                parseErrors: 0,
+                operations: [{ name: 'edit:operation', value }],
+                name: 'eth0',
+                enabled: 'true',
+                enabledOperation: null
+            });
+            await expect(parameterNode(parameters, `${interfacePath}/@edit:operation`)).toContainText(value);
+            previousLabel = label;
+        }
+        let dialog = await openOperation(interfacePath);
+        await chooseOperation(dialog, 'create（创建）');
+        await dialog.getByRole('button', { name: '取消', exact: true }).click();
+        expect((await inspectInterface()).operations).toEqual([{ name: 'edit:operation', value: 'remove' }]);
+
+        dialog = await openOperation(`${interfacePath}/enabled[1]`);
+        await chooseOperation(dialog, 'delete（删除，节点须存在）');
+        await dialog.getByRole('button', { name: '确认', exact: true }).click();
+        await expect(parameterNode(parameters, `${interfacePath}/enabled[1]/@edit:operation`)).toContainText('delete');
+        dialog = await openOperation(interfacePath);
+        await chooseOperation(dialog, '继承上级 / 默认操作');
+        await dialog.getByRole('button', { name: '确认', exact: true }).click();
+        await expect.poll(() => inspectInterface().then(value => value.operations)).toEqual([]);
+        await expect(parameterNode(parameters, `${interfacePath}/enabled[1]/@edit:operation`)).toContainText('delete');
+        expect(capturedRequests.map(request => request.operation)).toEqual(['get-config']);
+
+        dialog = await openOperation(interfacePath);
+        await expect(dialog.getByRole('combobox', { name: '节点操作' })).toContainText('继承上级 / 默认操作');
+        await dialog.getByRole('combobox', { name: '节点操作' }).click();
+        await page.screenshot({ path: testInfo.outputPath('netconf-node-operation-selector.png') });
+        await page.keyboard.press('Escape');
+        await dialog.getByRole('button', { name: '取消', exact: true }).click();
+        await operationPanel.getByRole('button', { name: '执行 edit-config', exact: true }).click();
+        await expect(operationPanel.locator('.rpc-result')).toContainText('<ok/>');
+        const request = capturedRequests.find(request => request.operation === 'edit-config');
+        expect(request.config).toContain('<name>eth0</name>');
+        const sentOperations = await page.evaluate(config => {
+            const document = new DOMParser().parseFromString(config, 'application/xml');
+            const element = document.getElementsByTagName('interface')[0];
+            const namespace = 'urn:ietf:params:xml:ns:netconf:base:1.0';
+            return {
+                parent: element.getAttributeNS(namespace, 'operation'),
+                leaf: element.getElementsByTagName('enabled')[0].getAttributeNS(namespace, 'operation')
+            };
+        }, request.config);
+        expect(sentOperations).toEqual({ parent: null, leaf: 'delete' });
+    });
+
     test('uses compiled enumeration metadata for YANG leaf value editing', async ({ page }) => {
         const capturedRequests = [];
         const originalControllerCall = harness.controller.call.bind(harness.controller);
