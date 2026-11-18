@@ -3853,7 +3853,7 @@
         const scrollTop = input.scrollTop;
         const scrollLeft = input.scrollLeft;
         input.setSelectionRange(edit.start, edit.end);
-        // Native insertion keeps Ctrl+Z/Ctrl+Y in the textarea's undo history.
+        // Native insertion keeps the textarea's platform undo/redo history.
         if (!document.execCommand('insertText', false, edit.text)) {
             input.setRangeText(edit.text, edit.start, edit.end, 'end');
             input.dispatchEvent(new Event('input', { bubbles: true }));

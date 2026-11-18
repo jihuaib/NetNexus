@@ -3181,12 +3181,21 @@ test.describe('NETCONF/YANG workbench', () => {
         const commented = source.replace('    <filter type="subtree">', '    <!-- <filter type="subtree"> -->');
         await expect(input).toHaveValue(commented);
         await expect(reply).toHaveValue(originalReply);
-        await input.press('Control+z');
-        await expect(input).toHaveValue(source);
-        await input.press('Control+y');
-        await expect(input).toHaveValue(commented);
-        await input.press('Control+/');
-        await expect(input).toHaveValue(source);
+        // Native textarea editing shortcuts follow the host OS, even though
+        // the application accepts Ctrl+/ for comments on every platform.
+        const isMac = process.platform === 'darwin';
+        await test.step('undo the comment with the native platform shortcut', async () => {
+            await input.press(isMac ? 'Meta+z' : 'Control+z');
+            await expect(input).toHaveValue(source);
+        });
+        await test.step('redo the comment with the native platform shortcut', async () => {
+            await input.press(isMac ? 'Meta+Shift+z' : 'Control+y');
+            await expect(input).toHaveValue(commented);
+        });
+        await test.step('uncomment the line with Ctrl+/', async () => {
+            await input.press('Control+/');
+            await expect(input).toHaveValue(source);
+        });
         await input.evaluate(element => {
             element.focus();
             element.setSelectionRange(element.value.indexOf('    <filter'), element.value.indexOf('  </get>'));
