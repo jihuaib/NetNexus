@@ -257,6 +257,16 @@ function verifyScriptSyntax() {
         'the Unix build must clear the exact runtime target before copying new artifacts'
     );
 
+    const schemaExporterCmake = fs.readFileSync(
+        path.join(projectRoot, 'scripts', 'libyang-schema-exporter', 'CMakeLists.txt'),
+        'utf8'
+    );
+    assert.match(
+        schemaExporterCmake,
+        /target_include_directories\(netnexus-libyang-schema PRIVATE[^)]*"\$\{NETNEXUS_LIBYANG_BUILD\}\/compat"/,
+        'standalone Unix helper must find the generated compat.h required by libyang internal schema headers'
+    );
+
     const powershellScript = path.join(projectRoot, 'scripts', 'build-libyang-runtime.ps1');
     const powershell = process.platform === 'win32' ? 'powershell.exe' : 'pwsh';
     const escapedPath = powershellScript.replace(/'/g, "''");
