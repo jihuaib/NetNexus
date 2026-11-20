@@ -287,6 +287,8 @@ Content Editor 的 URL 只携带 `profileId`、`compileId`、`nodeId` 和初始 
 
 RPC 等待回复期间会锁定操作切换和工作区清空，避免重复下发或丢失结果。合法 RPC 点击执行后直接下发，不再弹出通用二次确认；只有本地 YANG 校验失败而用户选择强制下发时，才要求单独确认。原始 RPC 不做 Capability 推断，执行前需要自行检查命名空间、目标 datastore 和操作风险。旧的 `/yang/yang-operations` 地址会自动跳转到 Schema 工作区。
 
+不带 filter 的 `<get/>` 可能返回大量配置和状态数据，建议按模块或实例添加 subtree/XPath filter。接收缓冲按需扩容，NETCONF 1.0 增量查找分隔符，1.1 按收到的数据逐步收集 chunk，避免反复复制整条响应。应用中的 1.1 单块上限与单条消息上限一致，均为 32 MiB；超限仍会断开会话，并保留 `NETCONF_MESSAGE_TOO_LARGE` 或 `NETCONF_CHUNK_TOO_LARGE` 错误码，随后清理关联 YANG 子进程。超过 256 KiB 的 RPC 响应只在界面和执行记录中显示有界预览，完整内容可另存为文件。
+
 订阅控制 RPC 的 `<rpc-reply>` 仍保留在当前响应区和执行记录中，之后到达的异步 `<notification>` 不会混入响应。Notifications 独立窗口按 Profile → Session → Subscription 分组，支持未读状态、全文筛选、完整 XML 行号/高亮、复制、删除和 JSON/XML 导出。现代动态订阅可从该窗口转回主工作区打开修改、删除和 on-change 重同步；RFC 5277 没有按订阅 ID 取消订阅的 RPC，因此结束旧订阅仍会断开其 Session。
 
 下图是独立的通知记录窗口：左侧为 Profile/Session/Subscription 分组，中间为 Generated/Received 记录表，右侧为选中记录的完整 XML；它与上面的同步 RPC 执行记录是两套独立历史。

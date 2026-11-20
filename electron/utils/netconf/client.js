@@ -186,7 +186,7 @@ class NetconfClient extends EventEmitter {
     _framerOptions() {
         return {
             maxMessageSize: this.maxMessageSize,
-            maxChunkSize: this.maxChunkSize
+            maxChunkSize: this.maxChunkSize ?? this.maxMessageSize
         };
     }
 
@@ -354,7 +354,7 @@ class NetconfClient extends EventEmitter {
                     ? error
                     : new NetconfProtocolError(
                           `Invalid NETCONF message: ${error.message}`,
-                          'NETCONF_PROTOCOL_ERROR',
+                          error.code || 'NETCONF_PROTOCOL_ERROR',
                           error
                       )
             );

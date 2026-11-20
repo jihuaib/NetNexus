@@ -400,12 +400,61 @@ async function runSshInjectionTest() {
     transport.end();
 }
 
+async function runFramingLimitTests() {
+    for (const [capabilities, maxChunkSize, response, expectedCode] of [
+        [[BASE_10], undefined, encodeDelimiter('x'.repeat(513)), 'NETCONF_MESSAGE_TOO_LARGE'],
+        [[BASE_10, BASE_11], undefined, Buffer.from('\n#513\n'), 'NETCONF_CHUNK_TOO_LARGE'],
+        [[BASE_10, BASE_11], 128, Buffer.from('\n#129\n'), 'NETCONF_CHUNK_TOO_LARGE'],
+        [[BASE_10, BASE_11], undefined, Buffer.from(`\n#300\n${'x'.repeat(300)}\n#300\n`), 'NETCONF_MESSAGE_TOO_LARGE']
+    ]) {
+        const transport = new FakeTransport();
+        const client = new NetconfClient({ transport, maxMessageSize: 512, maxChunkSize, rpcTimeout: 1000 });
+        const protocolErrors = [];
+        client.on('protocol-error', error => protocolErrors.push(error));
+        const connecting = client.connect();
+        transport.receive(encodeDelimiter(serverHello(capabilities)));
+        await connecting;
+        const pending = client.rpc('<get/>');
+        const rejected = assert.rejects(
+            pending,
+            error =>
+                error instanceof NetconfProtocolError &&
+                error.code === expectedCode &&
+                error.cause?.code === expectedCode &&
+                Boolean(error.requestXml?.includes('<get/>'))
+        );
+        transport.receive(response);
+        await rejected;
+        assert.equal(client.connected, false);
+        assert.equal(client.pending.size, 0, 'oversized replies must settle waiting RPCs');
+        assert.equal(transport.destroyed, true);
+        assert.equal(protocolErrors.length, 1);
+        assert.equal(protocolErrors[0].code, expectedCode);
+    }
+
+    const transport = new FakeTransport();
+    const client = new NetconfClient({ transport, maxMessageSize: 32 * 1024 * 1024, rpcTimeout: 1000 });
+    const connecting = client.connect();
+    transport.receive(encodeDelimiter(serverHello([BASE_10, BASE_11])));
+    await connecting;
+    assert.equal(client._framer.maxChunkSize, client.maxMessageSize);
+    const pending = client.rpc('<get/>');
+    const rejected = assert.rejects(pending, error => error instanceof NetconfRpcCancelledError);
+    transport.receive(Buffer.from(`\n#${20 * 1024 * 1024}\n`));
+    assert.equal(client.connected, true, 'a valid 20 MiB chunk must fit the configured 32 MiB message limit');
+    assert.equal(client._framer.expectedChunkSize, 20 * 1024 * 1024);
+    assert.equal(client.cancelRpc('1'), true);
+    await rejected;
+    client.disconnect();
+}
+
 async function run() {
     await runClientTests();
     await runVersion10Test();
     await runRpcCancellationTest();
     await runHelloTimeoutTest();
     await runSshInjectionTest();
+    await runFramingLimitTests();
     console.log('YANG NETCONF client and SSH transport tests passed');
 }
 

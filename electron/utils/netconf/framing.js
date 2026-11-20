@@ -3,6 +3,7 @@
 const NETCONF_10_DELIMITER = Buffer.from(']]>]]>', 'ascii');
 const DEFAULT_MAX_MESSAGE_SIZE = 64 * 1024 * 1024;
 const DEFAULT_MAX_CHUNK_SIZE = 16 * 1024 * 1024;
+const INITIAL_BUFFER_CAPACITY = 64 * 1024;
 
 class NetconfFramingError extends Error {
     constructor(message, code = 'NETCONF_FRAMING_ERROR') {
@@ -22,21 +23,71 @@ function toBuffer(value, name = 'message') {
     throw new TypeError(`${name} must be a string, Buffer, or Uint8Array`);
 }
 
-function appendBuffer(current, chunk) {
-    if (current.length === 0) {
-        return Buffer.from(chunk);
+class FramingBuffer {
+    constructor(capacityLimit) {
+        this.capacityLimit = capacityLimit;
+        this.reset();
     }
-    if (chunk.length === 0) {
-        return current;
+
+    get length() {
+        return this.end - this.start;
     }
-    return Buffer.concat([current, chunk], current.length + chunk.length);
+
+    get data() {
+        return this.storage.subarray(this.start, this.end);
+    }
+
+    append(chunk) {
+        if (chunk.length === 0) return;
+        if (this.storage.length - this.end < chunk.length) {
+            const required = this.length + chunk.length;
+            const capacity = Math.max(
+                required,
+                Math.min(this.capacityLimit, Math.max(INITIAL_BUFFER_CAPACITY, this.storage.length * 2))
+            );
+            const storage = this.storage.length >= required ? this.storage : Buffer.allocUnsafe(capacity);
+            const length = this.length;
+            this.storage.copy(storage, 0, this.start, this.end);
+            this.storage = storage;
+            this.start = 0;
+            this.end = length;
+        }
+        chunk.copy(this.storage, this.end);
+        this.end += chunk.length;
+    }
+
+    consume(length) {
+        this.start += length;
+        if (this.length === 0) {
+            this.start = 0;
+            this.end = 0;
+            if (this.storage.length > INITIAL_BUFFER_CAPACITY) this.storage = Buffer.alloc(0);
+        }
+    }
+
+    take() {
+        const data = this.data;
+        this.reset();
+        return data;
+    }
+
+    reset() {
+        this.storage = Buffer.alloc(0);
+        this.start = 0;
+        this.end = 0;
+    }
 }
 
 class DelimiterFramer {
     constructor(options = {}) {
         this.maxMessageSize = options.maxMessageSize || DEFAULT_MAX_MESSAGE_SIZE;
         this.encoding = options.encoding || 'utf8';
-        this.buffer = Buffer.alloc(0);
+        this.pending = new FramingBuffer(this.maxMessageSize + NETCONF_10_DELIMITER.length);
+        this.searchOffset = 0;
+    }
+
+    get buffer() {
+        return this.pending.data;
     }
 
     push(chunk, maxMessages = Infinity) {
@@ -48,11 +99,11 @@ class DelimiterFramer {
             throw new TypeError('maxMessages must be greater than zero');
         }
 
-        this.buffer = appendBuffer(this.buffer, input);
+        this.pending.append(input);
         const messages = [];
 
         while (messages.length < maxMessages) {
-            const delimiterIndex = this.buffer.indexOf(NETCONF_10_DELIMITER);
+            const delimiterIndex = this.buffer.indexOf(NETCONF_10_DELIMITER, this.searchOffset);
             if (delimiterIndex < 0) {
                 if (this.buffer.length > this.maxMessageSize + NETCONF_10_DELIMITER.length - 1) {
                     throw new NetconfFramingError(
@@ -60,6 +111,7 @@ class DelimiterFramer {
                         'NETCONF_MESSAGE_TOO_LARGE'
                     );
                 }
+                this.searchOffset = Math.max(0, this.buffer.length - NETCONF_10_DELIMITER.length + 1);
                 break;
             }
             if (delimiterIndex > this.maxMessageSize) {
@@ -70,21 +122,22 @@ class DelimiterFramer {
             }
 
             const message = this.buffer.subarray(0, delimiterIndex);
-            this.buffer = this.buffer.subarray(delimiterIndex + NETCONF_10_DELIMITER.length);
             messages.push(message.toString(this.encoding));
+            this.pending.consume(delimiterIndex + NETCONF_10_DELIMITER.length);
+            this.searchOffset = 0;
         }
 
         return messages;
     }
 
     takeBuffered() {
-        const buffered = this.buffer;
-        this.buffer = Buffer.alloc(0);
-        return buffered;
+        this.searchOffset = 0;
+        return this.pending.take();
     }
 
     reset() {
-        this.buffer = Buffer.alloc(0);
+        this.pending.reset();
+        this.searchOffset = 0;
     }
 }
 
@@ -93,10 +146,14 @@ class ChunkedFramer {
         this.maxMessageSize = options.maxMessageSize || DEFAULT_MAX_MESSAGE_SIZE;
         this.maxChunkSize = options.maxChunkSize || Math.min(this.maxMessageSize, DEFAULT_MAX_CHUNK_SIZE);
         this.encoding = options.encoding || 'utf8';
-        this.buffer = Buffer.alloc(0);
-        this.messageChunks = [];
+        this.pending = new FramingBuffer(this.maxMessageSize);
+        this.message = new FramingBuffer(this.maxMessageSize);
         this.messageSize = 0;
         this.expectedChunkSize = null;
+    }
+
+    get buffer() {
+        return this.pending.data;
     }
 
     push(chunk, maxMessages = Infinity) {
@@ -108,18 +165,18 @@ class ChunkedFramer {
             throw new TypeError('maxMessages must be greater than zero');
         }
 
-        this.buffer = appendBuffer(this.buffer, input);
+        this.pending.append(input);
         const messages = [];
 
         while (messages.length < maxMessages) {
             if (this.expectedChunkSize !== null) {
-                if (this.buffer.length < this.expectedChunkSize) {
-                    break;
-                }
-                const body = this.buffer.subarray(0, this.expectedChunkSize);
-                this.buffer = this.buffer.subarray(this.expectedChunkSize);
-                this.messageChunks.push(body);
-                this.messageSize += body.length;
+                const bodyLength = Math.min(this.pending.length, this.expectedChunkSize);
+                if (bodyLength === 0) break;
+                this.message.append(this.buffer.subarray(0, bodyLength));
+                this.pending.consume(bodyLength);
+                this.messageSize += bodyLength;
+                this.expectedChunkSize -= bodyLength;
+                if (this.expectedChunkSize > 0) break;
                 this.expectedChunkSize = null;
                 continue;
             }
@@ -153,15 +210,15 @@ class ChunkedFramer {
                         'NETCONF_INVALID_END_MARKER'
                     );
                 }
-                if (this.messageChunks.length === 0) {
+                if (this.messageSize === 0) {
                     throw new NetconfFramingError(
                         'Malformed NETCONF 1.1 framing: an empty chunked message is not allowed',
                         'NETCONF_EMPTY_CHUNKED_MESSAGE'
                     );
                 }
-                this.buffer = this.buffer.subarray(4);
-                messages.push(Buffer.concat(this.messageChunks, this.messageSize).toString(this.encoding));
-                this.messageChunks = [];
+                this.pending.consume(4);
+                messages.push(this.message.data.toString(this.encoding));
+                this.message.reset();
                 this.messageSize = 0;
                 continue;
             }
@@ -204,7 +261,7 @@ class ChunkedFramer {
                 );
             }
 
-            this.buffer = this.buffer.subarray(lineEnd + 1);
+            this.pending.consume(lineEnd + 1);
             this.expectedChunkSize = chunkSize;
         }
 
@@ -212,20 +269,18 @@ class ChunkedFramer {
     }
 
     takeBuffered() {
-        if (this.expectedChunkSize !== null || this.messageChunks.length > 0) {
+        if (this.expectedChunkSize !== null || this.messageSize > 0) {
             throw new NetconfFramingError(
                 'Cannot take buffered data while a NETCONF 1.1 message is incomplete',
                 'NETCONF_INCOMPLETE_MESSAGE'
             );
         }
-        const buffered = this.buffer;
-        this.buffer = Buffer.alloc(0);
-        return buffered;
+        return this.pending.take();
     }
 
     reset() {
-        this.buffer = Buffer.alloc(0);
-        this.messageChunks = [];
+        this.pending.reset();
+        this.message.reset();
         this.messageSize = 0;
         this.expectedChunkSize = null;
     }
