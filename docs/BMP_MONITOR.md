@@ -82,6 +82,7 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 - Peer Up 兼容部分设备的混合 TLV 编码：Sequence Number、Extended Flags、Timestamp 带全局 Index `0`，VRF/Table Name（类型 `5`）不带 Index；支持 64 位序号及包含时间戳类型的 9/10 字节 Timestamp。仅在普通编码解析失败且整段混合编码完整合法时采用此格式，截断报文仍会被拒绝。
 - 批量兼容：draft-19 / draft-20 均支持一个 BGP Message TLV 内连续封装多个完整 UPDATE，也支持同一 BMP 中多个 BGP Message TLV。每条 UPDATE 必须完整位于自己的 TLV 内，公告、撤销和 EOR 按封装顺序处理。
 - 批量报文的索引匹配约定：按 UPDATE 顺序对公告 NLRI 连续编号，跨 UPDATE / TLV 不重置；索引 `0` 匹配全部公告 NLRI，Group 和 Path Marking 使用同一编号。任一 UPDATE 或 TLV 损坏时拒绝整条 BMP 消息。
+- Peer Route Monitoring 的 AS_PATH 优先按 BMP A 位声明的 ASN 宽度解析：A=1 使用两字节，A=0 使用四字节。仅当解析失败且错误全部来自 AS_PATH 时，尝试另一宽度，并要求完整 UPDATE 通过校验；两种编码都合法时保留 A 位声明的解释。回退成功时记录 `BMP AS_PATH encoding mismatch` 告警，不修改原始报文，也不改变同一 Peer 后续报文的解析宽度；Loc-RIB 仍使用四字节编码。
 
 #### TCP-AO 认证
 

@@ -1135,7 +1135,36 @@ class BmpSession {
         }
 
         const packet = message.subarray(position, position + bgpHeader.length);
-        const parsed = parseBgpPacket(packet, context);
+        const allowAsnSizeFallback =
+            context?.allowAsnSizeFallback && bgpHeader.type === BgpConst.BGP_PACKET_TYPE.UPDATE;
+        let asnSize = context?.asnSize;
+        let parsed = parseBgpPacket(packet, context);
+        if (
+            allowAsnSizeFallback &&
+            !parsed.valid &&
+            parsed.errors?.length > 0 &&
+            parsed.errors.every(error => error.startsWith('AS_PATH: '))
+        ) {
+            const alternateAsnSize = asnSize === 2 ? 4 : 2;
+            const alternate = parseBgpPacket(packet, { ...context, asnSize: alternateAsnSize });
+            if (alternate.valid) {
+                parsed = alternate;
+                asnSize = alternateAsnSize;
+            }
+        }
+        if (allowAsnSizeFallback && parsed.valid) {
+            parsed.asnSize = asnSize;
+            const hasAsPath = parsed.pathAttributes.some(
+                attribute => attribute.typeCode === BgpConst.BGP_PATH_ATTR.AS_PATH && attribute.length > 0
+            );
+            if (hasAsPath && asnSize !== context.asnSize) {
+                const warning =
+                    `BMP AS_PATH encoding mismatch: A=${context.asnSize === 2 ? 1 : 0} declares ` +
+                    `${context.asnSize}-byte ASNs; decoded ${asnSize}-byte ASNs from AS_PATH structure`;
+                parsed.warnings.push(warning);
+                logger.warn(`${label} from ${this.remoteIp}:${this.remotePort}: ${warning}`);
+            }
+        }
         if (!parsed.valid) {
             logger.error(`${label} is invalid: ${parsed.error}`);
         }
@@ -1197,6 +1226,7 @@ class BmpSession {
                       ? 2
                       : 4
             );
+            bgpContext.allowAsnSizeFallback = peerType !== BmpConst.BMP_PEER_TYPE.LOCAL_RIB;
             const updates = [];
             for (const [index, tlv] of bgpMessageTlvs.entries()) {
                 tlv.name = 'BGP Message';
@@ -1235,6 +1265,7 @@ class BmpSession {
                   ? 2
                   : 4
         );
+        bgpContext.allowAsnSizeFallback = peerType !== BmpConst.BMP_PEER_TYPE.LOCAL_RIB;
         return this.parseRouteMonitoringBgpPackets(message, position, bgpContext, 'BMPv3');
     }
 
@@ -1253,7 +1284,7 @@ class BmpSession {
             if (embedded.type !== BgpConst.BGP_PACKET_TYPE.UPDATE) {
                 return { error: `${label} contains non-UPDATE BGP message type: ${embedded.type}` };
             }
-            embedded.parsed.asnSize = bgpContext.asnSize;
+            embedded.parsed.asnSize = embedded.parsed.asnSize ?? bgpContext.asnSize;
             updates.push({ parsedBgpUpdate: embedded.parsed, bgpUpdate: embedded.packet, routeTlvs });
             position += embedded.length;
         } while (position < message.length);

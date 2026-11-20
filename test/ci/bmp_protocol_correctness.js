@@ -159,7 +159,6 @@ for (const kind of ['peer', 'loc-rib']) {
     assert.equal(reverseOwner.getAddPathReceiveInfo(1, 1, 'send').enabled, true);
 }
 
-// A flag is authoritative for Peer AS_PATH width, not for Loc-RIB's reserved flags.
 for (const version of [3, 4]) {
     const h = harness('peer', 0, 0);
     for (const [size, flags, expected] of [
@@ -171,12 +170,12 @@ for (const version of [3, 4]) {
         assert.equal(JSON.parse(routes[0].route.attrJson).asPath, expected);
         assert.equal(routes[0].sourceTimestampMs, 1719811200123);
     }
-    const truncatedFourOctetPath = attr(2, Buffer.concat([Buffer.from([2, 2]), u16(65000), u16(65001)]));
-    assert.equal(
-        h.send(update([origin, truncatedFourOctetPath, nextHop]), 0, version).length,
-        0,
-        'truncated A=0 AS_PATH is invalid'
-    );
+    const legacyPathWithWrongFlag = attr(2, Buffer.concat([Buffer.from([2, 2]), u16(65000), u16(65001)]));
+    const legacyRoutes = h.send(update([origin, legacyPathWithWrongFlag, nextHop]), 0, version);
+    assert.equal(legacyRoutes.length, 1, 'complete legacy AS_PATH is detected independently of A=0');
+    assert.equal(JSON.parse(legacyRoutes[0].route.attrJson).asPath, '65000 65001');
+    const truncatedPath = attr(2, Buffer.from([2, 2, 0xfd]));
+    assert.equal(h.send(update([origin, truncatedPath, nextHop]), 0, version).length, 0);
     const loc = harness('loc-rib', 0, 0);
     const locRoutes = loc.send(update([origin, asPath(4), nextHop]), 0xa0, version);
     assert.equal(locRoutes.length, 1);
