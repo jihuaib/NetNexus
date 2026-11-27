@@ -6,12 +6,13 @@ const { rdStringToBytes, extCommunitiesToBytes } = require('../../utils/bgp/bgpE
 
 const logger = require('../../log/logger');
 const CommonUtils = require('../../utils/commonUtils');
-const { canonicalizeAttr } = require('./bgpPathAttrStore');
+const { canonicalizeAttr, isImmutableCanonicalAttr } = require('./bgpPathAttrStore');
 const BgpRoute = require('./bgpRoute');
 const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgp/bgpAttributeRegistry');
 const { encodeExtendedCommunities } = require('../../../shared/bgpExtendedCommunities');
 
 const MAX_PENDING_ROUTE_STREAM_ROUTES = 2000;
+const MAX_CONFIGURED_ATTRIBUTE_CACHE_ENTRIES = 64;
 
 function parseRouteAsPath(asPathStr, use4ByteAsn = true) {
     if (!asPathStr || typeof asPathStr !== 'string') return null;
@@ -92,6 +93,10 @@ class BgpPeer {
         this.addressFamilyOptions = {
             sendSrv6PrefixSid: addressFamilyOptions.sendSrv6PrefixSid === true
         };
+        this.configuredAttributeEncodingCache = new Map();
+        this.immutableConfiguredAttributeEncodings = new WeakMap();
+        this.immutableOutboundAttributeKeys = new WeakMap();
+        this.ipv6NextHopEncodingCache = new Map();
     }
 
     changePeerState(state) {
@@ -478,14 +483,46 @@ class BgpPeer {
         const routeAttr = this.getRouteAttr(route);
         if (routeAttr.attributePolicy === 'configured') {
             const entries = routeAttr.pathAttributes || [];
+            // Key by the actual descriptors and all peer values used by their
+            // encoders: route attributes and session configuration are mutable.
+            // Preserve descriptor order, including repeated attribute types.
+            const sessionKey = JSON.stringify([
+                this.session.localAs,
+                this.session.peerType,
+                this.session.localCapFlags,
+                this.session.localIp,
+                this.session.routerId,
+                this.instance.afi
+            ]);
+            const immutable = isImmutableCanonicalAttr(routeAttr);
+            const immutableCached = immutable && this.immutableConfiguredAttributeEncodings.get(routeAttr);
+            if (immutableCached?.sessionKey === sessionKey) return immutableCached.encoded.slice();
+            const cacheKey = `${sessionKey}:${JSON.stringify(entries)}`;
+            const cached = this.configuredAttributeEncodingCache.get(cacheKey);
+            if (cached) {
+                if (immutable)
+                    this.immutableConfiguredAttributeEncodings.set(routeAttr, { sessionKey, encoded: cached });
+                return cached.slice();
+            }
             const services = entries.filter(entry => ['srv6L2', 'srv6L3'].includes(entry.type));
-            return entries.flatMap(entry =>
+            const encoded = entries.flatMap(entry =>
                 services.includes(entry)
                     ? entry === services[0]
                         ? this.buildEvpnSrv6PrefixSidAttribute(services)
                         : []
                     : this.buildConfiguredPathAttribute(entry)
             );
+            if (encoded.length <= BgpConst.BGP_MAX_PKT_SIZE) {
+                if (this.configuredAttributeEncodingCache.size >= MAX_CONFIGURED_ATTRIBUTE_CACHE_ENTRIES)
+                    this.configuredAttributeEncodingCache.delete(
+                        this.configuredAttributeEncodingCache.keys().next().value
+                    );
+                this.configuredAttributeEncodingCache.set(cacheKey, encoded);
+                if (immutable) this.immutableConfiguredAttributeEncodings.set(routeAttr, { sessionKey, encoded });
+            }
+            // MP_REACH is appended by the packet builder; cached bytes must
+            // remain isolated from that append and from callers' mutations.
+            return encoded.slice();
         }
         const origin = [this.getOriginValue(routeAttr.origin)];
         const med = routeAttr.med ?? ATTRIBUTE_DEFAULTS.med.value;
@@ -573,26 +610,37 @@ class BgpPeer {
     }
 
     getOutboundRouteAttrGroupKey(route) {
-        const attr = canonicalizeAttr(this.getRouteAttr(route));
-        if (attr.attributePolicy !== 'configured') {
-            if (!this.canSendSrv6PrefixSid()) {
-                attr.srv6Sid = '';
-                attr.srv6EndpointBehavior = null;
-            } else if (!attr.srv6Sid) {
-                attr.srv6EndpointBehavior = null;
-            } else if (attr.srv6EndpointBehavior === null) {
-                attr.srv6EndpointBehavior = this.getDefaultSrv6EndpointBehavior();
+        const source = this.getRouteAttr(route);
+        const immutable = isImmutableCanonicalAttr(source);
+        const srv6Context =
+            source.attributePolicy === 'configured'
+                ? ''
+                : `${this.canSendSrv6PrefixSid()}:${this.getDefaultSrv6EndpointBehavior()}`;
+        const cached = immutable && this.immutableOutboundAttributeKeys.get(source);
+        let attributes;
+        if (cached?.srv6Context === srv6Context) {
+            attributes = cached.attributes;
+        } else {
+            const attr = canonicalizeAttr(source);
+            if (attr.attributePolicy !== 'configured') {
+                if (!this.canSendSrv6PrefixSid()) {
+                    attr.srv6Sid = '';
+                    attr.srv6EndpointBehavior = null;
+                } else if (!attr.srv6Sid) {
+                    attr.srv6EndpointBehavior = null;
+                } else if (attr.srv6EndpointBehavior === null) {
+                    attr.srv6EndpointBehavior = this.getDefaultSrv6EndpointBehavior();
+                }
             }
+            attributes = JSON.stringify(attr);
+            if (immutable) this.immutableOutboundAttributeKeys.set(source, { srv6Context, attributes });
         }
         const isClassic =
             this.instance.afi === BgpConst.BGP_AFI_TYPE.AFI_IPV4 &&
             this.instance.safi === BgpConst.BGP_SAFI_TYPE.SAFI_UNICAST &&
             !this.shouldUseMpNlri(route);
-        return JSON.stringify({
-            attributes: attr,
-            nlriEncoding: isClassic ? 'classic' : 'mpReach',
-            mpNextHop: isClassic ? null : Buffer.from(this.getMpReachNextHopBytes(route)).toString('hex')
-        });
+        const mpNextHop = isClassic ? null : Buffer.from(this.getMpReachNextHopBytes(route)).toString('hex');
+        return `{"attributes":${attributes},"nlriEncoding":"${isClassic ? 'classic' : 'mpReach'}","mpNextHop":${JSON.stringify(mpNextHop)}}`;
     }
 
     getOutboundRouteGroups() {
@@ -613,11 +661,15 @@ class BgpPeer {
     }
 
     getIpv6NlriNextHopBytes(nextHopIp) {
-        const nextHopBytes = ipToBytes(`${nextHopIp}`);
-        if (nextHopBytes.length === BgpConst.IP_HOST_BYTE_LEN) {
-            return ipToBytes(`::ffff:${nextHopIp}`);
-        }
-        return nextHopBytes;
+        const key = `${nextHopIp}`;
+        const cached = this.ipv6NextHopEncodingCache.get(key);
+        if (cached) return cached.slice();
+        const nextHopBytes = ipToBytes(key);
+        const encoded = nextHopBytes.length === BgpConst.IP_HOST_BYTE_LEN ? ipToBytes(`::ffff:${key}`) : nextHopBytes;
+        if (this.ipv6NextHopEncodingCache.size >= MAX_CONFIGURED_ATTRIBUTE_CACHE_ENTRIES)
+            this.ipv6NextHopEncodingCache.delete(this.ipv6NextHopEncodingCache.keys().next().value);
+        this.ipv6NextHopEncodingCache.set(key, encoded);
+        return encoded.slice();
     }
 
     getMpReachNextHopBytes(route) {

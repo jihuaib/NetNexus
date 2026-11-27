@@ -15,6 +15,7 @@ const BgpInstance = require('./bgpInstance');
 const CommonUtils = require('../../utils/commonUtils');
 const BgpRoute = require('./bgpRoute');
 const BgpRouteSqliteStore = require('./bgpRouteSqliteStore');
+const { freezeCanonicalAttr } = require('./bgpPathAttrStore');
 const {
     buildLabelGenerationContext,
     getGeneratedLabel,
@@ -267,6 +268,14 @@ function getAddressFamilyFlag(addressFamily) {
         default:
             return 0;
     }
+}
+
+function hasEstablishedPeers(instance) {
+    if (!instance) return false;
+    for (const peer of instance.peerMap.values()) {
+        if (peer.peerState === BgpConst.BGP_PEER_STATE.ESTABLISHED) return true;
+    }
+    return false;
 }
 
 class BgpWorker {
@@ -977,9 +986,13 @@ class BgpWorker {
     }
 
     async withdrawStoredGroupRoutes(rows) {
+        const activeInstances = new Map(
+            Array.from(this.bgpInstanceMap).filter(([, instance]) => hasEstablishedPeers(instance))
+        );
+        if (activeInstances.size === 0) return;
         const batches = new Map();
         for (const row of rows || []) {
-            const instance = this.bgpInstanceMap.get(row.instanceKey);
+            const instance = activeInstances.get(row.instanceKey);
             if (!instance) continue;
             if (!batches.has(instance)) batches.set(instance, []);
             const batch = batches.get(instance);
@@ -999,9 +1012,11 @@ class BgpWorker {
     }
 
     async announceStoredGroup(instance, groupId) {
-        const streams = Array.from(instance.peerMap.values(), peer =>
-            peer.createRouteBatchStream({ abandonOnBackpressure: false })
+        const peers = Array.from(instance.peerMap.values()).filter(
+            peer => peer.peerState === BgpConst.BGP_PEER_STATE.ESTABLISHED
         );
+        if (peers.length === 0) return;
+        const streams = peers.map(peer => peer.createRouteBatchStream({ abandonOnBackpressure: false }));
         let batch = [];
         const write = async () => {
             if (!batch.length) return;
@@ -1009,7 +1024,11 @@ class BgpWorker {
             batch = [];
             await Promise.all(streams.map(stream => stream.write(routes)));
         };
-        for (const row of instance.routeStore.iterateRouteGroupRoutes(groupId, { batchSize: 2000 })) {
+        for (const row of instance.routeStore.iterateRouteGroupRoutes(groupId, {
+            batchSize: 2000,
+            sharedAttributes: true,
+            includeInlineAttributes: false
+        })) {
             batch.push(instance.hydrateRoute(row));
             if (batch.length === 2000) await write();
         }
@@ -1059,11 +1078,26 @@ class BgpWorker {
     withdrawRouteGroup(messageId, config = {}) {
         if (typeof config.groupId !== 'string' || !config.groupId.trim()) throw new Error('路由组ID不能为空');
         return this.serializeRouteGroupMutation(async () => {
-            const store = this.getRouteStores().find(candidate =>
-                candidate.listRouteGroups().some(group => group.groupId === config.groupId)
-            );
-            const result = store ? store.withdrawRouteGroup(config.groupId) : { deleted: 0, routes: [] };
-            await this.withdrawStoredGroupRoutes(result.routes);
+            let store = null;
+            let instance = null;
+            for (const candidate of this.getRouteStores()) {
+                const instanceKey = candidate.getRouteGroupInstanceKey(config.groupId);
+                if (!instanceKey) continue;
+                store = candidate;
+                instance = this.bgpInstanceMap.get(instanceKey);
+                break;
+            }
+            const result = store
+                ? store.withdrawRouteGroup(
+                      config.groupId,
+                      hasEstablishedPeers(instance) ? { snapshot: true } : { includeRoutes: false }
+                  )
+                : { deleted: 0, routes: [] };
+            try {
+                await this.withdrawStoredGroupRoutes(result.routes);
+            } finally {
+                result.release?.();
+            }
             this.messageHandler.sendSuccessResponse(messageId, { deleted: result.deleted }, '路由组撤销成功');
         });
     }
@@ -1453,26 +1487,16 @@ class BgpWorker {
                 return;
             }
 
-            let count = 0;
-            let hasMoreRoutes = true;
-            while (hasMoreRoutes) {
-                const page = instance.routeMap.queryPage({
-                    page: 1,
-                    pageSize: 2000,
-                    routeType,
-                    includeTotal: false
-                });
-                if (page.list.length === 0) {
-                    hasMoreRoutes = false;
-                    continue;
-                }
-                const stats = instance.deleteRouteBatch(page.list.map(route => route.routeKey));
-                count += stats.deleted;
-                if (stats.deleted > 0) {
-                    const pending = instance.withdrawRoute(page.list);
-                    if (pending) await pending;
-                }
+            const result = instance.routeStore.withdrawInstanceRoutes(instance.instanceKey, {
+                routeType,
+                ...(hasEstablishedPeers(instance) ? { snapshot: true } : { includeRoutes: false })
+            });
+            try {
+                await this.withdrawStoredGroupRoutes(result.routes);
+            } finally {
+                result.release?.();
             }
+            const count = result.deleted;
 
             logger.info(`Deleted all ${count} routes for address family ${addressFamily}`);
             this.messageHandler.sendSuccessResponse(
@@ -1526,6 +1550,10 @@ class BgpWorker {
                 ? iterateEvpnRouteInputs(config)
                 : iterateMvpnTreeRouteInputs(config);
         const assertEncodable = route => this.assertTreeRouteEncodable(instance, route);
+        const configuredAttributes = context.attributeRules.map(rule => rule.type);
+        const constantPathAttributes =
+            !isEvpn && context.attributeRules.every(rule => rule.mode === 'fixed' || rule.mode === 'auto');
+        let constantAttr = null;
         const applyEvpnAttributes = (input, attr) => {
             // Custom attributes already contain their complete BGP attribute headers.
             const custom = Buffer.from(attr.customAttr || '', 'hex');
@@ -1660,13 +1688,17 @@ class BgpWorker {
                 )
                     throw new Error('EVPN SRv6的MP Next Hop必须为IPv6地址');
                 const generatedAttr = isEvpn ? applyEvpnAttributes(nlri, generated.attr) : generated.attr;
-                const attr = instance.makeRouteAttr(null, {
-                    customAttr: '',
-                    rt: '',
-                    ...generatedAttr,
-                    attributePolicy: options.legacyAttributes ? 'legacy' : 'configured',
-                    configuredAttributes: context.attributeRules.map(rule => rule.type)
-                });
+                let attr =
+                    constantAttr ||
+                    instance.makeRouteAttr(null, {
+                        customAttr: '',
+                        rt: '',
+                        ...generatedAttr,
+                        attributePolicy: options.legacyAttributes ? 'legacy' : 'configured',
+                        configuredAttributes
+                    });
+                if (constantPathAttributes && !constantAttr) constantAttr = freezeCanonicalAttr(attr);
+                if (constantAttr) attr = constantAttr;
                 route._routeAttr = attr;
                 route.routeKey = makeRouteLookupKey(Number(config.addressFamily), route);
                 assertEncodable(route);

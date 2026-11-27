@@ -257,7 +257,7 @@ async function main() {
                 /不能覆盖/
             );
         const aliasDirectory = path.join(directory, 'database-directory-alias');
-        fs.symlinkSync(path.dirname(dbPath), aliasDirectory, 'dir');
+        fs.symlinkSync(path.dirname(dbPath), aliasDirectory, process.platform === 'win32' ? 'junction' : 'dir');
         for (const suffix of ['', '-wal', '-shm', '-journal'])
             await assert.rejects(
                 exportRouteDatabaseMrt({

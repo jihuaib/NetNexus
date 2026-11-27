@@ -102,6 +102,19 @@ async function main() {
     try {
         const dbPath = path.join(directory, 'routes.sqlite');
         f = fixture(dbPath);
+        for (const peers of [[], [['idle', { peerState: BgpConst.BGP_PEER_STATE.IDLE }]]]) {
+            await f.worker.announceStoredGroup(
+                {
+                    peerMap: new Map(peers),
+                    routeStore: {
+                        iterateRouteGroupRoutes() {
+                            assert.fail('offline generation must not read the stored group for announcement');
+                        }
+                    }
+                },
+                'alpha'
+            );
+        }
         await f.generate('alpha');
         assert.equal(f.rows().length, 6, 'Count is prefixes; ADD-PATH multiplies the number of paths');
         assert.deepEqual(identities(f.rows()), [

@@ -99,7 +99,7 @@ try {
         status: store.getStatus()
     };
     const invalidLateCandidate = function* () {
-        yield entry('10.10.0.0');
+        yield entry('10.10.0.0', { nextHop: '192.0.2.222' });
         yield entry('10.10.1.0', { mask: 99 });
     };
     assert.throws(() => replace(store, 'a', invalidLateCandidate()), /mask is invalid/);
@@ -197,6 +197,40 @@ try {
         'input ordering keeps the paths of each prefix adjacent'
     );
     store.clearInstance('ordered|1|1');
+    const paginationInstanceKey = 'pagination|1|1';
+    const paginationOtherInstanceKey = 'pagination-other|1|1';
+    const paginationRoutes = [10, 2, 11, 1, 12, 3, 13].map(host => entry(`198.19.0.${host}`, { mask: 32 }));
+    replace(store, 'pagination-target', paginationRoutes.slice(0, 3), { instanceKey: paginationInstanceKey });
+    replace(store, 'pagination-neighbor', [entry('198.19.1.1', { mask: 32 })], {
+        instanceKey: paginationInstanceKey
+    });
+    replace(store, 'pagination-mirror', paginationRoutes, { instanceKey: paginationOtherInstanceKey });
+    replace(store, 'pagination-target', paginationRoutes, { instanceKey: paginationInstanceKey });
+    const pagedRoutes = Array.from(store.iterateRouteGroupRoutes('pagination-target', { batchSize: 2 }));
+    assert.deepEqual(
+        pagedRoutes.map(route => route.routeKey),
+        paginationRoutes.map(route => route.routeKey),
+        'group pagination retains insertion order across gaps without including neighboring groups or instances'
+    );
+    assert.ok(pagedRoutes.every(route => route.instanceKey === paginationInstanceKey));
+    const paginationStatement = store.dynamicStatements.get(`${table}:route-group-routes`);
+    const paginationPlan = store.db
+        .prepare(`EXPLAIN QUERY PLAN ${paginationStatement.source}`)
+        .all({
+            instanceId: store.getInstance(paginationInstanceKey).instance_id,
+            groupId: 'pagination-target',
+            afterRouteId: pagedRoutes[1].persistentRouteId,
+            limit: 2
+        })
+        .map(row => row.detail)
+        .join('\n');
+    assert.doesNotMatch(
+        paginationPlan,
+        /TEMP B-TREE FOR (?:RIGHT PART OF )?ORDER BY/i,
+        'each route group page must preserve indexed route order without sorting the group again'
+    );
+    store.clearInstance(paginationInstanceKey);
+    store.clearInstance(paginationOtherInstanceKey);
     const reduced = replace(store, 'scale', manyCandidates(3001), {
         instanceKey: 'scale|1|1',
         includeOldRoutes: false

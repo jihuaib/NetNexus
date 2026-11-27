@@ -1,6 +1,27 @@
 const crypto = require('crypto');
 const { ATTRIBUTE_DEFAULTS } = require('../../utils/bgp/bgpAttributeRegistry');
 const { normalizeExtendedCommunities } = require('../../../shared/bgpExtendedCommunities');
+const immutableCanonicalAttrs = new WeakSet();
+
+function freezeCanonicalAttr(attr) {
+    if (isImmutableCanonicalAttr(attr)) return attr;
+    const copies = new WeakMap();
+    const copyAndFreeze = value => {
+        if (!value || typeof value !== 'object') return value;
+        if (copies.has(value)) return copies.get(value);
+        const copy = Array.isArray(value) ? [] : {};
+        copies.set(value, copy);
+        for (const [key, child] of Object.entries(value)) copy[key] = copyAndFreeze(child);
+        return Object.freeze(copy);
+    };
+    const canonical = copyAndFreeze(canonicalizeAttr(attr));
+    immutableCanonicalAttrs.add(canonical);
+    return canonical;
+}
+
+function isImmutableCanonicalAttr(attr) {
+    return immutableCanonicalAttrs.has(attr);
+}
 
 function normalizeString(value) {
     return value === undefined || value === null ? '' : `${value}`.trim();
@@ -189,5 +210,7 @@ class BgpPathAttrStore {
 
 module.exports = {
     BgpPathAttrStore,
-    canonicalizeAttr
+    canonicalizeAttr,
+    freezeCanonicalAttr,
+    isImmutableCanonicalAttr
 };

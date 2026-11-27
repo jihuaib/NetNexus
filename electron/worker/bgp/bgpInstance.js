@@ -1,7 +1,7 @@
 const BgpPeer = require('./bgpPeer');
 const BgpRoute = require('./bgpRoute');
 const BgpRouteSqliteStore = require('./bgpRouteSqliteStore');
-const { canonicalizeAttr } = require('./bgpPathAttrStore');
+const { canonicalizeAttr, isImmutableCanonicalAttr } = require('./bgpPathAttrStore');
 const { getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 
 const ROUTE_ATTR_FIELDS = [
@@ -126,7 +126,8 @@ class BgpInstance {
         route.routeKey = storedRoute.routeKey;
         route.persistentRouteId = storedRoute.persistentRouteId;
         route.attrId = storedRoute.attrId || null;
-        route._routeAttr = canonicalizeAttr(storedRoute.routeAttr || this.extractRouteAttr(storedRoute));
+        const attr = storedRoute.routeAttr || this.extractRouteAttr(storedRoute);
+        route._routeAttr = isImmutableCanonicalAttr(attr) ? attr : canonicalizeAttr(attr);
         return route;
     }
 
