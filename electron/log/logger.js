@@ -29,6 +29,9 @@ log.transports.file.level = false;
 if (log.transports.console) {
     log.transports.console.level = false;
 }
+if (protocolServiceName && log.transports.ipc) {
+    log.transports.ipc.level = false;
+}
 
 const LOG_LEVEL_OFF = 'off';
 const LOG_LEVELS = {
@@ -55,7 +58,12 @@ class Logger {
             this.logger.transports.file.level = transportLevel;
         }
         if (this.logger.transports.console) {
-            this.logger.transports.console.level = transportLevel;
+            // Protocol logs already have their own file. Sending them to stdout
+            // would make the process host record the same messages a second time.
+            this.logger.transports.console.level = protocolServiceName ? false : transportLevel;
+        }
+        if (protocolServiceName && this.logger.transports.ipc) {
+            this.logger.transports.ipc.level = false;
         }
     }
 

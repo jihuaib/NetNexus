@@ -1471,7 +1471,9 @@ SELECT s.scope_id, r.route_id, r.afi, r.safi, r.prefix, r.prefix_length,
 
 在“设置 → 通用”中把日志级别切换为 `debug` 并保存后，BMP SQLite writer、只读 reader 和离线 reader 会输出 SQL 跟踪。切回 `info`、`warn`、`error` 或 `off` 会立即停止跟踪。
 
-SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及归一化后的 SQL。BMP 写入频率高，`debug` 会产生大量日志，只应临时启用。
+SQL 跟踪只写入普通日志目录下的 `sqlite/` 子目录，不进入普通日志文件、控制台或渲染进程日志转发。文件按普通日志名称和线程区分：主线程为 `<普通日志基本名>-main.log`，worker 为 `<普通日志基本名>-worker-<线程 ID>.log`，例如 `sqlite/protocol-bmp-worker-4.log`、`sqlite/main-worker-2.log`。每个文件最大 5 MB，自动轮转为对应的 `.old.log` 文件。
+
+SQL 跟踪包括执行方式、耗时、受影响行数或返回行数，以及归一化后的 SQL 模板，不展开绑定参数。数据库操作失败仍会通过普通错误日志报告，SQL 明细留在独立文件中。BMP 写入频率高，`debug` 会产生大量文件写入，只应临时启用。
 
 ## 19. 运维注意事项
 

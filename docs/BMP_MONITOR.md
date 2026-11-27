@@ -328,3 +328,4 @@ BMP 查询接口由外部 HTTP API 提供。API 是只读的，不负责启动 B
 - BMP 客户端断开后会保留为离线节点；Session、Loc-RIB 和未超过保留期的路由可在 BMP 重启后从 SQLite 恢复，并以 stale 状态展示。
 - 路由矩阵和路由追踪基于 current/stale 快照，不等价于设备内部策略执行日志；缺少 Path Marking 时尤其不能把推测关联当成设备上报原因。
 - 打开 debug/info 日志时，高频 BMP Route Monitoring 会产生大量日志，可能影响 CPU 和磁盘 IO。
+- BMP 报文解析和逐条路由明细写入 `protocol-bmp.log`；协议进程的直接标准输出/标准错误写入 `protocol-bmp-output.log`。排查时可结合 `main.log` 中的服务操作和异常退出记录，SQL 跟踪另见普通日志目录下的 `sqlite/` 子目录。

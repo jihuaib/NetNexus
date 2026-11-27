@@ -1,4 +1,5 @@
 const { isMainThread, threadId } = require('node:worker_threads');
+const logger = require('../../../electron/log/logger');
 const WorkerMessageHandler = require('../../../electron/worker/core/workerMessageHandler');
 
 const messageHandler = new WorkerMessageHandler();
@@ -28,6 +29,22 @@ messageHandler.registerHandler('delay', (messageId, data) => {
 
 messageHandler.registerHandler('fail', messageId => {
     messageHandler.sendErrorResponse(messageId, 'fixture failure', { reason: 'expected' });
+});
+
+messageHandler.registerHandler('log-output', async (messageId, data) => {
+    logger.raw().transports.file.resolvePathFn = () => data.runtimePath;
+    logger.setLevel(data.level);
+    for (const level of ['debug', 'info', 'warn', 'error']) {
+        logger[level](`${data.marker}-ordinary-${level}`);
+    }
+    await Promise.all([
+        new Promise(resolve => process.stdout.write(`${data.marker}-stdout\n  ${data.marker}-indented\n`, resolve)),
+        new Promise(resolve => process.stderr.write(`${data.marker}-stderr\n`, resolve))
+    ]);
+    messageHandler.sendSuccessResponse(messageId, {
+        consoleLevel: logger.raw().transports.console?.level,
+        ipcLevel: logger.raw().transports.ipc?.level
+    });
 });
 
 messageHandler.registerHandler('exit', (_messageId, data) => {

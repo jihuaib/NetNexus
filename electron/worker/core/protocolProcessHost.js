@@ -1,6 +1,8 @@
 const { fork } = require('node:child_process');
 const { EventEmitter } = require('node:events');
+const { StringDecoder } = require('node:string_decoder');
 const logger = require('../../log/logger');
+const { writeProtocolOutput } = require('../../log/protocolOutputLogger');
 const {
     PROTOCOL_PROCESS_IPC_CODEC,
     PROTOCOL_PROCESS_IPC_CODEC_ENV,
@@ -10,6 +12,7 @@ const {
 
 const DEFAULT_FORCE_KILL_TIMEOUT_MS = 3000;
 const TERMINATION_TIMEOUT_MULTIPLIER = 2;
+const MAX_OUTPUT_LINE_LENGTH = 64 * 1024;
 
 function resolveUtilityProcess(explicitUtilityProcess) {
     if (explicitUtilityProcess !== undefined) {
@@ -22,10 +25,6 @@ function resolveUtilityProcess(explicitUtilityProcess) {
     } catch (_error) {
         return null;
     }
-}
-
-function normalizeOutput(chunk) {
-    return String(chunk || '').trim();
 }
 
 class ProtocolProcessHost extends EventEmitter {
@@ -145,14 +144,50 @@ class ProtocolProcessHost extends EventEmitter {
     }
 
     drainRuntimeOutput(runtime) {
-        runtime.stdout?.on('data', chunk => {
-            const output = normalizeOutput(chunk);
-            if (output) logger.info(`[${this.serviceName}] ${output}`);
-        });
-        runtime.stderr?.on('data', chunk => {
-            const output = normalizeOutput(chunk);
-            if (output) logger.error(`[${this.serviceName}] ${output}`);
-        });
+        const drain = (stream, level) => {
+            if (!stream) return;
+
+            const decoder = new StringDecoder('utf8');
+            let pending = '';
+            let ended = false;
+            const emit = line => {
+                const output = line.replace(/\r$/, '');
+                if (output.trim()) writeProtocolOutput(this.serviceName, level, output);
+            };
+            const append = text => {
+                pending += text;
+                while (pending.length > 0) {
+                    const newline = pending.indexOf('\n');
+                    if (newline >= 0 && newline <= MAX_OUTPUT_LINE_LENGTH) {
+                        emit(pending.slice(0, newline));
+                        pending = pending.slice(newline + 1);
+                    } else if (pending.length >= MAX_OUTPUT_LINE_LENGTH) {
+                        // Bound buffering even if native output never ends its line.
+                        let length = MAX_OUTPUT_LINE_LENGTH;
+                        const lastCode = pending.charCodeAt(length - 1);
+                        // Keep UTF-16 surrogate pairs together when writing fragments.
+                        if (lastCode >= 0xd800 && lastCode <= 0xdbff) length -= 1;
+                        emit(pending.slice(0, length));
+                        pending = pending.slice(length);
+                    } else {
+                        break;
+                    }
+                }
+            };
+            const finish = () => {
+                if (ended) return;
+                ended = true;
+                append(decoder.end());
+                emit(pending);
+                pending = '';
+            };
+
+            stream.on('data', chunk => append(typeof chunk === 'string' ? chunk : decoder.write(chunk)));
+            stream.once('end', finish);
+            stream.once('close', finish);
+        };
+        drain(runtime.stdout, 'info');
+        drain(runtime.stderr, 'error');
     }
 
     get pid() {

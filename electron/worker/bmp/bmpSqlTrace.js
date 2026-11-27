@@ -1,4 +1,4 @@
-const logger = require('../../log/logger');
+const { logSqlTrace } = require('../../log/sqliteLogger');
 
 const MAX_SQL_LENGTH = 1200;
 const TRACE_LEVEL = 'debug';
@@ -107,7 +107,7 @@ function installBmpSqlTrace(db, options = {}) {
 
     const state = {
         enabled: isSqlTraceLevel(options.logLevel),
-        log: typeof options.log === 'function' ? options.log : message => logger.debug(message)
+        log: typeof options.log === 'function' ? options.log : logSqlTrace
     };
     const originalPrepare = db.prepare;
     const originalExec = db.exec;
