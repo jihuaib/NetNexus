@@ -1,6 +1,12 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { setupFeaturePagesE2e } = require('../../scripts/e2e-support');
 const registry = require('../../shared/bgpAttributes.json');
+const BgpConst = require('../../electron/const/bgpConst');
+const { iterateQpRouteIpInputs } = require('../../electron/utils/bgp/simulator/bgpRouteIpGenerator');
+const {
+    buildAttributeRuleContext,
+    getGeneratedAttributeValues
+} = require('../../electron/utils/bgp/simulator/bgpAttributeRules');
 
 const profiles = [
     { key: 'ipv6', family: 2, configKey: 'Ipv6UNCRouteConfig' },
@@ -59,7 +65,7 @@ async function removeNode(page, profile, type) {
 }
 async function dismissToasts(page) {
     const buttons = page.locator('.nn-toast:not(.nn-toast-leaving) .nn-toast-close');
-    while (await buttons.count()) await buttons.first().click();
+    await buttons.evaluateAll(nodes => nodes.forEach(node => node.click()));
     await expect(page.locator('.nn-toast')).toHaveCount(0);
 }
 async function generate(page, profile) {
@@ -123,11 +129,22 @@ test.describe('BGP family tree workspaces', () => {
                 const rows = (controller.state.bgp.routes.get(config.addressFamily) || []).filter(
                     row => row.groupId !== config.groupId
                 );
+                const rangeInputs =
+                    config.ipGenerationMode === 'rangeIncrement'
+                        ? [...iterateQpRouteIpInputs(config, BgpConst.IP_TYPE.IPV6)]
+                        : null;
+                const rangeAttributes = rangeInputs ? buildAttributeRuleContext(config) : null;
                 rows.push(
                     ...Array.from({ length: routeCount }, (_, index) => ({
                         ...config,
                         ip: config.prefix,
                         mask: Number(config.mask),
+                        ...(rangeInputs
+                            ? {
+                                  ...rangeInputs[Math.floor(index / paths)],
+                                  ...getGeneratedAttributeValues(rangeAttributes, index)
+                              }
+                            : {}),
                         pathId: index % paths,
                         routeKey: `${config.groupId}:${index}`
                     }))
@@ -401,8 +418,11 @@ test.describe('BGP family tree workspaces', () => {
             const prefix = prefixFor(profile);
             await openPage(page, profile);
             await expect(page.getByTestId(`${prefix}-route-routeGrowthMode-select`)).toHaveCount(0);
+            const ipMode = page.getByTestId(`${prefix}-route-ipGenerationMode-select`);
+            const ipStep = page.getByTestId(`${prefix}-route-ipStep-input`);
+            await expect(ipMode).toContainText('递增 IP');
             await page.getByTestId(`${prefix}-route-count-input`).fill('3');
-            await page.getByTestId(`${prefix}-route-ipStep-input`).fill('2');
+            await ipStep.fill('2');
             await page.getByTestId(`${prefix}-tree-attribute-bsid`).click();
             await mode(page, profile, '递增');
             await page.getByTestId(`${prefix}-attribute-start-input`).fill('2001:db8::a');
@@ -421,9 +441,12 @@ test.describe('BGP family tree workspaces', () => {
             await expect.poll(() => payloads.at(-1)?.nlriRules.find(rule => rule.type === 'dqpn')?.value).toBe('42');
             expect(payloads.at(-1).ipStep).toBe('2');
             expect(Object.hasOwn(payloads.at(-1), 'routeGrowthMode')).toBe(false);
+            expect(Object.hasOwn(payloads.at(-1), 'ipGenerationMode')).toBe(false);
 
             await selectRoot(page, profile);
-            await page.getByTestId(`${prefix}-route-ipStep-input`).fill('0');
+            await selectOption(page, `${prefix}-route-ipGenerationMode-select`, '固定 IP');
+            await expect(ipStep).toHaveValue('0');
+            await expect(ipStep).toBeDisabled();
             await page.getByTestId(`${prefix}-tree-attribute-dqpn`).click();
             await mode(page, profile, '递增');
             await page.getByTestId(`${prefix}-attribute-start-input`).fill('100');
@@ -438,10 +461,14 @@ test.describe('BGP family tree workspaces', () => {
             const saved = harness.controller.state.bgp.configs.get(profile.configKey);
             expect(saved.ipStep).toBe('0');
             expect(Object.hasOwn(saved, 'routeGrowthMode')).toBe(false);
+            expect(Object.hasOwn(saved, 'ipGenerationMode')).toBe(false);
             await page.reload();
             await expect(page.getByTestId(`${prefix}-generate-routes-button`)).toBeEnabled();
-            await expect(page.getByTestId(`${prefix}-route-ipStep-input`)).toHaveValue('0');
+            await expect(ipMode).toContainText('固定 IP');
+            await expect(ipStep).toHaveValue('0');
+            await expect(ipStep).toBeDisabled();
             await expect(page.getByTestId(`${prefix}-route-routeGrowthMode-select`)).toHaveCount(0);
+            await page.screenshot({ path: test.info().outputPath('qp-fixed-ip.png'), fullPage: true });
             await page.getByTestId(`${prefix}-tree-attribute-dqpn`).click();
             await expect(page.getByTestId(`${prefix}-attribute-start-input`)).toHaveValue('100');
             await expect(page.getByTestId(`${prefix}-attribute-step-input`)).toHaveValue('3');
@@ -460,7 +487,10 @@ test.describe('BGP family tree workspaces', () => {
             });
 
             await selectRoot(page, profile);
-            await page.getByTestId(`${prefix}-route-ipStep-input`).fill('2');
+            await selectOption(page, `${prefix}-route-ipGenerationMode-select`, '递增 IP');
+            await expect(ipStep).toHaveValue('1');
+            await expect(ipStep).toBeEnabled();
+            await ipStep.fill('2');
             await generate(page, profile);
             await expect.poll(() => payloads.at(-1)?.ipStep).toBe('2');
             expect(payloads.at(-1).nlriRules.map(rule => rule.type)).toEqual(['dqpn', 'bsid']);
@@ -474,6 +504,133 @@ test.describe('BGP family tree workspaces', () => {
             expect(Object.hasOwn(payloads.at(-1), 'routeGrowthMode')).toBe(false);
         });
     }
+
+    test('IPv6 QP increments only selected low bits, keeps DQPN fixed and validates range capacity', async ({
+        page
+    }) => {
+        test.setTimeout(60000);
+        const profile = profiles.find(item => item.key === 'ipv6-qp');
+        const prefix = prefixFor(profile);
+        await openPage(page, profile);
+        await page.getByTestId(`${prefix}-route-prefix-input`).fill('2001:db8::1234:0');
+        await page.getByTestId(`${prefix}-route-mask-input`).fill('64');
+        const count = page.getByTestId(`${prefix}-route-count-input`);
+        await count.fill('3');
+        await page.getByTestId(`${prefix}-tree-attribute-dqpn`).click();
+        await mode(page, profile, '固定值');
+        await page.getByTestId(`${prefix}-attribute-value-input`).fill('1');
+        await selectRoot(page, profile);
+        await page.getByTestId(`${prefix}-route-ipGenerationMode-select`).click();
+        await expect(page.getByRole('option', { name: '随机 IP', exact: true })).toHaveCount(0);
+        await page.getByRole('option', { name: '区间递增', exact: true }).click();
+        const mask = page.getByTestId(`${prefix}-route-mask-input`);
+        const rangeStart = page.getByTestId(`${prefix}-route-ipRangeStartBit-select`);
+        const ipStep = page.getByTestId(`${prefix}-route-ipStep-input`);
+        const preview = page.getByTestId(`${prefix}-route-range-preview`);
+        await expect(mask).toHaveValue('128');
+        await expect(mask).toBeDisabled();
+        await expect(rangeStart).toContainText('bit 112');
+        await expect(ipStep).toBeEnabled();
+        await expect(ipStep).toHaveValue('1');
+        await expect(page.getByTestId(`${prefix}-route-ipRandomStartBit-select`)).toHaveCount(0);
+
+        for (const startBit of [64, 80, 92, 96, 112]) {
+            await rangeStart.click();
+            await page.getByRole('option', { name: new RegExp(`^bit ${startBit}[^0-9]`) }).click();
+            await expect(preview).toContainText(new RegExp(`bit ${startBit}.*127`));
+            await expect(preview).toContainText('2001:db8::1234:0/128');
+            await expect(preview).toContainText('2001:db8::1234:2/128');
+            await generate(page, profile);
+            await expectGeneratedCount(page, profile, 3);
+            expect(payloads.at(-1)).toMatchObject({
+                addressFamily: 9,
+                prefix: '2001:db8::1234:0',
+                mask: '128',
+                count: '3',
+                ipStep: '1',
+                ipGenerationMode: 'rangeIncrement',
+                ipRangeStartBit: String(startBit)
+            });
+            expect(payloads.at(-1).nlriRules.find(rule => rule.type === 'dqpn')).toMatchObject({
+                mode: 'fixed',
+                value: '1'
+            });
+        }
+        await ipStep.fill('2');
+        await expect(preview).toContainText('2001:db8::1234:4/128');
+        await generate(page, profile);
+        await expectGeneratedCount(page, profile, 3);
+        const tableRows = page.getByTestId(`${prefix}-route-table`).locator('tbody tr');
+        await expect(tableRows).toHaveCount(3);
+        for (const [index, tail] of ['0', '2', '4'].entries()) {
+            await expect(tableRows.nth(index).locator('td').nth(0)).toHaveText(`2001:db8::1234:${tail}/128`);
+            await expect(tableRows.nth(index).locator('td').nth(1)).toHaveText('1');
+        }
+        await page.getByTestId(`${prefix}-save-workspace-button`).click();
+        await expect(page.locator('.workspace-save-state')).toContainText('已保存');
+        const saved = harness.controller.state.bgp.configs.get(profile.configKey);
+        expect(saved).toMatchObject({
+            ipGenerationMode: 'rangeIncrement',
+            ipRangeStartBit: '112',
+            ipStep: '2',
+            mask: '128'
+        });
+        expect(saved.nlriRules.find(rule => rule.type === 'dqpn')).toMatchObject({ mode: 'fixed', value: '1' });
+        await page.reload();
+        await expect(page.getByTestId(generateButtonId(profile))).toBeEnabled();
+        await expect(page.getByTestId(`${prefix}-route-ipGenerationMode-select`)).toContainText('区间递增');
+        await expect(rangeStart).toContainText('bit 112');
+        await expect(mask).toHaveValue('128');
+        await expect(mask).toBeDisabled();
+        await expect(ipStep).toHaveValue('2');
+        await expect(ipStep).toBeEnabled();
+        await expect(preview).toContainText(/bit 112.*127/);
+        await expect(preview).toContainText('2001:db8::1234:4/128');
+        await generate(page, profile);
+        await expectGeneratedCount(page, profile, 3);
+        await expect(tableRows.nth(1).locator('td').nth(0)).toHaveText('2001:db8::1234:2/128');
+        await expect(tableRows.nth(1).locator('td').nth(1)).toHaveText('1');
+        await page.screenshot({ path: test.info().outputPath('qp-ipv6-range-increment.png'), fullPage: true });
+        await page.getByTestId(`${prefix}-tree-attribute-dqpn`).click();
+        await expect(page.getByTestId(`${prefix}-attribute-mode-select`)).toContainText('固定值');
+        await expect(page.getByTestId(`${prefix}-attribute-value-input`)).toHaveValue('1');
+        await selectRoot(page, profile);
+
+        const generatedPayloadCount = payloads.length;
+        await ipStep.fill('1');
+        await count.fill('65537');
+        await generate(page, profile);
+        await expect(count).toHaveAttribute('aria-invalid', 'true');
+        await expect(page.locator('.nn-toast-error')).toBeVisible();
+        expect(payloads).toHaveLength(generatedPayloadCount);
+        await page.screenshot({ path: test.info().outputPath('qp-ipv6-range-capacity-error.png'), fullPage: true });
+        await count.fill('3');
+        await page.getByTestId(`${prefix}-route-prefix-input`).fill('2001:db8::1234:fffe');
+        await generate(page, profile);
+        await expect(count).toHaveAttribute('aria-invalid', 'true');
+        expect(payloads).toHaveLength(generatedPayloadCount);
+        await count.fill('2');
+        await generate(page, profile);
+        await expectGeneratedCount(page, profile, 2);
+        await expect(preview).toContainText('2001:db8::1234:fffe/128');
+        await expect(preview).toContainText('2001:db8::1234:ffff/128');
+
+        await count.fill('1');
+        for (const label of ['固定 IP', '递增 IP']) {
+            await selectOption(page, `${prefix}-route-ipGenerationMode-select`, label);
+            await expect(rangeStart).toHaveCount(0);
+            await expect(mask).toBeEnabled();
+            await expect(ipStep).toBeVisible();
+            await generate(page, profile);
+            await expectGeneratedCount(page, profile, 1);
+            expect(Object.hasOwn(payloads.at(-1), 'ipGenerationMode')).toBe(false);
+            expect(Object.hasOwn(payloads.at(-1), 'ipRangeStartBit')).toBe(false);
+            expect(payloads.at(-1).nlriRules.find(rule => rule.type === 'dqpn')).toMatchObject({
+                mode: 'fixed',
+                value: '1'
+            });
+        }
+    });
 
     test('IPv6 keeps ADD-PATH and SRv6 in their proper tree branches', async ({ page }) => {
         const profile = profiles[0];

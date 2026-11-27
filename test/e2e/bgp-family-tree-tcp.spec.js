@@ -1,6 +1,7 @@
 const { test, expect } = require('../../scripts/e2e-support/electron-test');
 const { BgpE2eController, getBrowserMockScript } = require('../../scripts/e2e-support');
 const BgpConst = require('../../electron/const/bgpConst');
+const ipaddr = require('ipaddr.js');
 
 const AF = BgpConst.BGP_ADDR_FAMILY;
 const capabilities = [1, 2, 65];
@@ -117,6 +118,17 @@ function groupConfig(id, family, extra) {
         attributeRules: attributes,
         ...extra
     };
+}
+function ipv6Bits(address) {
+    return ipaddr
+        .parse(address)
+        .toByteArray()
+        .reduce((value, byte) => (value << 8n) | BigInt(byte), 0n);
+}
+function qpKeys(routes) {
+    return routes
+        .map(route => `${ipv6Bits(route.ip ?? route.prefix)}|${route.mask ?? route.length}|${route.dqpn}`)
+        .sort();
 }
 
 test.describe('BGP family trees over actual TCP', () => {
@@ -263,6 +275,72 @@ test.describe('BGP family trees over actual TCP', () => {
             expect(states.data.groups).toEqual([expect.objectContaining({ groupId: config.groupId, routeCount: 2 })]);
         });
     }
+
+    test('IPv6 QP range increments preserve fixed high bits with a fixed DQPN and reject overflow before sending', async ({
+        page
+    }) => {
+        await startPeer(page, controller, { family: AF.IPV6_QP, clientFamily: 'ipv6-qp' });
+        const count = 8;
+        let previousRoutes;
+        for (const [batch, ipRangeStartBit] of [64, 80, 92, 96, 112].entries()) {
+            const prefix = `2001:db8:1234:${(0x5678 + batch).toString(16)}:9abc:def1:2345:fff0`;
+            const config = groupConfig('ipv6-qp-range-wire', AF.IPV6_QP, {
+                prefix,
+                mask: 128,
+                count,
+                routeGrowthMode: 'ip',
+                ipGenerationMode: 'rangeIncrement',
+                ipRangeStartBit,
+                ipStep: 2,
+                nlriRules: [{ type: 'dqpn', mode: 'fixed', value: 1 }]
+            });
+            const mark = controller.getClientUpdates().length;
+            await generate(page, 'generateIpv6QpRoutes', config);
+            const packets = await announced(controller, mark, 2, 241, count);
+            const wireRoutes = packets.flatMap(update => update.mpReach.nlri);
+            const rows = await snapshot(controller, AF.IPV6_QP);
+            expect(rows.total).toBe(count);
+            expect(qpKeys(wireRoutes)).toEqual(qpKeys(rows.list));
+            const expectedAddresses = Array.from({ length: count }, (_, index) =>
+                (ipv6Bits(prefix) + BigInt(index * 2)).toString()
+            ).sort();
+            expect(wireRoutes.map(route => ipv6Bits(route.ip ?? route.prefix).toString()).sort()).toEqual(
+                expectedAddresses
+            );
+            const hostBits = BigInt(128 - ipRangeStartBit);
+            for (const route of rows.list) {
+                expect(route.mask).toBe(128);
+                expect(route.dqpn).toBe(1);
+                expect(ipv6Bits(route.ip) >> hostBits).toBe(ipv6Bits(prefix) >> hostBits);
+            }
+            if (previousRoutes) {
+                const withdrawals = await withdrawn(controller, mark, 2, 241, count);
+                expect(qpKeys(withdrawals.flatMap(update => update.mpUnreach.withdrawnRoutes))).toEqual(
+                    qpKeys(previousRoutes)
+                );
+            }
+            previousRoutes = rows.list;
+
+            if (ipRangeStartBit === 112) {
+                const failureMark = controller.getClientUpdates().length;
+                const overflow = await page.evaluate(payload => window.bgpApi.generateIpv6QpRoutes(payload), {
+                    ...config,
+                    count: count + 1
+                });
+                expect(overflow.status).toBe('error');
+                expect(qpKeys((await snapshot(controller, AF.IPV6_QP)).list)).toEqual(qpKeys(rows.list));
+                expect(updates(controller, failureMark, 2, 241)).toEqual([]);
+                expect(updates(controller, failureMark, 2, 241, true)).toEqual([]);
+            }
+        }
+        const mark = controller.getClientUpdates().length;
+        const result = await page.evaluate(() => window.bgpApi.withdrawRouteGroup({ groupId: 'ipv6-qp-range-wire' }));
+        expect(result.status, result.msg).toBe('success');
+        expect(result.data.deleted).toBe(count);
+        const withdrawals = await withdrawn(controller, mark, 2, 241, count);
+        expect(qpKeys(withdrawals.flatMap(update => update.mpUnreach.withdrawnRoutes))).toEqual(qpKeys(previousRoutes));
+        expect((await snapshot(controller, AF.IPV6_QP)).total).toBe(0);
+    });
 
     test('MVPN preserves Leaf references and encodes distinct Type 6 source and group addresses', async ({ page }) => {
         await startPeer(page, controller, { family: AF.IPV4_MVPN, clientFamily: 'ipv4-mvpn' });

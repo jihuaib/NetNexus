@@ -23,7 +23,9 @@ const {
     findRouteGroupOverlap,
     describeRouteRange,
     getRouteResultColumns,
-    getRouteSections
+    getRouteSections,
+    getRouteEditorConfig,
+    normalizeQpRouteIpChange
 } = loaded.exports;
 const {
     buildAttributeRuleContext,
@@ -392,6 +394,50 @@ const list = createRouteGroup('ipv4-qp', 'list', {
 assert.ok(findRouteGroupOverlap([list, b], list.id));
 
 for (const profile of ['ipv4-qp', 'ipv6-qp']) {
+    const legacyDqpnRules = [{ id: 'legacy-dqpn', type: 'dqpn', mode: 'increment', start: '100', step: '3' }];
+    const legacyWorkspace = {
+        routeWorkspace: {
+            version: 1,
+            profile,
+            activeGroupId: 'legacy-fixed-ip',
+            groups: [
+                {
+                    id: 'legacy-fixed-ip',
+                    name: 'Legacy fixed IP',
+                    config: {
+                        addressFamily: getRouteProfile(profile).addressFamily,
+                        prefix: profile === 'ipv4-qp' ? '10.0.0.99' : '2001:db8::99',
+                        mask: profile === 'ipv4-qp' ? '32' : '128',
+                        count: '3',
+                        ipStep: '2',
+                        routeGrowthMode: 'dqpn',
+                        attributeRules: [],
+                        nlriRules: legacyDqpnRules
+                    }
+                }
+            ]
+        }
+    };
+    const legacyRestored = restoreRouteWorkspace(profile, legacyWorkspace);
+    const legacyGroup = legacyRestored.groups[0];
+    assert.equal(legacyGroup.config.ipStep, 0, 'legacy DQPN-only growth must restore a fixed IP');
+    assert.equal(Object.hasOwn(legacyGroup.config, 'routeGrowthMode'), false);
+    assert.deepEqual(legacyGroup.config.nlriRules, legacyDqpnRules, 'migration preserves the DQPN generation rule');
+    assert.deepEqual(validateRouteConfig(legacyGroup.config), {});
+    const legacyPayload = compileRouteTreePayload(legacyGroup.config, legacyGroup);
+    assert.equal(legacyPayload.ipStep, 0, 'the migrated payload must retain the fixed IP');
+    assert.equal(Object.hasOwn(legacyPayload, 'routeGrowthMode'), false);
+    assert.deepEqual(legacyPayload.nlriRules, legacyDqpnRules);
+    const legacyContext = buildAttributeRuleContext(legacyPayload);
+    assert.deepEqual(
+        [0, 1, 2].map(index => getGeneratedAttributeValues(legacyContext, index).dqpn),
+        [100, 103, 106]
+    );
+    const legacySaved = serializeRouteWorkspace(profile, legacyRestored.groups, legacyRestored.activeGroupId);
+    assert.equal(legacySaved.ipStep, 0);
+    assert.equal(Object.hasOwn(legacySaved, 'routeGrowthMode'), false);
+    assert.deepEqual(restoreRouteWorkspace(profile, legacySaved), legacyRestored);
+
     const fixedIp = createRouteGroup(profile, 'fixed-ip', {
         count: 3,
         ipStep: 0,
@@ -411,6 +457,46 @@ for (const profile of ['ipv4-qp', 'ipv6-qp']) {
     const restored = restoreRouteWorkspace(profile, serializeRouteWorkspace(profile, [fixedIp], fixedIp.id));
     assert.equal(restored.groups[0].config.ipStep, 0);
     assert.deepEqual(restored.groups[0].config.nlriRules, fixedIp.config.nlriRules);
+    assert.equal(getRouteEditorConfig(fixedIp.config).ipGenerationMode, 'fixed');
+    const incrementEditor = getRouteEditorConfig({ ...fixedIp.config, ipStep: '2' });
+    assert.equal(incrementEditor.ipGenerationMode, 'increment');
+    const selectedFixedIp = normalizeQpRouteIpChange(incrementEditor, {
+        ...incrementEditor,
+        ipGenerationMode: 'fixed'
+    });
+    assert.equal(selectedFixedIp.ipStep, '0', 'selecting fixed IP must stop prefix growth');
+    assert.equal(Object.hasOwn(selectedFixedIp, 'ipGenerationMode'), false);
+    assert.deepEqual(
+        selectedFixedIp.nlriRules,
+        fixedIp.config.nlriRules,
+        'IP selection preserves independent DQPN rules'
+    );
+    const editorPayload = compileRouteTreePayload(getRouteEditorConfig(selectedFixedIp));
+    assert.equal(editorPayload.ipStep, '0');
+    assert.equal(
+        Object.hasOwn(editorPayload, 'ipGenerationMode'),
+        false,
+        'editor-only choices must not reach the worker'
+    );
+    assert.deepEqual(editorPayload.nlriRules, fixedIp.config.nlriRules);
+    const selectedGroup = { ...fixedIp, config: selectedFixedIp };
+    const selectionSaved = serializeRouteWorkspace(profile, [selectedGroup], selectedGroup.id);
+    const selectionRestored = restoreRouteWorkspace(profile, selectionSaved).groups[0];
+    assert.equal(getRouteEditorConfig(selectionRestored.config).ipGenerationMode, 'fixed');
+    assert.deepEqual(selectionRestored.config.nlriRules, fixedIp.config.nlriRules);
+    const fixedEditor = getRouteEditorConfig(selectionRestored.config);
+    const selectedIncrementIp = normalizeQpRouteIpChange(fixedEditor, {
+        ...fixedEditor,
+        ipGenerationMode: 'increment'
+    });
+    assert.equal(selectedIncrementIp.ipStep, '1', 'returning to increment must resume prefix growth');
+    assert.deepEqual(selectedIncrementIp.nlriRules, fixedIp.config.nlriRules);
+    const manualFixedIp = normalizeQpRouteIpChange(incrementEditor, { ...incrementEditor, ipStep: '0' });
+    assert.equal(
+        getRouteEditorConfig(manualFixedIp).ipGenerationMode,
+        'fixed',
+        'the existing zero-step input stays supported'
+    );
     const overlap = createRouteGroup(profile, 'same-key', {
         ...fixedIp.config,
         count: 1,
@@ -431,6 +517,108 @@ for (const profile of ['ipv4-qp', 'ipv6-qp']) {
     assert.ok(validateRouteConfig({ ...fixedDqpn.config, ipStep: -1 }).ipStep);
     assert.ok(validateRouteConfig({ ...fixedDqpn.config, ipStep: 0 }).count);
 }
+
+const rangeQpRules = [{ id: 'range-ip-dqpn', type: 'dqpn', mode: 'fixed', value: '1' }];
+for (const startBit of [64, 80, 92, 96, 112]) {
+    const rangeQp = createRouteGroup('ipv6-qp', `range-bit-${startBit}`, {
+        prefix: '2001:db8::1234:0',
+        mask: '128',
+        count: '65536',
+        ipStep: '1',
+        ipGenerationMode: 'rangeIncrement',
+        ipRangeStartBit: String(startBit),
+        nlriRules: rangeQpRules,
+        attributeRules: []
+    });
+    assert.deepEqual(validateRouteConfig(rangeQp.config), {}, `bit ${startBit} increment accepts its DIP range`);
+    assert.equal(getRouteEditorConfig(rangeQp.config).ipGenerationMode, 'rangeIncrement');
+    const rangePayload = compileRouteTreePayload(rangeQp.config, rangeQp);
+    assert.equal(rangePayload.mask, '128');
+    assert.equal(rangePayload.ipGenerationMode, 'rangeIncrement');
+    assert.equal(rangePayload.ipRangeStartBit, String(startBit));
+    assert.equal(rangePayload.ipStep, '1');
+    assert.deepEqual(rangePayload.nlriRules, rangeQpRules, 'incrementing DIP preserves a fixed DQPN');
+    const context = buildAttributeRuleContext(rangePayload);
+    assert.deepEqual(
+        [0, 1, 65535].map(index => getGeneratedAttributeValues(context, index).dqpn),
+        [1, 1, 1]
+    );
+    const saved = serializeRouteWorkspace('ipv6-qp', [rangeQp], rangeQp.id);
+    const restored = restoreRouteWorkspace('ipv6-qp', saved);
+    assert.equal(restored.activeGroupId, rangeQp.id);
+    assert.deepEqual(restored.groups[0].config, rangeQp.config);
+    assert.deepEqual(compileRouteTreePayload(restored.groups[0].config, restored.groups[0]), rangePayload);
+    assert.match(describeRouteRange(rangeQp.config), new RegExp(`bit ${startBit}.*127`));
+    assert.match(describeRouteRange(rangeQp.config), /2001:db8::1234:0\/128/);
+    assert.match(describeRouteRange(rangeQp.config), /2001:db8::1234:ffff\/128/);
+    assert.ok(validateRouteConfig({ ...rangeQp.config, mask: '112' }).mask, 'bounded DIP increment uses /128');
+    for (const invalidBit of [0, 63, 65, 91, 113, 127, 128, '', 'invalid', 92.5])
+        assert.ok(
+            validateRouteConfig({ ...rangeQp.config, ipRangeStartBit: invalidBit }).ipRangeStartBit,
+            `unsupported increment start bit ${invalidBit} must be rejected`
+        );
+    for (const ipStep of ['0', '-1', '', 'invalid', '1.5'])
+        assert.ok(validateRouteConfig({ ...rangeQp.config, ipStep }).ipStep, `invalid range step ${ipStep}`);
+    for (const ipGenerationMode of ['fixed', 'increment']) {
+        const editor = getRouteEditorConfig(rangeQp.config);
+        const changed = normalizeQpRouteIpChange(editor, { ...editor, ipGenerationMode });
+        assert.equal(getRouteEditorConfig(changed).ipGenerationMode, ipGenerationMode);
+        assert.deepEqual(changed.nlriRules, rangeQpRules);
+        const payload = compileRouteTreePayload(changed);
+        assert.equal(Object.hasOwn(payload, 'ipGenerationMode'), false);
+        assert.equal(Object.hasOwn(payload, 'ipRangeStartBit'), false);
+    }
+}
+const rangeQpEditor = getRouteEditorConfig(
+    createRouteGroup('ipv6-qp', 'range selection', { mask: '64', ipStep: '0', nlriRules: rangeQpRules }).config
+);
+const selectedRangeQp = normalizeQpRouteIpChange(rangeQpEditor, {
+    ...rangeQpEditor,
+    ipGenerationMode: 'rangeIncrement'
+});
+assert.equal(selectedRangeQp.mask, '128', 'choosing bounded increment selects a host route');
+assert.equal(selectedRangeQp.ipGenerationMode, 'rangeIncrement');
+assert.equal(selectedRangeQp.ipStep, '1', 'bounded increment starts with a positive step');
+assert.equal(String(getRouteEditorConfig(selectedRangeQp).ipRangeStartBit), '112');
+assert.deepEqual(selectedRangeQp.nlriRules, rangeQpRules, 'selecting a DIP range leaves DQPN fixed');
+const rangeQpBoundary = {
+    ...selectedRangeQp,
+    prefix: '2001:db8::1234:0',
+    ipRangeStartBit: '112',
+    count: '65536'
+};
+assert.deepEqual(validateRouteConfig(rangeQpBoundary), {});
+assert.ok(
+    validateRouteConfig({ ...rangeQpBoundary, count: '65537' }).count,
+    'low 16 bits cannot carry into fixed bits'
+);
+assert.deepEqual(validateRouteConfig({ ...rangeQpBoundary, prefix: '2001:db8::1234:fffe', count: '2' }), {});
+assert.ok(validateRouteConfig({ ...rangeQpBoundary, prefix: '2001:db8::1234:fffe', count: '3' }).count);
+assert.deepEqual(validateRouteConfig({ ...rangeQpBoundary, ipStep: '2', count: '32768' }), {});
+assert.ok(validateRouteConfig({ ...rangeQpBoundary, ipStep: '2', count: '32769' }).count);
+const rangeQp92Boundary = { ...rangeQpBoundary, ipRangeStartBit: '92', prefix: '2001:db8::f:ffff:fffe', count: '2' };
+assert.deepEqual(validateRouteConfig(rangeQp92Boundary), {}, 'bit 92 supports a partial-hextet boundary');
+assert.ok(validateRouteConfig({ ...rangeQp92Boundary, count: '3' }).count, 'bit 92 must preserve the high 92 bits');
+assert.match(describeRouteRange(rangeQp92Boundary), /2001:db8::f:ffff:fffe\/128/);
+assert.match(describeRouteRange(rangeQp92Boundary), /2001:db8::f:ffff:ffff\/128/);
+const positiveRangeStep = normalizeQpRouteIpChange(
+    { ...rangeQpEditor, ipStep: '3' },
+    { ...rangeQpEditor, ipStep: '3', ipGenerationMode: 'rangeIncrement' }
+);
+assert.equal(positiveRangeStep.ipStep, '3', 'entering a DIP range preserves an existing positive step');
+const rangeWithLegacyGrowth = createRouteGroup('ipv6-qp', 'legacy growth with explicit DIP range', {
+    ...rangeQpBoundary,
+    count: '3',
+    ipStep: '2',
+    routeGrowthMode: 'dqpn'
+});
+assert.equal(rangeWithLegacyGrowth.config.ipStep, '2', 'an explicit DIP range overrides obsolete growth settings');
+assert.equal(Object.hasOwn(rangeWithLegacyGrowth.config, 'routeGrowthMode'), false);
+const rangeLegacySaved = serializeRouteWorkspace('ipv6-qp', [rangeWithLegacyGrowth], rangeWithLegacyGrowth.id);
+rangeLegacySaved.routeWorkspace.groups[0].config.routeGrowthMode = 'dqpn';
+const restoredRangeWithLegacyGrowth = restoreRouteWorkspace('ipv6-qp', rangeLegacySaved).groups[0];
+assert.equal(restoredRangeWithLegacyGrowth.config.ipStep, '2');
+assert.deepEqual(validateRouteConfig(restoredRangeWithLegacyGrowth.config), {});
 
 // Compare the bounded two-dimensional intersection with actual small NLRI sets.
 let seed = 17;

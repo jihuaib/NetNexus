@@ -155,7 +155,7 @@
                     />
                     <nn-form :model="activeGroup.config" layout="vertical" class="nlri-form">
                         <RouteSchemaForm
-                            :model-value="activeGroup.config"
+                            :model-value="basicConfig"
                             :sections="basicSections"
                             :errors="errors"
                             :disabled="disabled"
@@ -251,7 +251,9 @@
         getRouteSections,
         describeRouteRange,
         describeRouteNlri,
-        getRouteProfile
+        getRouteProfile,
+        getRouteEditorConfig,
+        normalizeQpRouteIpChange
     } from '../view/bgp/bgpRouteWorkspace';
     import {
         ATTRIBUTE_CATALOG,
@@ -338,6 +340,7 @@
     const visibleRouteRules = config => getRouteTreeRules(config).filter(rule => isRuleVisible(rule, config));
     const visibleAttributeRules = config => (config.attributeRules || []).filter(rule => isRuleVisible(rule, config));
     const activeGroup = computed(() => props.groups.find(group => group.id === props.activeGroupId) || props.groups[0]);
+    const basicConfig = computed(() => getRouteEditorConfig(activeGroup.value.config));
     const attributeRules = computed(() => visibleAttributeRules(activeGroup.value.config));
     const treeRules = computed(() => visibleRouteRules(activeGroup.value.config));
     const selectedRule = computed(() => treeRules.value.find(rule => rule.id === selectedNode.value.ruleId));
@@ -543,8 +546,13 @@
             props.groups.map(group => (group.id === groupId ? { ...group, config: normalizedConfig } : group))
         );
     };
-    const updateConfig = config =>
-        updateGroupConfig(activeGroup.value.id, normalizeEvpnRouteTypeChange(activeGroup.value.config, config));
+    const updateConfig = config => {
+        const previous = activeGroup.value.config;
+        updateGroupConfig(
+            activeGroup.value.id,
+            normalizeQpRouteIpChange(previous, normalizeEvpnRouteTypeChange(previous, config))
+        );
+    };
     const updateGroupName = name => {
         if (props.disabled) return;
         emit(

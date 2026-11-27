@@ -1,6 +1,10 @@
 const ipaddr = require('ipaddr.js');
 const BgpConst = require('../../../const/bgpConst');
-const { forEachGeneratedRouteIp } = require('./bgpRouteIpGenerator');
+const {
+    forEachGeneratedRouteIp,
+    iterateQpRouteIpInputs,
+    validateQpIpGenerationMode
+} = require('./bgpRouteIpGenerator');
 const { forEachVpnGeneratedRoute, forEachEvpnGeneratedRoute, applyGeneratedEvpnNlri } = require('./bgpVpnEvpn');
 const { buildAttributeRuleContext, getGeneratedAttributeValues } = require('./bgpAttributeRules');
 
@@ -377,6 +381,8 @@ function buildQpGenerationContext(config, ipType, options = {}) {
 }
 
 function forEachQpGeneratedRoute(config, ipType, callback, options = {}) {
+    validateQpIpGenerationMode(config);
+    if (config.ipGenerationMode === 'rangeIncrement') throw new Error('指定范围递增QP路由请使用树属性和NLRI规则');
     const context = buildQpGenerationContext(config, ipType, options);
     if (context.count === 0 || typeof callback !== 'function') {
         return 0;
@@ -589,6 +595,28 @@ function collectBgpGeneratedRoutes(config, options = {}) {
     if (addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP || addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV6_QP) {
         const ipType =
             addressFamily === BgpConst.BGP_ADDR_FAMILY.IPV4_QP ? BgpConst.IP_TYPE.IPV4 : BgpConst.IP_TYPE.IPV6;
+        validateQpIpGenerationMode(config);
+        if (Array.isArray(config.routes)) return config.routes.map(route => ({ addressFamily, ...route }));
+        if (config.attributeRules !== undefined || config.nlriRules !== undefined) {
+            const count = Number(config.count);
+            const context = buildAttributeRuleContext(config, options.random || Math.random, count);
+            let index = 0;
+            for (const input of iterateQpRouteIpInputs(config, ipType)) {
+                const generated = getGeneratedAttributeValues(context, index++);
+                routes.push({
+                    addressFamily,
+                    ...input,
+                    dqpn: generated.dqpn ?? null,
+                    nextHop: generated.mpNextHop,
+                    mpNextHop: generated.mpNextHop,
+                    ...generated.attr,
+                    attributePolicy: 'configured',
+                    configuredAttributes: context.attributeRules.map(rule => rule.type)
+                });
+            }
+            return routes;
+        }
+        if (config.ipGenerationMode === 'rangeIncrement') throw new Error('指定范围递增QP路由请使用树属性和NLRI规则');
         forEachQpGeneratedRoute(
             config,
             ipType,

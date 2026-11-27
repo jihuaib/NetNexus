@@ -437,7 +437,9 @@ function buildAttributeRuleContext(config = {}, random = Math.random, routeCount
         seenTypes.add(source.type);
         return compileRule(
             source,
-            source.type === 'dqpn' && config.routeGrowthMode === 'ip' ? 1 : generatedCount,
+            source.type === 'dqpn' && config.ipGenerationMode !== 'rangeIncrement' && config.routeGrowthMode === 'ip'
+                ? 1
+                : generatedCount,
             config.addressFamily,
             config
         );
@@ -450,7 +452,7 @@ function buildAttributeRuleContext(config = {}, random = Math.random, routeCount
         ),
         random,
         pathCount,
-        qpGrowDqpn: config.routeGrowthMode !== 'ip'
+        qpGrowDqpn: config.ipGenerationMode === 'rangeIncrement' || config.routeGrowthMode !== 'ip'
     };
 }
 

@@ -2,7 +2,11 @@ const net = require('net');
 const ipaddr = require('ipaddr.js');
 const util = require('util');
 const BgpConst = require('../../const/bgpConst');
-const { forEachGeneratedRouteIp } = require('../../utils/bgp/simulator/bgpRouteIpGenerator');
+const {
+    forEachGeneratedRouteIp,
+    iterateQpRouteIpInputs,
+    validateQpIpGenerationMode
+} = require('../../utils/bgp/simulator/bgpRouteIpGenerator');
 const { getAfiAndSafi, getAddrFamilyType } = require('../../utils/bgp/bgpUtils');
 const logger = require('../../log/logger');
 const WorkerMessageHandler = require('../core/workerMessageHandler');
@@ -111,21 +115,7 @@ function makeMvpnRouteKey(route) {
 }
 
 function* iterateQpTreeRouteInputs(config, ipType) {
-    if (Array.isArray(config.routes)) {
-        yield* config.routes;
-        return;
-    }
-    const mode = config.routeGrowthMode ?? BgpConst.BGP_QP_ROUTE_GROWTH_MODE.IP_DQPN;
-    if (!Object.values(BgpConst.BGP_QP_ROUTE_GROWTH_MODE).includes(mode)) throw new Error('QP增长模式无效');
-    const growIp = mode !== BgpConst.BGP_QP_ROUTE_GROWTH_MODE.DQPN;
-    const ipStep = Number(config.ipStep ?? 1);
-    if (!Number.isSafeInteger(ipStep) || ipStep < 0) throw new Error('QP IP步长必须为非负整数');
-    validateTreePrefixRange({ ...config, count: growIp ? config.count : 1 }, ipType, ipStep);
-    if (growIp) yield* iterateTreeRouteInputs(config, ipType, 1, ipStep);
-    else {
-        const [base] = iterateTreeRouteInputs({ ...config, count: 1 }, ipType, 1);
-        for (let index = 0; index < Number(config.count); index += 1) yield { ...base };
-    }
+    yield* iterateQpRouteIpInputs(config, ipType);
 }
 
 function normalizeMvpnTreeInput(input) {
@@ -1800,6 +1790,9 @@ class BgpWorker {
             return this.generateSpecialTreeRoutes(messageId, config);
         this.assertRouteMutationsAvailable();
         try {
+            validateQpIpGenerationMode(config);
+            if (config.ipGenerationMode === 'rangeIncrement')
+                throw new Error('指定范围递增QP路由请使用树属性和NLRI规则');
             const { afi, safi } = getAfiAndSafi(config.addressFamily);
             const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
             if (!instance) {
@@ -1904,6 +1897,9 @@ class BgpWorker {
             });
         this.assertRouteMutationsAvailable();
         try {
+            validateQpIpGenerationMode(config);
+            if (config.ipGenerationMode === 'rangeIncrement')
+                throw new Error('指定范围递增QP路由请通过已生成路由快照或路由组撤销');
             const { afi, safi } = getAfiAndSafi(config.addressFamily);
             const instance = this.bgpInstanceMap.get(BgpInstance.makeKey(0, afi, safi));
             if (!instance) {

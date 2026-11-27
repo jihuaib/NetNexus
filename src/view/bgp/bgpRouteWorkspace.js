@@ -63,7 +63,13 @@ const families = {
     'ipv6-qp': {
         title: 'IPv6-QP',
         addressFamily: AF.IPV6_QP,
-        defaults: { prefix: '2001:db8::1', mask: '128', count: '10', ipStep: '1' }
+        defaults: {
+            prefix: '2001:db8::1',
+            mask: '128',
+            count: '10',
+            ipStep: '1',
+            ipRangeStartBit: '112'
+        }
     },
     mvpn: {
         title: 'IPv4-MVPN',
@@ -106,6 +112,9 @@ const profileFor = config =>
     Object.values(ROUTE_PROFILES).find(profile => profile.addressFamilies.includes(Number(config.addressFamily))) ||
     ROUTE_PROFILES.ipv4;
 const isQp = config => [AF.IPV4_QP, AF.IPV6_QP].includes(Number(config.addressFamily));
+const isIpv6Qp = config => Number(config.addressFamily) === AF.IPV6_QP;
+const isRangeIncrementIp = config => config.ipGenerationMode === 'rangeIncrement';
+const IPV6_IP_START_BITS = [64, 80, 92, 96, 112];
 const isMvpn = config => Number(config.addressFamily) === AF.IPV4_MVPN;
 const isIpv6 = config => [AF.IPV6_UNC, AF.IPV6_QP].includes(Number(config.addressFamily));
 const isIpv4Route = config => [AF.IPV4_UNC, AF.IPV4_LABEL_UNICAST].includes(Number(config.addressFamily));
@@ -137,7 +146,10 @@ export function createRouteGroup(profile, name = '路由组 1', config = {}) {
     if (!profile.addressFamilies.includes(Number(normalized.addressFamily)))
         normalized.addressFamily = profile.addressFamily;
     normalized.addressFamily = Number(normalized.addressFamily);
-    if (isQp(normalized)) delete normalized.routeGrowthMode;
+    if (isQp(normalized)) {
+        if (normalized.routeGrowthMode === 'dqpn' && !isRangeIncrementIp(normalized)) normalized.ipStep = 0;
+        delete normalized.routeGrowthMode;
+    }
     normalized.nlriEncoding = 'mpReach';
     normalized.attributeRules = normalizeAttributeRules(
         Array.isArray(config.attributeRules)
@@ -225,6 +237,29 @@ const types = [
 ].map((label, index) => ({ label: `Type ${index + 1} · ${label}`, value: index + 1 }));
 export const MVPN_ROUTE_TYPES = types;
 const condition = routeTypes => ({ any: routeTypes.map(equals => ({ field: 'routeType', equals })) });
+export function getRouteEditorConfig(config) {
+    return isQp(config)
+        ? {
+              ...config,
+              ipGenerationMode: config.ipGenerationMode ?? (integer(config.ipStep, 0, 0) ? 'fixed' : 'increment')
+          }
+        : config;
+}
+export function normalizeQpRouteIpChange(previous, next) {
+    if (!isQp(next)) return next;
+    const { ipGenerationMode, ...config } = next;
+    if (ipGenerationMode === 'rangeIncrement' && isIpv6Qp(config)) {
+        config.ipGenerationMode = ipGenerationMode;
+        const modeChanged = getRouteEditorConfig(previous).ipGenerationMode !== ipGenerationMode;
+        if (modeChanged) config.mask = '128';
+        if (config.ipRangeStartBit === undefined) config.ipRangeStartBit = '112';
+        if (modeChanged && !integer(config.ipStep, 1, Number.MAX_SAFE_INTEGER)) config.ipStep = '1';
+        return config;
+    }
+    if (ipGenerationMode && ipGenerationMode !== getRouteEditorConfig(previous).ipGenerationMode)
+        config.ipStep = ipGenerationMode === 'fixed' ? '0' : '1';
+    return config;
+}
 export function getRouteSections(config, profileKey) {
     const profile = profileKey ? getRouteProfile(profileKey) : profileFor(config);
     if (isVpnEvpnRoute(config)) return getVpnEvpnRouteSections(config, profile);
@@ -272,16 +307,61 @@ export function getRouteSections(config, profileKey) {
         ];
     } else {
         fields = [
-            field('prefix', 'Prefix', { help: '起始前缀；按掩码对齐网络地址。' }),
-            field('mask', 'Mask', { help: isIpv6(config) ? '前缀长度，0–128。' : '前缀长度，0–32。' }),
+            field('prefix', 'Prefix', {
+                help: isRangeIncrementIp(config)
+                    ? '从此完整 IPv6 地址开始，只递增选定位段；起始位之前的高位保持不变。'
+                    : '起始前缀；按掩码对齐网络地址。'
+            }),
+            field('mask', 'Mask', {
+                ...(isIpv6Qp(config)
+                    ? {
+                          disabledWhen: { field: 'ipGenerationMode', equals: 'rangeIncrement' }
+                      }
+                    : {}),
+                help: isRangeIncrementIp(config)
+                    ? '区间递增生成 /128 主机路由。'
+                    : isIpv6(config)
+                      ? '前缀长度，0–128。'
+                      : '前缀长度，0–32。'
+            }),
             count
         ];
+        if (isQp(config))
+            fields.push(
+                field('ipGenerationMode', 'IP 生成方式', {
+                    type: 'select',
+                    editorOnly: !isRangeIncrementIp(config),
+                    options: [
+                        { label: '递增 IP', value: 'increment' },
+                        { label: '固定 IP', value: 'fixed' },
+                        ...(isIpv6Qp(config) ? [{ label: '区间递增', value: 'rangeIncrement' }] : [])
+                    ],
+                    help: isIpv6Qp(config)
+                        ? '区间递增只改变选定低位段，高位保持固定；DQPN 在其节点独立配置，可固定为 1。'
+                        : '固定 IP 时每条路由使用相同前缀；可在 DQPN 节点选择递增，生成同 IP、不同 DQPN 的路由。'
+                })
+            );
+        if (isIpv6Qp(config))
+            fields.push(
+                field('ipRangeStartBit', '递增起始位', {
+                    type: 'select',
+                    visibleWhen: { field: 'ipGenerationMode', equals: 'rangeIncrement' },
+                    options: IPV6_IP_START_BITS.map(bit => ({
+                        label: `bit ${bit}–127（低 ${128 - bit} 位）`,
+                        value: String(bit)
+                    })),
+                    help: '从最高位 bit 0 开始计数。只在起始位至 bit 127 内按步长递增，超出区间时拒绝生成，不向高位进位。'
+                })
+            );
         if (isQp(config) || profile.key === 'ipv6')
             fields.push(
                 field('ipStep', 'IP 步长', {
-                    help: isQp(config)
-                        ? '以子网为单位递增，0 表示固定 IP。DQPN 的生成规则在 DQPN 节点配置，独立生效。'
-                        : '以子网为单位递增，默认为 1。例如 /64、步长 2 时，每次跳过一个 /64 子网。'
+                    ...(isQp(config) ? { disabledWhen: { field: 'ipGenerationMode', equals: 'fixed' } } : {}),
+                    help: isRangeIncrementIp(config)
+                        ? '低位段每次增加的数值，必须为正整数；不会进位改变高位。'
+                        : isQp(config)
+                          ? '以子网为单位递增，0 表示固定 IP。DQPN 的生成规则在 DQPN 节点配置，独立生效。'
+                          : '以子网为单位递增，默认为 1。例如 /64、步长 2 时，每次跳过一个 /64 子网。'
                 })
             );
     }
@@ -290,7 +370,7 @@ export function getRouteSections(config, profileKey) {
 export function compileRouteTreePayload(config, group) {
     if (isIpv4Route(config)) return compileRouteRulePayload(config, group);
     const schemaFields = getRouteSections(config).flatMap(section => section.fields);
-    const fields = schemaFields.filter(field => isSchemaFieldVisible(field, config));
+    const fields = schemaFields.filter(field => !field.editorOnly && isSchemaFieldVisible(field, config));
     const payload = {
         ...Object.fromEntries(fields.map(field => [field.key, config[field.key]])),
         ...compileRouteRulePayload(config, group)
@@ -356,6 +436,23 @@ export function validateRouteConfig(config) {
         '数量必须为正整数'
     );
     if (!errors.count && !getGeneratedRouteCount(config)) errors.count = '生成路由总数超出安全整数范围';
+    if (isQp(config))
+        check(
+            'ipGenerationMode',
+            () =>
+                config.ipGenerationMode === undefined ||
+                ['fixed', 'increment', 'rangeIncrement'].includes(config.ipGenerationMode),
+            'IP 生成方式不支持，请选择递增 IP、固定 IP 或区间递增'
+        );
+    if (isRangeIncrementIp(config)) {
+        check('ipGenerationMode', () => isIpv6Qp(config), '区间递增仅支持 IPv6 QP 路由');
+        check(
+            'ipRangeStartBit',
+            () =>
+                integer(config.ipRangeStartBit, 0, 127) && IPV6_IP_START_BITS.includes(Number(config.ipRangeStartBit)),
+            '递增起始位请选择 64、80、92、96 或 112'
+        );
+    }
     if (isVpnEvpnRoute(config)) {
         Object.assign(errors, validateVpnEvpnRouteConfig(config));
     } else if (isMvpn(config)) {
@@ -384,18 +481,21 @@ export function validateRouteConfig(config) {
         );
         check(
             'mask',
-            () => (isIpv4Route(config) ? decimalInteger : integer)(config.mask, 0, bits),
-            `前缀长度范围为 0–${bits}`
+            () =>
+                isRangeIncrementIp(config)
+                    ? integer(config.mask, 128, 128)
+                    : (isIpv4Route(config) ? decimalInteger : integer)(config.mask, 0, bits),
+            isRangeIncrementIp(config) ? '区间递增的路由掩码必须为 128' : `前缀长度范围为 0–${bits}`
         );
         check(
             'ipStep',
             () =>
                 (isIpv4Route(config) ? decimalInteger : integer)(
                     config.ipStep === undefined ? 1 : config.ipStep,
-                    isQp(config) ? 0 : 1,
+                    isQp(config) && !isRangeIncrementIp(config) ? 0 : 1,
                     Number.MAX_SAFE_INTEGER
                 ),
-            isQp(config) ? 'IP 步长必须为非负整数，0 表示固定 IP' : 'IP 步长必须为正整数'
+            isQp(config) && !isRangeIncrementIp(config) ? 'IP 步长必须为非负整数，0 表示固定 IP' : 'IP 步长必须为正整数'
         );
     }
     for (const rule of getRouteTreeRules(config).filter(
@@ -444,11 +544,24 @@ function routeSequences(config) {
     const bits = isIpv6(config) ? 128 : 32;
     const mask = Number(config.mask);
     const ipStep = config.ipStep === undefined ? 1 : config.ipStep;
-    if (!integer(ipStep, isQp(config) ? 0 : 1, Number.MAX_SAFE_INTEGER))
-        throw new Error(isQp(config) ? 'IP 步长必须为非负整数，0 表示固定 IP' : 'IP 步长必须为正整数');
+    if (!integer(ipStep, isQp(config) && !isRangeIncrementIp(config) ? 0 : 1, Number.MAX_SAFE_INTEGER))
+        throw new Error(
+            isQp(config) && !isRangeIncrementIp(config) ? 'IP 步长必须为非负整数，0 表示固定 IP' : 'IP 步长必须为正整数'
+        );
     const subnet = 1n << BigInt(bits - mask);
     const start = (ipNumber(config.prefix, bits) / subnet) * subnet;
     const step = subnet * BigInt(ipStep);
+    if (isRangeIncrementIp(config)) {
+        if (!isIpv6Qp(config) || mask !== 128) throw new Error('区间递增仅支持 IPv6 QP /128 主机路由');
+        if (!integer(config.ipRangeStartBit, 0, 127) || !IPV6_IP_START_BITS.includes(Number(config.ipRangeStartBit)))
+            throw new Error('递增起始位请选择 64、80、92、96 或 112');
+        const lowMask = (1n << BigInt(128 - Number(config.ipRangeStartBit))) - 1n;
+        const remaining = (lowMask - (start & lowMask)) / step + 1n;
+        if (count > remaining)
+            throw new Error(
+                `递增范围超出 bit ${Number(config.ipRangeStartBit)}–127；当前起始地址和步长最多生成 ${remaining} 条路由`
+            );
+    }
     if (start + step * (count - 1n) >= 1n << BigInt(bits)) throw new Error('生成范围超出 IP 地址空间');
     const rd = isQp(config)
         ? ''
@@ -540,6 +653,7 @@ export function describeRouteRange(config) {
         if (!range)
             return `${isEvpnRoute(config) ? `Type ${config.routeType}` : `${config.prefix}/${config.mask}`} · ${isVpnEvpnRoute(config) ? 'RD' : 'DQPN'} 按随机规则生成`;
         const span = `${range.format(range.start)} → ${range.format(range.start.map((value, index) => value + range.step[index] * (range.count - 1n)))}`;
+        if (isRangeIncrementIp(config)) return `bit ${Number(config.ipRangeStartBit)}–127 区间递增 · ${span}`;
         return !isQp(config) && !isMvpn(config) && Number(config.ipStep ?? 1) > 1
             ? `${span} · 步长 ${config.ipStep}`
             : span;
