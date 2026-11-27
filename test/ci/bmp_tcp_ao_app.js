@@ -345,6 +345,9 @@ async function testBmpConfigWhitelist() {
             'pathMarkingTlvType',
             'persistenceEnabled',
             'port',
+            'sourceInstanceCustomTemplate',
+            'sourceInstanceTemplate',
+            'sourceInstanceTlvType',
             'tcpAoProfileIds',
             'threadCount'
         ].sort(),
@@ -353,6 +356,9 @@ async function testBmpConfigWhitelist() {
     assert.equal(Number(stored.port), 11019);
     assert.equal(stored.threadCount, 8);
     assert.equal(stored.persistenceEnabled, true);
+    assert.equal(stored.sourceInstanceTemplate, 'h3c');
+    assert.equal(stored.sourceInstanceTlvType, 0);
+    assert.equal(stored.sourceInstanceCustomTemplate, 'bgp instance name:{instance}');
     assert.deepEqual(stored.tcpAoProfileIds, ['edge-a', 'edge-b']);
     assertNoRendererSecrets(stored);
 
@@ -360,6 +366,9 @@ async function testBmpConfigWhitelist() {
     const loaded = await app.handleLoadBmpConfig();
     assert.equal(loaded.status, 'success', loaded.msg);
     assert.equal(loaded.data.threadCount, 8);
+    assert.equal(loaded.data.sourceInstanceTemplate, 'h3c');
+    assert.equal(loaded.data.sourceInstanceTlvType, 0);
+    assert.equal(loaded.data.sourceInstanceCustomTemplate, 'bgp instance name:{instance}');
     assertNoRendererSecrets(loaded.data);
     assert.deepEqual(loaded.data.tcpAoProfileIds, ['edge-a', 'edge-b']);
 }

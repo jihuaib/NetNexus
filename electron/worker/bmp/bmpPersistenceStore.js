@@ -3051,7 +3051,7 @@ class BmpPersistenceStore {
         const lastRow = pageRows[pageRows.length - 1];
 
         return {
-            list: pageRows.map(row => this.mapRouteRow(row)),
+            list: pageRows.map(this.createRouteRowMapper()),
             total,
             page,
             pageSize,
@@ -3077,7 +3077,6 @@ class BmpPersistenceStore {
                        s.cleanup_pending_epoch,
                        route_attr.attr_id, route_attr.attr_json AS attr_json,
                        src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
-                       json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
                        conn.connection_id,
                        conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                        conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
@@ -3202,7 +3201,7 @@ class BmpPersistenceStore {
                   ${whereSql}
                  ORDER BY ${orderSql}`
             : this.buildRouteRowsSql({ currentRoutesSql, whereSql, orderSql });
-        const mapRow = lean ? this.createRouteAssuranceRowMapper() : row => this.mapRouteRow(row);
+        const mapRow = lean ? this.createRouteAssuranceRowMapper() : this.createRouteRowMapper();
         let rows = 0;
         let chunk = [];
         for (const row of this.db.prepare(sql).iterate(params)) {
@@ -3235,7 +3234,7 @@ class BmpPersistenceStore {
             SELECT s.scope_id, s.scope_kind, s.owner_key, s.scope_identity_json, s.peer_type, s.peer_rd,
                    s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,
                    src.source_id, src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
-                   json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
+                   src.metadata_json AS source_metadata_json,
                    conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                    conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port
               FROM bmp_rib_scopes s
@@ -3250,6 +3249,7 @@ class BmpPersistenceStore {
             }
             const row = scopeStatement.get({ scopePk });
             const scopeIdentity = parseJson(row?.scope_identity_json, {});
+            const sourceMetadata = parseJson(row?.source_metadata_json, {});
             const peerRdIdentity = scopeIdentity?.peer?.rd;
             info = {
                 scopeId: row?.scope_id ?? null,
@@ -3274,7 +3274,7 @@ class BmpPersistenceStore {
                     remotePort: row?.connection_remote_port ?? null,
                     sysName: row?.sys_name ?? null,
                     sysDesc: row?.sys_desc ?? null,
-                    ...(row?.source_bgp_instance_name ? { bgpInstanceName: row.source_bgp_instance_name } : {})
+                    ...(sourceMetadata?.bgpInstanceName ? { bgpInstanceName: sourceMetadata.bgpInstanceName } : {})
                 }
             };
             scopeInfo.set(scopePk, info);
@@ -3342,7 +3342,20 @@ class BmpPersistenceStore {
         };
     }
 
-    mapRouteRow(row) {
+    createRouteRowMapper() {
+        const instanceNames = new Map();
+        const sourceStatement = this.db.prepare('SELECT metadata_json FROM bmp_sources WHERE source_id = ?');
+        return row => {
+            if (!instanceNames.has(row.source_id)) {
+                // Resolve source metadata once per read/source, outside the indexed route SQL hot path.
+                const source = sourceStatement.get(row.source_id);
+                instanceNames.set(row.source_id, parseJson(source?.metadata_json, {})?.bgpInstanceName || null);
+            }
+            return this.mapRouteRow(row, instanceNames.get(row.source_id));
+        };
+    }
+
+    mapRouteRow(row, bgpInstanceName = null) {
         const route = buildStoredRouteProjection(row);
         const scopeIdentity = parseJson(row.scope_identity_json, {});
         const peerRdIdentity = scopeIdentity?.peer?.rd;
@@ -3398,7 +3411,7 @@ class BmpPersistenceStore {
                 remotePort: row.connection_remote_port,
                 sysName: row.sys_name,
                 sysDesc: row.sys_desc,
-                ...(row.source_bgp_instance_name ? { bgpInstanceName: row.source_bgp_instance_name } : {})
+                ...(bgpInstanceName ? { bgpInstanceName } : {})
             },
             firstSeenAt: new Date(row.first_seen_ms).toISOString(),
             lastSeenAt: new Date(row.last_seen_ms).toISOString(),
@@ -4000,7 +4013,6 @@ class BmpPersistenceStore {
                            s.cleanup_pending_epoch,
                            route_attr.attr_id, route_attr.attr_json AS attr_json,
                            src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
-                           json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
                            conn.connection_id,
                            conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                            conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
@@ -4039,7 +4051,7 @@ class BmpPersistenceStore {
             return { hasMore, rows: deletedRows };
         });
         const result = purge();
-        const routes = result.rows.map(row => this.mapRouteRow(row));
+        const routes = result.rows.map(this.createRouteRowMapper());
         return {
             purged: routes.length,
             hasMore: result.hasMore,

@@ -395,6 +395,16 @@ async function checkPersistedTopology() {
             assert.equal(routes.list[0].nextHop, `192.0.2.${10 + index}`);
             assert.equal(routes.list[0].source.bgpInstanceName, session.bgpInstanceName);
         });
+        for (const lean of [false, true]) {
+            const streamed = [];
+            store.streamRouteAssuranceRows({ routeState: 'all', lean, chunkSize: 1 }, chunk => streamed.push(...chunk));
+            assert.equal(streamed.length, 3);
+            for (const { session } of feeds) {
+                const route = streamed.find(row => row.persistentSourceId === session.getPersistentSourceId());
+                assert.ok(route, `the ${lean ? 'lean' : 'full'} stream must retain every BGP process`);
+                assert.equal(route.source.bgpInstanceName, session.bgpInstanceName);
+            }
+        }
         const closeMutations = feeds.map(({ session }) => buildConnectionMutation(session, 'connection_close'));
         store.applyBatch({ batchId: 'process-identities-close', mutations: closeMutations });
         store.close();
