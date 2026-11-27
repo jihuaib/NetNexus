@@ -2,6 +2,7 @@ const logger = require('../../log/logger');
 const BmpConst = require('../../const/bmpConst');
 const {
     getInitiationTlvName,
+    getInitiationBgpInstanceName,
     toUnixTimestampMs,
     parseCommonHeader,
     parsePeerHeader,
@@ -106,6 +107,7 @@ class BmpSession {
         this.tcpMd5Peer = null;
         this.sysName = null;
         this.sysDesc = null;
+        this.bgpInstanceName = null;
         this.receivedAt = null;
         this.tlvs = [];
         this.bmpVersion = null;
@@ -2356,6 +2358,7 @@ class BmpSession {
             tcpMd5Peer: this.tcpMd5Peer,
             sysName: this.sysName,
             sysDesc: this.sysDesc,
+            bgpInstanceName: this.bgpInstanceName,
             bmpVersion: this.bmpVersion,
             bmpV4TlvDraft: this.getBmpV4TlvDraft(),
             rawTlvs: toSerializableTlvs(this.tlvs),
@@ -2654,7 +2657,18 @@ class BmpSession {
             const tlvResult = parseBmpTlvs(message);
             this.logTlvWarnings('Initiation TLV', tlvResult.warnings);
             if (tlvResult.warnings.length > 0) return;
+            const bgpInstanceName = getInitiationBgpInstanceName(tlvResult.tlvs, this.bmpWorker?.bmpConfigData || {});
+            if (
+                this.persistenceSourceKey &&
+                bgpInstanceName !== (this.persistenceSourceKey.canonicalIdentity?.bgpInstanceName || null)
+            ) {
+                // A connection already owns routes under its bound source key. Never move it into another process.
+                logger.warn('BMP Initiation BGP instance changed after source admission; reconnect is required');
+                this.closeSession();
+                return;
+            }
             this.tlvs = tlvResult.tlvs;
+            this.bgpInstanceName = bgpInstanceName;
 
             // 提取已知的TLV类型
             this.sysName = '';

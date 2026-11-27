@@ -262,6 +262,78 @@
                                 </nn-form-item>
                             </nn-col>
                         </nn-row>
+                        <nn-row :gutter="12">
+                            <nn-col :span="12">
+                                <nn-form-item label="BGP进程识别" name="sourceInstanceTemplate">
+                                    <nn-select
+                                        v-model:value="bmpConfig.sourceInstanceTemplate"
+                                        aria-label="BGP进程识别模板"
+                                        data-testid="bmp-source-instance-template-select"
+                                        style="width: 100%"
+                                    >
+                                        <nn-select-option value="h3c">H3C</nn-select-option>
+                                        <nn-select-option value="fullValue">完整 TLV 值</nn-select-option>
+                                        <nn-select-option value="custom">自定义模板</nn-select-option>
+                                    </nn-select>
+                                </nn-form-item>
+                            </nn-col>
+                            <nn-col :span="12">
+                                <nn-form-item label="实例TLV类型" name="sourceInstanceTlvType">
+                                    <nn-tooltip
+                                        :title="validationErrors.sourceInstanceTlvType"
+                                        :open="!!validationErrors.sourceInstanceTlvType"
+                                    >
+                                        <nn-input-number
+                                            v-model:value="bmpConfig.sourceInstanceTlvType"
+                                            data-testid="bmp-source-instance-tlv-type-input"
+                                            :min="0"
+                                            :max="65535"
+                                            :precision="0"
+                                            style="width: 100%"
+                                            :status="validationErrors.sourceInstanceTlvType ? 'error' : ''"
+                                        />
+                                    </nn-tooltip>
+                                    <div class="nn-helper-text">填写报文中的 Initiation TLV Type，范围 0–65535。</div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row v-if="bmpConfig.sourceInstanceTemplate === 'custom'">
+                            <nn-col :span="24">
+                                <nn-form-item label="实例提取模板" name="sourceInstanceCustomTemplate">
+                                    <nn-tooltip
+                                        :title="validationErrors.sourceInstanceCustomTemplate"
+                                        :open="!!validationErrors.sourceInstanceCustomTemplate"
+                                    >
+                                        <nn-input
+                                            v-model:value="bmpConfig.sourceInstanceCustomTemplate"
+                                            data-testid="bmp-source-instance-custom-template-input"
+                                            placeholder="bgp instance name:{instance}"
+                                            :maxlength="1024"
+                                            :status="validationErrors.sourceInstanceCustomTemplate ? 'error' : ''"
+                                        />
+                                    </nn-tooltip>
+                                    <div class="nn-helper-text">
+                                        用一个 {instance} 标记实例名位置，前后文本按原文匹配。例如
+                                        process={instance};。模板不使用正则表达式。
+                                    </div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
+                        <nn-row>
+                            <nn-col :span="24">
+                                <nn-form-item label="识别示例">
+                                    <div
+                                        class="nn-helper-text source-instance-preview"
+                                        data-testid="bmp-source-instance-template-preview"
+                                    >
+                                        {{ sourceInstanceTemplatePreview }}
+                                        <br />
+                                        识别出的实例名用于区分同设备不同 BGP 进程；未匹配时按系统名和源 IP
+                                        区分。保存后下次启动生效。
+                                    </div>
+                                </nn-form-item>
+                            </nn-col>
+                        </nn-row>
                         <nn-row>
                             <nn-col :span="24">
                                 <nn-form-item label="持久化路由" name="persistenceEnabled">
@@ -414,6 +486,7 @@
     import { notify } from '../../utils/notify';
     import { FormValidator } from '../../utils/validationCommon';
     import { createBmpConfigValidationRules } from '../../utils/bmp/validationRules';
+    import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
     import {
         DEFAULT_VALUES,
         BMP_EVENT_PAGE_ID,
@@ -453,10 +526,27 @@
         threadCount: DEFAULT_BMP_THREAD_COUNT,
         bmpV4TlvDraft: DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT,
         pathMarkingTlvType: getDefaultPathMarkingTlvType(DEFAULT_VALUES.DEFAULT_BMP_V4_TLV_DRAFT),
+        sourceInstanceTemplate: 'h3c',
+        sourceInstanceTlvType: 0,
+        sourceInstanceCustomTemplate: 'bgp instance name:{instance}',
         persistenceEnabled: true,
         authType: BMP_AUTH_TYPE.NONE,
         tcpAoProfileIds: [],
         tcpMd5ProfileIds: []
+    });
+
+    const normalizeSourceInstanceTemplate = value => (['h3c', 'fullValue', 'custom'].includes(value) ? value : 'h3c');
+
+    const sourceInstanceTemplatePreview = computed(() => {
+        const type = bmpConfig.value.sourceInstanceTlvType ?? '…';
+        const template = bmpConfig.value.sourceInstanceTemplate;
+        if (template === 'fullValue') return `Initiation TLV ${type} 的值 default → BGP 实例 default。`;
+        const text =
+            template === 'custom' ? bmpConfig.value.sourceInstanceCustomTemplate : 'bgp instance name:{instance}';
+        if (typeof text !== 'string' || text.split('{instance}').length !== 2) {
+            return '自定义模板必须包含且只包含一个 {instance}。';
+        }
+        return `Initiation TLV ${type} 的值 ${text.replace('{instance}', 'default')} → BGP 实例 default。`;
     });
 
     const tcpAoProfiles = ref([]);
@@ -729,6 +819,7 @@
             title: '客户端IP',
             dataIndex: 'remoteIp',
             key: 'remoteIp',
+            width: 150,
             ellipsis: true
         },
         {
@@ -754,6 +845,14 @@
             dataIndex: 'sysName',
             key: 'sysName',
             ellipsis: true
+        },
+        {
+            title: 'BGP实例',
+            dataIndex: 'bgpInstanceName',
+            key: 'bgpInstanceName',
+            width: 140,
+            ellipsis: true,
+            customRender: ({ text }) => text || '-'
         },
         {
             title: '系统描述',
@@ -801,6 +900,9 @@
         port: '',
         threadCount: '',
         pathMarkingTlvType: '',
+        sourceInstanceTemplate: '',
+        sourceInstanceTlvType: '',
+        sourceInstanceCustomTemplate: '',
         tcpAoProfileIds: '',
         tcpMd5ProfileIds: ''
     });
@@ -975,6 +1077,9 @@
                 bmpConfig.value.pathMarkingTlvType,
                 bmpConfig.value.bmpV4TlvDraft
             ),
+            sourceInstanceTemplate: normalizeSourceInstanceTemplate(bmpConfig.value.sourceInstanceTemplate),
+            sourceInstanceTlvType: Number(bmpConfig.value.sourceInstanceTlvType),
+            sourceInstanceCustomTemplate: bmpConfig.value.sourceInstanceCustomTemplate,
             persistenceEnabled: true,
             authType,
             tcpAoProfileIds:
@@ -1052,7 +1157,7 @@
 
     const viewClientDetails = record => {
         currentDetails.value = record;
-        detailsDrawerTitle.value = `BMP客户端信息: ${record.remoteIp}:${record.remotePort}`;
+        detailsDrawerTitle.value = `BMP客户端信息: ${formatBmpClientLabel(record)}`;
         detailsDrawerVisible.value = true;
     };
 
@@ -1310,6 +1415,12 @@
                     savedConfig.data.pathMarkingTlvType,
                     savedDraft
                 );
+                bmpConfig.value.sourceInstanceTemplate = normalizeSourceInstanceTemplate(
+                    savedConfig.data.sourceInstanceTemplate
+                );
+                bmpConfig.value.sourceInstanceTlvType = savedConfig.data.sourceInstanceTlvType ?? 0;
+                bmpConfig.value.sourceInstanceCustomTemplate =
+                    savedConfig.data.sourceInstanceCustomTemplate ?? 'bgp instance name:{instance}';
                 bmpConfig.value.persistenceEnabled = true;
                 bmpConfig.value.authType = normalizeAuthType(savedConfig.data.authType);
                 bmpConfig.value.tcpAoProfileIds = normalizeTcpAoProfileIds(
@@ -1351,6 +1462,11 @@
 
     .bmp-runtime-alert {
         margin-bottom: 12px;
+    }
+
+    .source-instance-preview {
+        white-space: normal;
+        overflow-wrap: anywhere;
     }
 
     .tcp-auth-profile-summary {

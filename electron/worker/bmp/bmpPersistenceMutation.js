@@ -17,6 +17,7 @@ const SOURCE_DTO_CACHE = new WeakMap();
 const CONNECTION_DTO_CACHE = new WeakMap();
 const SOURCE_FIELDS = ['remoteIp', 'sysName', 'sysDesc'];
 const SOURCE_METADATA_FIELDS = [
+    'bgpInstanceName',
     'bmpVersion',
     'bmpV4TlvDraft',
     'transport',
@@ -255,7 +256,8 @@ function ensurePersistenceContext(bmpSession) {
     if (!bmpSession.persistenceSourceKey) {
         const key = createSourceKey({
             sysName: bmpSession.sysName || undefined,
-            sourceAddress: bmpSession.remoteIp
+            sourceAddress: bmpSession.remoteIp,
+            bgpInstanceName: bmpSession.bgpInstanceName || undefined
         });
         bmpSession.persistenceSourceKey = key;
     }

@@ -27,6 +27,7 @@ const BmpIngestClientPool = require('./bmpIngestClientPool');
 const { applyIngestSnapshot, cloneIngestValue } = require('./bmpIngestSnapshot');
 const { allocatePersistenceConnection } = require('./bmpPersistenceMutation');
 const { normalizeBmpThreadCount } = require('../../utils/bmp/bmpThreadConfig');
+const { normalizeSourceInstanceConfig } = require('../../../shared/bmpSourceInstance');
 
 const DEFAULT_READ_FENCE_TIMEOUT_MS = 250;
 const ROUTE_ASSURANCE_REBUILD_QUIET_MS = 2000;
@@ -1655,6 +1656,7 @@ class BmpWorker {
         this.bmpRuntimeStarted = false;
         this.bmpConfigData = bmpConfigData;
         try {
+            Object.assign(this.bmpConfigData, normalizeSourceInstanceConfig(this.bmpConfigData));
             this.bmpConfigData.threadCount = normalizeBmpThreadCount(this.bmpConfigData.threadCount);
         } catch (error) {
             this.bmpConfigData = null;

@@ -363,6 +363,7 @@
     import { BMP_EVENT_PAGE_ID } from '../../const/bmpConst';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
     import BmpRouteDetailModal from '../../components/BmpRouteDetailModal.vue';
 
     defineOptions({ name: 'BgpRouteLens' });
@@ -815,9 +816,7 @@
     };
     const getClientLabel = entry => {
         const client = entry?.client || {};
-        const name = client.sysName || client.remoteIp || client.localIp || '-';
-        const ip = client.sysName && client.remoteIp ? ` · ${client.remoteIp}` : '';
-        return `${name}${ip}`;
+        return formatBmpClientLabel({ ...client, remoteIp: client.remoteIp || client.localIp });
     };
     const getPeerLabel = entry =>
         entry?.session?.sessionIp ||

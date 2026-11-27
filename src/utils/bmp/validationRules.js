@@ -30,6 +30,38 @@ export const createBmpConfigValidationRules = () => {
                 message: '请输入1-16之间的整数'
             }
         ],
+        sourceInstanceTemplate: [
+            {
+                validator: value => value === undefined || ['h3c', 'fullValue', 'custom'].includes(value),
+                message: '请选择有效的BGP进程识别模板'
+            }
+        ],
+        sourceInstanceTlvType: [
+            {
+                validator: value => {
+                    if (value === undefined) return true;
+                    const isNumericValue =
+                        typeof value === 'number' || (typeof value === 'string' && /^\d+$/.test(value.trim()));
+                    const type = isNumericValue ? Number(value) : Number.NaN;
+                    return Number.isInteger(type) && type >= 0 && type <= 65535;
+                },
+                message: '请输入0-65535之间的整数'
+            }
+        ],
+        sourceInstanceCustomTemplate: [
+            {
+                validator: (value, formData) =>
+                    formData.sourceInstanceTemplate !== 'custom' ||
+                    (typeof value === 'string' &&
+                        value.length <= 1024 &&
+                        value.split('{instance}').length === 2 &&
+                        Array.from(value).every(character => {
+                            const code = character.charCodeAt(0);
+                            return code >= 32 && code !== 127;
+                        })),
+                message: '模板最多1024字符，必须包含且只包含一个{instance}，且不能包含控制字符'
+            }
+        ],
         pathMarkingTlvType: [
             {
                 required: true,

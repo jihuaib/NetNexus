@@ -3077,6 +3077,7 @@ class BmpPersistenceStore {
                        s.cleanup_pending_epoch,
                        route_attr.attr_id, route_attr.attr_json AS attr_json,
                        src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
+                       json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
                        conn.connection_id,
                        conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                        conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,
@@ -3234,6 +3235,7 @@ class BmpPersistenceStore {
             SELECT s.scope_id, s.scope_kind, s.owner_key, s.scope_identity_json, s.peer_type, s.peer_rd,
                    s.peer_ip, s.peer_as, s.vrf_name, s.rib_type,
                    src.source_id, src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
+                   json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
                    conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                    conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port
               FROM bmp_rib_scopes s
@@ -3271,7 +3273,8 @@ class BmpPersistenceStore {
                     remoteIp: row?.connection_remote_ip || row?.source_remote_ip || null,
                     remotePort: row?.connection_remote_port ?? null,
                     sysName: row?.sys_name ?? null,
-                    sysDesc: row?.sys_desc ?? null
+                    sysDesc: row?.sys_desc ?? null,
+                    ...(row?.source_bgp_instance_name ? { bgpInstanceName: row.source_bgp_instance_name } : {})
                 }
             };
             scopeInfo.set(scopePk, info);
@@ -3394,7 +3397,8 @@ class BmpPersistenceStore {
                 remoteIp: row.connection_remote_ip || row.source_remote_ip,
                 remotePort: row.connection_remote_port,
                 sysName: row.sys_name,
-                sysDesc: row.sys_desc
+                sysDesc: row.sys_desc,
+                ...(row.source_bgp_instance_name ? { bgpInstanceName: row.source_bgp_instance_name } : {})
             },
             firstSeenAt: new Date(row.first_seen_ms).toISOString(),
             lastSeenAt: new Date(row.last_seen_ms).toISOString(),
@@ -3539,6 +3543,7 @@ class BmpPersistenceStore {
                 sourceIdentity: parseJson(row.source_identity_json, {}),
                 sysName: row.sys_name,
                 sysDesc: row.sys_desc,
+                bgpInstanceName: metadata?.bgpInstanceName ?? null,
                 bmpVersion: metadata?.bmpVersion ?? null,
                 bmpV4TlvDraft: metadata?.bmpV4TlvDraft ?? null,
                 transport: metadata?.transport || null,
@@ -3995,6 +4000,7 @@ class BmpPersistenceStore {
                            s.cleanup_pending_epoch,
                            route_attr.attr_id, route_attr.attr_json AS attr_json,
                            src.remote_ip AS source_remote_ip, src.sys_name, src.sys_desc,
+                           json_extract(src.metadata_json, '$.bgpInstanceName') AS source_bgp_instance_name,
                            conn.connection_id,
                            conn.local_ip AS connection_local_ip, conn.local_port AS connection_local_port,
                            conn.remote_ip AS connection_remote_ip, conn.remote_port AS connection_remote_port,

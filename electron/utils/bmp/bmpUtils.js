@@ -2,6 +2,7 @@ const BmpConst = require('../../const/bmpConst');
 const BgpConst = require('../../const/bgpConst');
 const { rdBufferToString } = require('../bgp/bgpEncoding');
 const { ipv4BufferToString, ipv6BufferToString } = require('../ipUtils');
+const { getInitiationBgpInstanceName } = require('../../../shared/bmpSourceInstance');
 
 const PER_AFI_SAFI_STATS_TYPES = new Set([
     BmpConst.BMP_STATS_TYPE.NUM_PER_AFI_SAFI_ADJ_RIB_IN,
@@ -387,6 +388,7 @@ function parseStatsRecords(buffer, offset = 0, options = {}) {
 
 module.exports = {
     getInitiationTlvName,
+    getInitiationBgpInstanceName,
     toUnixTimestampMs,
     parseCommonHeader,
     parsePeerHeader,

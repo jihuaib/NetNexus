@@ -12,7 +12,7 @@ bmp/bmp.sqlite3.clients/<source_id>.sqlite3
 
 每个文件独立保存 source、connection、scope、所有地址族的路由、属性、payload 和统计数据。相同 NLRI 或相同属性出现在不同 client 时，分别在各自的文件中保存；属性去重、引用计数、回收、撤销和 epoch 清理均不跨 client。本文后续的“全库”和“全局对象”仅指某一个 client 数据库内部，整数代理键不能跨文件使用。
 
-client 归属由稳定 source identity 决定，不采用临时 TCP 源端口或连接 UUID，因此同一键版本内重连复用原文件。当前稳定键版本为 3；source、scope 和 route 的键版本一起升版，EVPN 路由键按 RFC 字段修正（见 7.1）。不按 IP、EVPN Route Type、FlowSpec 组件等再拆数据库；已有地址族物理分表保持不变。不迁移旧键或保留旧 schema 兼容层。
+client 归属由稳定 source identity 决定，不采用临时 TCP 源端口或连接 UUID，因此同一键版本内重连复用原文件。来源身份包含 sysName、源 IP 和上报的 BGP 实例名：默认 H3C 模板将 Initiation String TLV（Type 0）中的 `bgp instance name:default` 解析为 `bgpInstanceName` 并参与 source identity；同设备不同 BGP 实例分别使用独立的 client 数据库。BMP 配置页也支持完整 TLV 值和带唯一 `{instance}` 占位符的自定义字面量模板，并可指定 TLV Type；配置分别保存为 `sourceInstanceTemplate`、`sourceInstanceTlvType` 和 `sourceInstanceCustomTemplate`。未匹配到实例名时保持原来的 sysName + 源 IP 身份。当前稳定键版本为 3；source、scope 和 route 的键版本一起升版，EVPN 路由键按 RFC 字段修正（见 7.1）。不按 IP、EVPN Route Type、FlowSpec 组件等再拆数据库；已有地址族物理分表保持不变。不迁移旧键或保留旧 schema 兼容层。
 
 BMP 的 `threadCount` 默认是 4，范围为 1–16。它同时设置解析 worker 数和持久化 Writer 数；一个解析槽在整个连接生命周期内只服务一条 BMP 连接，因此最多同时接入 `threadCount` 条 BMP 连接。槽位已满时，新连接立即关闭，不排队等待。断线关闭操作与该连接已有的数据保持 FIFO，完成解析和会话关闭后才释放槽；重连重新占用空闲槽，但仍按稳定 source identity 复用原 client 数据库。连接上限不限制历史 client 的数量。
 
@@ -716,9 +716,11 @@ DDL 里的两条 `ON DELETE CASCADE` 和其他 FK 都只是声明：Writer 连�
 | `sys_desc` | TEXT NULL | BMP Initiation 中的系统描述 |
 | `first_seen_ms` | INTEGER NOT NULL | Source 首次观察时间 |
 | `last_seen_ms` | INTEGER NOT NULL | Source 最近观察时间 |
-| `metadata_json` | TEXT NULL | BMP version、v4 TLV draft 等扩展元数据 |
+| `metadata_json` | TEXT NULL | BMP version、v4 TLV draft、`bgpInstanceName` 等扩展元数据 |
 
-设备重连时复用稳定 `source_id`，但会创建新的 connection。
+设备同一 BGP 实例重连时复用稳定 `source_id`，但会创建新的 connection。`bgpInstanceName` 同时保存在规范化 `source_identity_json` 和扩展元数据中，在线及离线 Client 查询均返回该字段；同 sysName、同源 IP、不同 BGP 实例名的来源不合并。它表示上报连接所属的 BGP 进程实例，不替代 Loc-RIB scope 的 Instance 标识。
+
+实例识别不改变数据库 schema 版本，也不清空或迁移旧来源。首次识别出实例名时使用新的 source identity 和对应的 client 文件；此前未区分实例的历史 Client 及其数据仍保留。连接如果已在 Initiation 到达前绑定旧来源，而后续 Initiation 要求改为带实例名的来源，会关闭连接并要求重连，不会搬移已经落库的数据。
 
 ### 6.2 `bmp_connections`
 

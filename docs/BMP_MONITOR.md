@@ -55,7 +55,13 @@ BMP 监控器用于接收路由器或测试客户端发送的 BMP 数据，并�
 
 配置 BMP 监听端口、认证方式、BMPv4 TLV draft 和 Path Marking TLV 类型。页面下方展示当前 BMP 客户端及其认证状态。
 
-同一来源（sysName + 源 IP）只允许一个成功初始化的在线连接。先确认来源身份的连接被保留，随后收到有效 Initiation 的同来源连接会被关闭，原连接不受影响；原连接完成关闭后允许重连。来源身份通常在有效 Initiation 后确认；对于提前到达的 Peer Up 或路由消息，会使用当时已知的来源身份进行检查，因此不是在 TCP 握手时拒绝连接。
+同一来源（sysName + 源 IP + 上报的 BGP 实例名）只允许一个成功初始化的在线连接。默认使用 H3C 模板，从 Initiation 的 String TLV（Type 0）中提取 `bgp instance name:default` 里的 `default`。实例名参与来源身份，因此同设备、同源 IP 的不同 BGP 进程可以分别建立 BMP 连接，并保存为独立 Client。未匹配到实例名时仍按 sysName + 源 IP 区分。
+
+“BGP进程识别”可选择 H3C、完整 TLV 值或自定义模板，并通过“实例TLV类型”指定报文中的 Initiation TLV Type（0–65535）。完整 TLV 值直接将所选 TLV 的文本作为实例名；自定义模板用唯一的 `{instance}` 标记实例名位置，前后文本按原文匹配，例如 `process={instance};`，不使用正则表达式。页面显示提取示例；配置随启动保存，下次启动生效。
+
+先确认来源身份的连接被保留，随后收到有效 Initiation 的同来源连接会被关闭，原连接不受影响；原连接完成关闭后允许重连。来源身份通常在有效 Initiation 后确认；对于提前到达的 Peer Up 或路由消息，会使用当时已知的来源身份进行检查，因此不是在 TCP 握手时拒绝连接。客户端列表的“BGP实例”列、详情和监控窗口标题均展示已识别的实例名；这里的 BGP 进程实例与 Client 内的 Loc-RIB Instance 分开显示。
+
+首次启用实例识别后，匹配到实例名的连接会使用新的来源身份；此前未区分实例的历史 Client 仍保留，不清空或迁移历史数据。如果连接已在未收到 Initiation 时绑定旧来源，随后收到的 Initiation 改变了实例身份，连接会被关闭并需重新连接，不会将已接收的数据静默转移到另一来源。
 
 ![BMP 配置和客户端信息](images/bmp/bmp-config-and-client-info.png)
 
@@ -112,7 +118,7 @@ TCP MD5 用于兼容仍使用 TCP MD5 Signature Option 的设备；新部署优�
 - 会话统计
 - Loc-RIB 统计
 
-原生标题栏随当前页签显示 `BGP 会话 / Loc-RIB / 会话统计 / Loc-RIB 统计 · Client 名称 · IP`。Client 信息只出现在原生标题栏，页面正文不再重复显示 Client 标题或 Client Tab。
+原生标题栏随当前页签显示 `BGP 会话 / Loc-RIB / 会话统计 / Loc-RIB 统计 · Client 名称 · IP`，上报了 BGP 实例名时追加 `· BGP 实例名`。Client 信息只出现在原生标题栏，页面正文不再重复显示 Client 标题或 Client Tab。
 
 Session、Loc-RIB 和 Statistics Report 更新只投递给对应 Client 的独立窗口；该 Client 窗口不存在时不产生这些 renderer IPC。主窗口中的路由矩阵和路由追踪仅在页面激活期间订阅轻量失效信号，再按需重新查询，不接收完整更新明细。
 

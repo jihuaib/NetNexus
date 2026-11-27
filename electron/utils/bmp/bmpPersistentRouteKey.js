@@ -446,6 +446,7 @@ function canonicalizeSourceIdentity(source = {}) {
     const routerId = firstDefined(source.routerId, source.sourceRouterId, source.bmpRouterId);
     const sysName = firstDefined(source.sysName, source.systemName);
     const address = firstDefined(source.sourceAddress, source.routerAddress, source.remoteIp, source.address);
+    const bgpInstanceName = firstDefined(source.bgpInstanceName);
 
     let discriminator;
     if (stableId !== undefined) {
@@ -468,7 +469,10 @@ function canonicalizeSourceIdentity(source = {}) {
     return {
         namespace: namespace === undefined ? null : normalizeText(namespace, 'source namespace'),
         collector: collector === undefined ? null : normalizeText(collector, 'collector ID'),
-        discriminator
+        discriminator,
+        ...(bgpInstanceName === undefined
+            ? {}
+            : { bgpInstanceName: normalizeText(bgpInstanceName, 'BGP instance name') })
     };
 }
 

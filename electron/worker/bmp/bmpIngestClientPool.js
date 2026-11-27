@@ -2,6 +2,7 @@ const path = require('path');
 const { Worker } = require('worker_threads');
 const { normalizeBmpThreadCount } = require('../../utils/bmp/bmpThreadConfig');
 const { normalizeClientSourceId } = require('./bmpClientPersistencePaths');
+const { normalizeSourceInstanceConfig } = require('../../../shared/bmpSourceInstance');
 
 const RAW_HIGH_WATERMARK_BYTES = 1024 * 1024;
 const RAW_LOW_WATERMARK_BYTES = 512 * 1024;
@@ -17,6 +18,7 @@ class BmpIngestClientPool {
         this.config = {
             bmpV4TlvDraft: options.config?.bmpV4TlvDraft,
             pathMarkingTlvType: options.config?.pathMarkingTlvType,
+            ...normalizeSourceInstanceConfig(options.config),
             logLevel: options.config?.logLevel || 'off'
         };
         this.onResult = options.onResult;

@@ -207,6 +207,7 @@ function makeClientInfo(clientKey, bmpSession) {
     return {
         key: String(clientKey),
         sysName: info.sysName || '',
+        ...(info.bgpInstanceName ? { bgpInstanceName: info.bgpInstanceName } : {}),
         localIp: info.localIp || '',
         localPort: info.localPort ?? null,
         remoteIp: info.remoteIp || '',
@@ -627,6 +628,9 @@ function makePersistedRouteContext(row, overrides = {}) {
     };
     const clientInfo = {
         sysName: sourceInfo.sysName || '',
+        ...(sourceInfo.bgpInstanceName || sourceInfo.metadata?.bgpInstanceName
+            ? { bgpInstanceName: sourceInfo.bgpInstanceName || sourceInfo.metadata.bgpInstanceName }
+            : {}),
         localIp: sourceInfo.localIp || '',
         localPort: sourceInfo.localPort ?? null,
         remoteIp: sourceInfo.remoteIp || '',

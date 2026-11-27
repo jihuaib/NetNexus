@@ -9,6 +9,7 @@ const { PROTOCOL_PROCESS_SERVICES, PROTOCOL_PROCESS_TIMEOUTS } = require('../wor
 const logger = require('../log/logger');
 const BmpConst = require('../const/bmpConst');
 const { normalizeBmpThreadCount } = require('../utils/bmp/bmpThreadConfig');
+const { normalizeSourceInstanceConfig } = require('../../shared/bmpSourceInstance');
 const EventDispatcher = require('../utils/eventDispatcher');
 const BmpPersistenceClient = require('../worker/bmp/bmpPersistenceClient');
 const {
@@ -109,6 +110,7 @@ function normalizeBmpConfig(config = {}) {
         threadCount,
         bmpV4TlvDraft,
         pathMarkingTlvType,
+        ...normalizeSourceInstanceConfig(config),
         persistenceEnabled: true,
         ...normalizeBmpAuthenticationSelection(config)
     };

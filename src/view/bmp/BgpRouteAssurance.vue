@@ -288,6 +288,7 @@
     import { RouteOutlined, SafetyOutlined, SearchOutlined } from 'netnexus-ui/icons';
     import EventBus from '../../utils/eventBus';
     import { notify } from '../../utils/notify';
+    import { formatBmpClientLabel } from '../../utils/bmp/bmpClientLabel';
 
     defineOptions({ name: 'BgpRouteAssurance' });
 
@@ -709,9 +710,11 @@
     const getClientLabel = client => {
         if (!client) return '-';
         if (typeof client !== 'object') return formatValue(client);
-        const name = client.sysName || client.name || client.remoteIp || client.localIp || client.key;
-        const remoteIp = client.remoteIp && client.remoteIp !== name ? client.remoteIp : '';
-        return [name, remoteIp].filter(Boolean).join(' · ') || '-';
+        return formatBmpClientLabel({
+            ...client,
+            name: client.name || (!client.remoteIp && !client.localIp ? client.key : ''),
+            remoteIp: client.remoteIp || client.localIp
+        });
     };
     const getVrfLabel = record => {
         const names = Array.isArray(record.vrfTableNames)

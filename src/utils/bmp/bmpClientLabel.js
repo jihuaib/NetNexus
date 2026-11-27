@@ -6,6 +6,8 @@ export const formatBmpClientLabel = client => {
         .find(Boolean);
     const remoteIp = normalizeLabelPart(client?.remoteIp);
     const distinctRemoteIp = remoteIp && remoteIp !== systemName ? remoteIp : '';
+    const bgpInstanceName = normalizeLabelPart(client?.bgpInstanceName);
+    const instanceLabel = bgpInstanceName ? `BGP ${bgpInstanceName}` : '';
 
-    return [systemName, distinctRemoteIp].filter(Boolean).join(' · ') || '-';
+    return [systemName, distinctRemoteIp, instanceLabel].filter(Boolean).join(' · ') || '-';
 };
